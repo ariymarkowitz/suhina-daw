@@ -835,6 +835,7 @@ impl suhina_session::AudioSystem for StandAudio {
         &self,
         project: &suhina_engine::model::Project,
         audio: &suhina_engine::AudioPool,
+        _assets: &suhina_engine::DeviceAssets,
         _choice: &suhina_session::OutputChoice,
         _previous: Option<suhina_session::Player>,
     ) -> Result<suhina_session::audio::Opened, String> {

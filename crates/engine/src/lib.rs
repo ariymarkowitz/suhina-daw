@@ -422,6 +422,20 @@ impl Renderer {
         Ok(renderer)
     }
 
+    /// [`Renderer::with_assets`], with the transport stopped.
+    pub fn stopped_with_assets(
+        project: &Project,
+        audio: &AudioPool,
+        assets: &DeviceAssets,
+        sample_rate: u32,
+        plugins: Plugins,
+    ) -> Result<Self, RenderError> {
+        let mut renderer = Self::with_assets_plugins(project, audio, assets, sample_rate, plugins)?;
+        renderer.running = false;
+        renderer.graph.launcher.monitor.running.store(false, std::sync::atomic::Ordering::Relaxed);
+        Ok(renderer)
+    }
+
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
@@ -1206,17 +1220,20 @@ pub fn render_offline_with_assets(
 /// Renders the whole arrangement offline like [`render_offline_with_plugins`], and the cue bus
 /// beside it: the main mix and the cue, both interleaved stereo of the same length. `cue_gain`
 /// is the cue volume (linear) and `separate` whether the cue has outputs of its own (then the
-/// preview is heard only on the cue, as on the device).
+/// preview is heard only on the cue, as on the device). The file-backed devices run what
+/// `assets` holds ([docs/spec/nam-amp-and-cab.md]).
+#[allow(clippy::too_many_arguments)]
 pub fn render_offline_with_cue(
     project: &Project,
     audio: &AudioPool,
+    assets: &DeviceAssets,
     sample_rate: u32,
     block_frames: usize,
     plugins: Plugins,
     cue_gain: f32,
     separate: bool,
 ) -> Result<(Vec<f32>, Vec<f32>), RenderError> {
-    let mut renderer = Renderer::with_plugins(project, audio, sample_rate, plugins)?;
+    let mut renderer = Renderer::with_assets_plugins(project, audio, assets, sample_rate, plugins)?;
     renderer.set_offline(true);
     renderer.handle(LaunchCommand::SetCue { gain: Some(cue_gain), separate: Some(separate) });
     let total = usize::try_from(renderer.length())

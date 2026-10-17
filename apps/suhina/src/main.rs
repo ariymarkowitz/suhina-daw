@@ -273,11 +273,9 @@ impl eframe::App for Window {
         // Only the active project plays; one made active again gets an output.
         if let Some(id) = self.app.take_player_request() {
             let choice = self.app.projects().output_choice().clone();
-            let opened = self
-                .app
-                .projects()
-                .get(id)
-                .map(|session| suhina_output::open_chosen(session.project(), session.audio(), &choice, None));
+            let opened = self.app.projects().get(id).map(|session| {
+                suhina_output::open_chosen(session.project(), session.audio(), session.device_assets(), &choice, None)
+            });
             match opened {
                 Some(Ok(opened)) => {
                     self.app.attach_player(id, opened.player);
@@ -522,7 +520,7 @@ fn default_folders() -> (PathBuf, PathBuf) {
 /// falls back to the default with a warning, and without any output the project still opens.
 /// Returns the session and warnings.
 fn with_audio(mut session: Session, choice: &OutputChoice) -> (Session, Vec<String>) {
-    match suhina_output::open_chosen(session.project(), session.audio(), choice, None) {
+    match suhina_output::open_chosen(session.project(), session.audio(), session.device_assets(), choice, None) {
         Ok(opened) => {
             session.attach_player(opened.player);
             (session, opened.notice.into_iter().collect())

@@ -376,6 +376,12 @@ impl Session {
         self.device_assets.get(path)
     }
 
+    /// What the session's NAM devices run, by path, for a renderer's construction (a `render`
+    /// through `render_offline_with_assets`) and the app's output open.
+    pub fn device_assets(&self) -> &suhina_engine::DeviceAssets {
+        &self.device_assets
+    }
+
     /// What a device's file is called, for a device panel: the model's own name (its metadata)
     /// for a NAM Amp Modeler, the IR's parent folder's name for a NAM Cab Loader. `None` while
     /// the file is not in the assets.
@@ -578,12 +584,18 @@ impl Session {
     /// error the session has no player.
     pub fn replace_player<E>(
         &mut self,
-        open: impl FnOnce(&Project, &suhina_engine::AudioPool, Option<Player>) -> Result<Player, E>,
+        open: impl FnOnce(
+            &Project,
+            &suhina_engine::AudioPool,
+            &suhina_engine::DeviceAssets,
+            Option<Player>,
+        ) -> Result<Player, E>,
     ) -> Result<(), E> {
         // A take ends where the engine it records from was (a lost device keeps what it had).
         self.end_takes_now();
+        self.sync_device_files();
         let old = self.player.take();
-        match open(&self.project, &self.audio, old) {
+        match open(&self.project, &self.audio, &self.device_assets, old) {
             Ok(player) => {
                 self.attach_player(player);
                 Ok(())
@@ -681,7 +693,9 @@ impl Session {
     }
 
     /// Opens a project: a Suhina project (`.suhina`, or `.locr` from before October 2026) or a
-    /// Live Set to import (`.als`). Returns the session and the importer's warnings.
+    /// Live Set to import (`.als`). Returns the session and the importer's warnings. The NAM
+    /// devices' files are read here, so the session is ready for the planned audio before a
+    /// player is attached.
     pub fn open(path: &Path) -> Result<(Self, Vec<String>), CommandError> {
         let (project, warnings) = if suhina_project_file::is_project_file(path) {
             let project = suhina_project_file::read_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -693,6 +707,7 @@ impl Session {
         let mut session = Self::new(project);
         session.source = Some(path.to_path_buf());
         session.audio_folder = path.parent().map(Path::to_path_buf);
+        session.sync_device_files();
         Ok((session, warnings))
     }
 
@@ -1001,10 +1016,10 @@ impl Session {
                 if !suhina_device_registry::is_file_device(id) {
                     continue;
                 }
-                if let Some(path) = device.state.as_deref().and_then(|state| std::str::from_utf8(state).ok()) {
-                    if !path.is_empty() {
-                        need.insert(path.to_string(), id.clone());
-                    }
+                if let Some(path) =
+                    device.state.as_deref().and_then(|state| std::str::from_utf8(state).ok()).filter(|path| !path.is_empty())
+                {
+                    need.insert(path.to_string(), id.clone());
                 }
             }
         }

@@ -419,7 +419,7 @@ impl SuhinaMcp {
                     None => heard,
                 };
                 let (audio, warnings) = project_audio(session, &project);
-                let summary = render_wav(&project, &audio, &path, sample_rate, Some(&env))?;
+                let summary = render_wav(&project, &audio, session.device_assets(), &path, sample_rate, Some(&env))?;
                 Ok(json!({
                     "output": display_path(&path),
                     "warnings": warnings,

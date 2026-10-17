@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 use suhina_engine::model::{Arrangement, ArrangementLane, Project};
-use suhina_engine::{AudioPool, Plugins, Renderer, render_offline_with_cue, render_offline_with_plugins};
+use suhina_engine::{AudioPool, Plugins, Renderer, render_offline_with_assets, render_offline_with_cue};
 use suhina_session::{CommandKind, OfflinePlugins, Player, PluginEnv, Session, commands, start_offline};
 
 /// Longest launch-script render, in seconds.
@@ -41,11 +41,12 @@ fn offline_plugins(project: &Project, plugins: Option<&PluginEnv>, sample_rate: 
 pub fn render_wav(
     project: &Project,
     audio: &AudioPool,
+    assets: &suhina_engine::DeviceAssets,
     path: &Path,
     sample_rate: u32,
     plugins: Option<&PluginEnv>,
 ) -> Result<RenderSummary, String> {
-    render_wavs(project, audio, path, None, sample_rate, plugins)
+    render_wavs(project, audio, assets, path, None, sample_rate, plugins)
 }
 
 /// Like [`render_wav`], and, with `cue`, the cue bus beside the main mix to a second WAV file
@@ -54,6 +55,7 @@ pub fn render_wav(
 pub fn render_wavs(
     project: &Project,
     audio: &AudioPool,
+    assets: &suhina_engine::DeviceAssets,
     path: &Path,
     cue: Option<&Path>,
     sample_rate: u32,
@@ -62,9 +64,11 @@ pub fn render_wavs(
     let mut started = offline_plugins(project, plugins, sample_rate);
     let running = std::mem::take(&mut started.plugins);
     let samples = match cue {
-        None => render_offline_with_plugins(project, audio, sample_rate, 512, running).map_err(|e| e.to_string())?,
+        None => {
+            render_offline_with_assets(project, audio, assets, sample_rate, 512, running).map_err(|e| e.to_string())?
+        }
         Some(cue_path) => {
-            let (main, cued) = render_offline_with_cue(project, audio, sample_rate, 512, running, 1.0, true)
+            let (main, cued) = render_offline_with_cue(project, audio, assets, sample_rate, 512, running, 1.0, true)
                 .map_err(|e| e.to_string())?;
             write_wav(cue_path, &cued, sample_rate)?;
             main
@@ -274,15 +278,33 @@ mod tests {
         let (main_path, cue_path) = (temp_wav("cue-main"), temp_wav("cue-bus"));
         let mut song = scene_as_arrangement(&project(), 0).unwrap();
         let alone = temp_wav("cue-alone");
-        render_wav(&song, &AudioPool::new(), &alone, SR, None).unwrap();
+        render_wav(&song, &AudioPool::new(), &suhina_engine::DeviceAssets::new(), &alone, SR, None).unwrap();
         // Nothing cued: the cue file is silent and the main mix the same.
-        render_wavs(&song, &AudioPool::new(), &main_path, Some(&cue_path), SR, None).unwrap();
+        render_wavs(
+            &song,
+            &AudioPool::new(),
+            &suhina_engine::DeviceAssets::new(),
+            &main_path,
+            Some(&cue_path),
+            SR,
+            None,
+        )
+        .unwrap();
         assert_eq!(samples(&main_path), samples(&alone));
         assert!(samples(&cue_path).iter().all(|s| *s == 0.0));
         assert_eq!(samples(&cue_path).len(), samples(&main_path).len());
         // The track cued: on the cue as in the mix.
         song.channels[0].cue = true;
-        render_wavs(&song, &AudioPool::new(), &main_path, Some(&cue_path), SR, None).unwrap();
+        render_wavs(
+            &song,
+            &AudioPool::new(),
+            &suhina_engine::DeviceAssets::new(),
+            &main_path,
+            Some(&cue_path),
+            SR,
+            None,
+        )
+        .unwrap();
         let same = samples(&main_path).iter().zip(samples(&alone)).all(|(a, b)| (a - b).abs() < 1e-6);
         assert!(same && samples(&main_path).len() == samples(&alone).len());
         let (main, cue) = (samples(&main_path), samples(&cue_path));
