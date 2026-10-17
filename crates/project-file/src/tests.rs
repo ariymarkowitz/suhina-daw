@@ -78,6 +78,16 @@ fn everything() -> Project {
         },
         Device { state: Some(Vec::new()), ..Device::new("Old", DeviceKind::Vst2 { id: 1_234_567 }) },
         Device {
+            state: Some(b"/home/me/Suhina/NAM models/edge.nam".to_vec()),
+            params: vec![DeviceParam::new("inputGain", -3.5), DeviceParam::new("eqMidFreq", 800.0)],
+            ..Device::new("Amp", DeviceKind::Builtin("nam-amp-modeler".into()))
+        },
+        Device {
+            state: Some(b"/home/me/Suhina/IRs/marshall.wav".to_vec()),
+            params: vec![DeviceParam::new("volume", -1.9)],
+            ..Device::new("Cab", DeviceKind::Builtin("nam-cab-loader".into()))
+        },
+        Device {
             params: vec![DeviceParam::new("3", 0.25)],
             automation: vec![AutomationLane {
                 param: "3".into(),

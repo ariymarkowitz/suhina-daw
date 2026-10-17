@@ -31,6 +31,7 @@ is on exactly one page, under one heading.
 | Page | Section | Settings |
 |---|---|---|
 | General | Projects | When opening a project, At start, Projects folder, Templates folder, Start template (shown with At start › Template) |
+| General | NAM | NAM models folder, IR folder — where the two NAM devices' dropdowns list their files ([nam spec](nam-amp-and-cab.md) › Folders) |
 | General | Backups | Backups, Clean up backups, Last backup (read only) |
 | General | Dropping files | Several files, Warp mode |
 | Audio | Output | Driver, Device, Sample rate, Buffer size (or Engine block), Exclusive mode, Input |

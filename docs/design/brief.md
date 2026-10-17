@@ -82,7 +82,7 @@ From [research](#sources) and the first design rounds:
 | Clip slots | Flat cells, a small square in the track colour; playing = brighter cell with an accent progress line; queued = accent outline; recording = red dot and line | Fully coloured slots with triangle and square glyphs |
 | Arrangement clips | Neutral body, 2 px top strip and note or wave marks in the track colour | Colour-filled clip bodies |
 | MIDI notes | Track colour, velocity as brightness, selected note with a light outline | Velocity as saturation; blue selected notes |
-| Device panels | Plain panels, a square on/off switch in the header | Live's title bar with a round activator |
+| Device panels | Plain panels, a square on/off switch in the header; a device with more room to show draws its own panel (the NAM Amp Modeler's and Cab Loader's: a name dropdown with steppers, knob columns with labels over and values under, lit toggles, a file dropdown at the bottom — [nam spec](../spec/nam-amp-and-cab.md)) | Live's title bar with a round activator; Live's Amp and Cabinet & Mic devices' look |
 | Meters | Two thin bars, green with yellow only near the top | Live's meters |
 | Browser | Search, category filters as buttons, sidebar of places only (Pinned, Recent, Folders), tree with type icons, colour tags as dots on rows, preview with waveform, BPM and key | Live's sidebar of Collections, Library categories and Places |
 | Icons | Lucide (ISC) or our own simple strokes | Any glyph traced from Live |
