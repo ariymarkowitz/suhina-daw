@@ -215,10 +215,16 @@ mod tests {
             let second = Listener::bind(&key, Endpoint::App);
             assert!(second.as_ref().is_err_and(is_taken), "a second holder is refused");
             let server = tokio::spawn(async move {
-                let mut stream = first.accept().await.unwrap();
-                let mut buf = [0u8; 5];
-                stream.read_exact(&mut buf).await.unwrap();
-                stream.write_all(&buf).await.unwrap();
+                // On Unix the refused second bind looked by connecting, and that empty connection
+                // comes first; the app skips such connections too.
+                loop {
+                    let mut stream = first.accept().await.unwrap();
+                    let mut buf = [0u8; 5];
+                    if stream.read_exact(&mut buf).await.is_ok() {
+                        stream.write_all(&buf).await.unwrap();
+                        return;
+                    }
+                }
             });
             let mut client = connect(&key, Endpoint::App).await.unwrap();
             client.write_all(b"hello").await.unwrap();
