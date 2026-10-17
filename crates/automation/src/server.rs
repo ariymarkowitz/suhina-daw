@@ -1059,10 +1059,12 @@ mod confine_tests {
 
     #[test]
     fn agents_may_search_the_library_but_not_choose_its_folders() {
-        assert!(refused("library.addFolder").is_some());
-        assert!(refused("library.removeFolder").is_some());
-        for id in ["library.search", "library.refresh", "library.folders", "clip.addFiles", "preview.play"] {
-            assert!(refused(id).is_none(), "{id}");
+        for attached in [false, true] {
+            assert!(refused("library.addFolder", None, attached).is_some());
+            assert!(refused("library.removeFolder", None, attached).is_some());
+            for id in ["library.search", "library.refresh", "library.folders", "clip.addFiles", "preview.play"] {
+                assert!(refused(id, None, attached).is_none(), "{id}");
+            }
         }
     }
 }

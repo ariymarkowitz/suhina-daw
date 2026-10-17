@@ -141,8 +141,8 @@ impl Running {
             stream.write_all(line.as_bytes()).await?;
             stream.flush().await?;
             let mut answer = String::new();
-            let read = BufReader::new(&mut stream).take(1024).read_line(&mut answer);
-            tokio::time::timeout(Duration::from_secs(10), read)
+            let mut reader = BufReader::new(&mut stream).take(1024);
+            tokio::time::timeout(Duration::from_secs(10), reader.read_line(&mut answer))
                 .await
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "the running Suhina did not answer"))??;
             Ok(())
@@ -340,8 +340,9 @@ async fn serve_app(mut lock: Listener, opens: mpsc::Sender<Vec<PathBuf>>, shared
 /// Reads one `{"open": [...]}` line and answers it; `None` when it is not one.
 async fn read_open(mut stream: Box<dyn Stream>) -> Option<Vec<PathBuf>> {
     let mut line = String::new();
-    let read = BufReader::new(&mut stream).take(MAX_OPEN_MESSAGE).read_line(&mut line);
-    tokio::time::timeout(Duration::from_secs(5), read).await.ok()?.ok()?;
+    let mut reader = BufReader::new(&mut stream).take(MAX_OPEN_MESSAGE);
+    tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line)).await.ok()?.ok()?;
+    drop(reader);
     let message: Value = serde_json::from_str(line.trim()).ok()?;
     let files = message.get("open")?.as_array()?.iter().filter_map(Value::as_str).map(PathBuf::from).collect();
     let _ = stream.write_all(b"{\"ok\":true}\n").await;
