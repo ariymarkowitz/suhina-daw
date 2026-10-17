@@ -559,7 +559,11 @@ fn chain_row(
     let mut x = area.left();
     for device in &chain.devices {
         let editor = device.plugin.as_ref().and_then(|p| p.editor_size(scale));
-        let authored_width = device.graph.as_ref().map_or(DEVICE_WIDTH, |graph| {
+        // A NAM panel asks for the mock's wider box (nam spec › The panels); the rest keep
+        // the plain device width.
+        let authored_base =
+            if device.file_device.is_some() { crate::detail::nam_panel::NAM_WIDTH } else { DEVICE_WIDTH };
+        let authored_width = device.graph.as_ref().map_or(authored_base, |graph| {
             graph.canvas.as_ref().map_or_else(
                 || {
                     parameter_layout(&graph.parameters, DEVICE_WIDTH - PAD * 2.0, &[])
@@ -661,6 +665,8 @@ fn chain_stack(
             if device.plugin.is_some() { 2.0 + BUTTON_HEIGHT / PARAM_ROW } else { device.params.len().max(1) as f32 };
         let height = match editor {
             Some(editor) => EDITOR_TOP + editor.y + PAD,
+            // A NAM panel's own height (nam spec › The panels); the rest take their rows.
+            None if device.file_device.is_some() => crate::detail::nam_panel::NAM_HEIGHT,
             None => {
                 ROW + PAD * 2.0
                     + device.graph.as_ref().map_or(rows * PARAM_ROW, |graph| {

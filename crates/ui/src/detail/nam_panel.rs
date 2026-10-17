@@ -33,11 +33,24 @@ pub struct Lists {
     pub notes: HashMap<String, String>,
 }
 
+/// The width a NAM panel asks for in the chain's row layout: the mock's two-column controls
+/// with the knobs' labels and values beside each other.
+pub const NAM_WIDTH: f32 = 440.0;
+
+/// The height a NAM panel asks for in the chain, both layouts: the name row, the controls and
+/// the file row at the mock's spacing, whatever the parameter count is.
+pub const NAM_HEIGHT: f32 = 198.0;
+
 const KNOB: f32 = 34.0;
 const STEP: f32 = 16.0;
 const ROW_HEIGHT: f32 = 22.0;
 const PAD: f32 = 8.0;
 const CELL: f32 = 62.0;
+
+/// Is this the parameter a toggle shows lit when its value is on (`>= 0.5`)?
+fn on_of(device: &DeviceBox, parameter: &ParamInfo) -> bool {
+    value_of(device, parameter) >= 0.5
+}
 
 /// The parameter with id `id`, from a device's static info.
 fn parameter_of(params: &'static [ParamInfo], id: &str) -> &'static ParamInfo {
@@ -94,11 +107,13 @@ fn shown_value(parameter: &ParamInfo, value: f64) -> String {
     }
 }
 
-/// A knob in `rect`, its label over it, its value under it. A drag turns it (one
+/// A knob in `cell`, its label over it, its value under it. A drag turns it (one
 /// `device.setParam` with `continuous` on), a double-click returns to the default, the arrow
 /// keys step while it has focus.
+#[allow(clippy::too_many_arguments)]
 fn knob(
-    ui: &mut Ui,
+    ui: &Ui,
+    cell: Rect,
     track: TrackId,
     device_index: usize,
     prefix: &str,
@@ -106,10 +121,9 @@ fn knob(
     value: f64,
     actions: &mut Vec<Action>,
 ) -> egui::Response {
-    let rect = ui.allocate_exact_size(egui::vec2(CELL, KNOB + 30.0), Sense::click_and_drag()).0;
     let publisher = format!("{}: {}", prefix, parameter.name.to_lowercase());
     let response =
-        ui.interact(rect, egui::Id::new(("nam-knob", track.0, device_index, parameter.id)), Sense::click_and_drag());
+        ui.interact(cell, egui::Id::new(("nam-knob", track.0, device_index, parameter.id)), Sense::click_and_drag());
     if response.clicked() {
         response.request_focus();
     }
@@ -130,11 +144,11 @@ fn knob(
             change = Some((parameter.clamp(next), false));
         }
     }
-    let center = rect.center() + egui::vec2(0.0, 2.0);
-    widgets::knob(ui.painter(), center, KNOB, at as f32, theme::text_primary());
+    let circle = (cell.height() - 26.0).clamp(20.0, KNOB);
+    widgets::knob(ui.painter(), cell.center() + egui::vec2(0.0, 2.0), circle, at as f32, theme::text_primary());
     widgets::text_in(
         ui.painter(),
-        Rect::from_min_max(rect.left_top(), egui::pos2(rect.right(), rect.top() + 12.0)),
+        Rect::from_min_max(cell.left_top(), egui::pos2(cell.right(), cell.top() + 12.0)),
         Align2::CENTER_CENTER,
         parameter.name,
         theme::ui_font(theme::TEXT_TINY),
@@ -142,7 +156,7 @@ fn knob(
     );
     widgets::text_in(
         ui.painter(),
-        Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 16.0), rect.max),
+        Rect::from_min_max(egui::pos2(cell.left(), cell.bottom() - 16.0), cell.max),
         Align2::CENTER_CENTER,
         &shown_value(parameter, change.as_ref().map_or(value, |(v, _)| *v)),
         theme::mono_font(theme::TEXT_TINY),
@@ -155,10 +169,172 @@ fn knob(
     response
 }
 
+/// The Mid Freq's draggable value pill, under the amp's trio: its name over, its value in a
+/// dark box. A drag turns it; the arrows step while it has focus; a double-click is the
+/// default ([docs/spec/nam-amp-and-cab.md] › The panels).
+#[allow(clippy::too_many_arguments)]
+fn mid_freq_pill(
+    ui: &Ui,
+    under: Rect,
+    track: TrackId,
+    device_index: usize,
+    prefix: &str,
+    parameter: &'static ParamInfo,
+    value: f64,
+    actions: &mut Vec<Action>,
+) -> egui::Response {
+    let publisher = format!("{}: {}", prefix, parameter.name.to_lowercase());
+    let broad =
+        Rect::from_min_max(egui::pos2(under.left(), under.top()), egui::pos2(under.left() + 130.0, under.bottom()));
+    response_given(
+        ui,
+        broad,
+        egui::Id::new(("nam-pill", track.0, device_index, parameter.id)),
+        track,
+        device_index,
+        parameter,
+        value,
+        &publisher,
+        actions,
+    )
+}
+
+/// The value-only drag of `mid_freq_pill`: a dark value box with its name over it.
+#[allow(clippy::too_many_arguments)]
+fn response_given(
+    ui: &Ui,
+    broad: Rect,
+    id: egui::Id,
+    track: TrackId,
+    device_index: usize,
+    parameter: &'static ParamInfo,
+    value: f64,
+    publisher: &str,
+    actions: &mut Vec<Action>,
+) -> egui::Response {
+    let response = ui.interact(broad, id, Sense::click_and_drag());
+    if response.clicked() {
+        response.request_focus();
+    }
+    let mut at = parameter.to_normalized(value);
+    let mut change: Option<(f64, bool)> = None;
+    if response.dragged() {
+        let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+        at = (at - f64::from(response.drag_delta().y) * 0.005 * fine).clamp(0.0, 1.0);
+        change = Some((parameter.from_normalized(at), true));
+    } else if response.double_clicked() {
+        change = Some((parameter.default, false));
+    } else if response.has_focus() {
+        let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowRight));
+        let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowLeft));
+        if up != down {
+            let step = (parameter.max - parameter.min) * 0.01;
+            let next = value + f64::from(up as i8) * step - f64::from(down as i8) * step;
+            change = Some((parameter.clamp(next), false));
+        }
+    }
+    widgets::text_in(
+        ui.painter(),
+        Rect::from_min_max(broad.left_top(), egui::pos2(broad.right(), broad.top() + 12.0)),
+        Align2::CENTER_CENTER,
+        parameter.name,
+        theme::ui_font(theme::TEXT_TINY),
+        theme::text_secondary(),
+    );
+    let shown = shown_value(parameter, change.as_ref().map_or(value, |(v, _)| *v));
+    ui.painter().rect_filled(
+        Rect::from_min_max(
+            egui::pos2(broad.left() + 18.0, broad.top() + 13.0),
+            egui::pos2(broad.right() - 18.0, broad.bottom() - 1.0),
+        ),
+        3.0,
+        theme::control_background(),
+    );
+    widgets::text_in(
+        ui.painter(),
+        Rect::from_min_max(
+            egui::pos2(broad.left() + 18.0, broad.top() + 13.0),
+            egui::pos2(broad.right() - 18.0, broad.bottom() - 1.0),
+        ),
+        Align2::CENTER_CENTER,
+        &shown,
+        theme::mono_font(theme::TEXT_TINY),
+        theme::text_value(),
+    );
+    if let Some((next, continuous)) = change {
+        set_param(actions, track, device_index, parameter, next, continuous);
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, publisher));
+    response
+}
+
+/// The Cab Loader's vertical Volume slider in `column`: a lane with a handle a drag moves,
+/// the value under it.
+#[allow(clippy::too_many_arguments)]
+fn vslider(
+    ui: &Ui,
+    column: Rect,
+    track: TrackId,
+    device_index: usize,
+    prefix: &str,
+    parameter: &'static ParamInfo,
+    value: f64,
+    actions: &mut Vec<Action>,
+) -> egui::Response {
+    let publisher = format!("{}: {}", prefix, parameter.name.to_lowercase());
+    let at = parameter.to_normalized(value) as f32;
+    widgets::text_in(
+        ui.painter(),
+        Rect::from_min_max(column.left_top(), egui::pos2(column.right(), column.top() + 12.0)),
+        Align2::CENTER_CENTER,
+        parameter.name,
+        theme::ui_font(theme::TEXT_TINY),
+        theme::text_secondary(),
+    );
+    let lane = Rect::from_min_max(
+        egui::pos2(column.center().x - 3.0, column.top() + 16.0),
+        egui::pos2(column.center().x + 3.0, column.bottom() - 20.0),
+    );
+    ui.painter().rect_filled(lane, 1.5, theme::control_background());
+    let handle_y = lane.bottom() - at * lane.height();
+    ui.painter().rect_filled(
+        Rect::from_min_max(
+            egui::pos2(lane.center().x - 7.0, handle_y - 3.0),
+            egui::pos2(lane.center().x + 7.0, handle_y + 3.0),
+        ),
+        1.5,
+        theme::text_primary(),
+    );
+    let response = ui.interact(
+        Rect::from_min_max(
+            egui::pos2(lane.center().x - 12.0, lane.top()),
+            egui::pos2(lane.center().x + 12.0, lane.bottom()),
+        ),
+        egui::Id::new(("nam-vslider", track.0, device_index, parameter.id)),
+        Sense::click_and_drag(),
+    );
+    if response.dragged() {
+        let relative = (1.0
+            - (response.interact_pointer_pos().map_or(lane.top(), |p| p.y) - lane.top()) / lane.height())
+        .clamp(0.0, 1.0);
+        set_param(actions, track, device_index, parameter, parameter.from_normalized(f64::from(relative)), true);
+    }
+    widgets::text_in(
+        ui.painter(),
+        Rect::from_min_max(egui::pos2(column.left(), lane.bottom() + 2.0), egui::pos2(column.right(), column.bottom())),
+        Align2::CENTER_CENTER,
+        &shown_value(parameter, value),
+        theme::mono_font(theme::TEXT_TINY),
+        theme::text_value(),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, &publisher));
+    response
+}
+
 /// A lit-or-dark button (EQ, HQ, Phase, HP), one `device.setParam` per click.
 #[allow(clippy::too_many_arguments)]
 fn toggle(
-    ui: &mut Ui,
+    ui: &Ui,
     rect: Rect,
     track: TrackId,
     device_index: usize,
@@ -206,7 +382,9 @@ fn file_row(
     label: &str,
 ) -> (egui::Response, Option<String>) {
     let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    let current_name = if shown.is_empty() {
+    let current_name = if current.is_empty() {
+        empty.to_owned()
+    } else if shown.is_empty() {
         std::path::Path::new(current).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
     } else {
         shown.to_owned()
@@ -239,6 +417,7 @@ fn file_row(
             }
         })
         .response;
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, label));
     (response, choice)
 }
 
@@ -251,26 +430,35 @@ fn index_of(files: &[(String, String)], current: &str) -> Option<usize> {
 /// from the ends.
 fn step_through(files: &[(String, String)], current: &str, by: i64) -> Option<String> {
     let len = files.len();
+    if len == 0 {
+        return None;
+    }
     let index = match (index_of(files, current), by) {
         (Some(at), by) => (at as i64 + by + len as i64).rem_euclid(len as i64) as usize,
         (None, 1) => 0,
-        (None, _) => len.saturating_sub(1),
+        (None, _) => len - 1,
     };
     files.get(index).map(|(path, _)| path.clone())
 }
 
-/// A stepper button drawn in `rect`.
-fn stepper(ui: &mut Ui, rect: Rect, id_salt: egui::Id, glyph: &str, label: String) -> egui::Response {
+/// A stepper button drawn in `rect`: a triangle pointing `up` or `down`.
+fn stepper(ui: &mut Ui, rect: Rect, id_salt: egui::Id, up: bool, label: String) -> egui::Response {
+    let painter = ui.painter();
+    let (fill, _) = widgets::toggle_colors(ui, &ui.interact(rect, egui::Id::new(id_salt), Sense::click()), false);
     let response = ui.interact(rect, egui::Id::new(id_salt), Sense::click());
-    ui.painter().rect_filled(rect, 2.0, theme::control_background());
-    widgets::text_in(
-        ui.painter(),
-        rect,
-        Align2::CENTER_CENTER,
-        glyph,
-        theme::ui_font(theme::TEXT_TINY),
-        theme::text_secondary(),
-    );
+    painter.rect_filled(rect, 2.0, if response.hovered() { theme::control_hover() } else { fill });
+    let inner = rect.shrink(5.0);
+    let center = inner.center();
+    let dir = if up { -1.0 } else { 1.0 };
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(center.x, center.y + 2.5 * dir),
+            egui::pos2(center.x - 3.5, center.y - 1.5 * dir),
+            egui::pos2(center.x + 3.5, center.y - 1.5 * dir),
+        ],
+        theme::text_hint(),
+        egui::Stroke::NONE,
+    ));
     response.widget_info(move || egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
     response
 }
@@ -302,19 +490,23 @@ fn note_of(device: &DeviceBox, lists: &Lists) -> Option<String> {
     (!lists.names.contains_key(file)).then(|| format!("Model missing: {file}"))
 }
 
-/// The name row's and the file row's picks and the steppers, for one panel in `rect`'s rows.
-/// Returns the file a click asked for, when one differs from the device's current.
+/// The name row's and the file row's picks and the steppers, for one panel in its `rect`'s
+/// rows. `what` is the panel's word for its file ("model", "cab"), `empty` the row's empty
+/// text. Returns the file a click asked for, when one differs from the device's current.
+#[allow(clippy::too_many_arguments)]
 fn rows_and_picks(
     ui: &mut Ui,
+    rect: Rect,
     top: f32,
     bottom: f32,
     track: TrackId,
     device: &DeviceBox,
     files: &[(String, String)],
     lists: &Lists,
+    what: &str,
+    empty: &str,
 ) -> Option<String> {
-    let wide = ui.max_rect().width();
-    let left = ui.max_rect().left();
+    let (wide, left) = (rect.width(), rect.left());
     let prefix = prefix_of(device);
     let current = device.file.as_deref().unwrap_or("");
     let salt = (track.0, device.index);
@@ -329,15 +521,23 @@ fn rows_and_picks(
         files,
         current,
         &shown_name,
-        "No model",
-        &format!("{prefix}: model"),
+        empty,
+        &format!("{prefix}: {what}"),
     );
     let up_rect = Rect::from_min_size(egui::pos2(left + wide - 2.0 * STEP - 10.0, top), egui::vec2(STEP, ROW_HEIGHT));
     let down_rect = Rect::from_min_size(egui::pos2(left + wide - STEP - 4.0, top), egui::vec2(STEP, ROW_HEIGHT));
-    let up = stepper(ui, up_rect, egui::Id::new(("nam-step-up", salt)), "▲", format!("{prefix}: previous model"));
-    let down = stepper(ui, down_rect, egui::Id::new(("nam-step-down", salt)), "▼", format!("{prefix}: next model"));
-    // The file row, at the bottom: the same files, the file's own name shown.
-    let file_rect = Rect::from_min_max(egui::pos2(left, bottom - ROW_HEIGHT), egui::pos2(left + wide, bottom));
+    let up = stepper(ui, up_rect, egui::Id::new(("nam-step-up", salt)), true, format!("{prefix}: previous {what}"));
+    let down = stepper(ui, down_rect, egui::Id::new(("nam-step-down", salt)), false, format!("{prefix}: next {what}"));
+    // The file row, at the bottom: the same files, the file's own name shown, its own
+    // steppers ("…previous file", "…next file").
+    let file_rect =
+        Rect::from_min_max(egui::pos2(left, bottom - ROW_HEIGHT), egui::pos2(left + wide - 2.0 * STEP - 12.0, bottom));
+    let file_up = Rect::from_min_size(
+        egui::pos2(left + wide - 2.0 * STEP - 10.0, bottom - ROW_HEIGHT),
+        egui::vec2(STEP, ROW_HEIGHT),
+    );
+    let file_down =
+        Rect::from_min_size(egui::pos2(left + wide - STEP - 4.0, bottom - ROW_HEIGHT), egui::vec2(STEP, ROW_HEIGHT));
     let file_shown =
         if current.is_empty() { String::new() } else { current.rsplit('/').next().unwrap_or(current).to_owned() };
     let (_, file_pick) = file_row(
@@ -347,16 +547,34 @@ fn rows_and_picks(
         files,
         current,
         &file_shown,
-        "Choose a model file…",
-        &format!("{prefix}: model file"),
+        &format!("Choose a {what} file…"),
+        &format!("{prefix}: {what} file"),
     );
+    let file_up_clicked =
+        stepper(ui, file_up, egui::Id::new(("nam-file-step-up", salt)), true, format!("{prefix}: previous file"))
+            .clicked();
+    let file_down_clicked =
+        stepper(ui, file_down, egui::Id::new(("nam-file-step-down", salt)), false, format!("{prefix}: next file"))
+            .clicked();
     let ask = up.clicked().then(|| step_through(files, current, -1)).flatten();
     let ask = ask.or_else(|| down.clicked().then(|| step_through(files, current, 1)).flatten());
+    let ask = ask.or_else(|| file_up_clicked.then(|| step_through(files, current, -1)).flatten());
+    let ask = ask.or_else(|| file_down_clicked.then(|| step_through(files, current, 1)).flatten());
     let asked = ask.or(name_pick).or(file_pick);
     asked.filter(|candidate| Some(candidate.as_str()) != device.file.as_deref())
 }
 
-/// The NAM Amp Modeler's panel, drawn in `rect` ([docs/spec/nam-amp-and-cab.md] › The panels).
+/// The rows a panel's controls sit between: under its name row, over its file row.
+fn controls_rect(rect: Rect, top: f32, bottom: f32) -> Rect {
+    Rect::from_min_max(
+        egui::pos2(rect.left(), top + ROW_HEIGHT + 2.0),
+        egui::pos2(rect.right(), bottom - ROW_HEIGHT - 2.0),
+    )
+}
+
+/// The NAM Amp Modeler's panel, drawn in `rect` ([docs/spec/nam-amp-and-cab.md] › The panels):
+/// Gain at the left, the EQ's trio with the Mid Freq's value and the EQ and HQ buttons under
+/// it in the middle, Delay and Volume at the right.
 pub(crate) fn show_amp(
     ui: &mut Ui,
     rect: Rect,
@@ -366,48 +584,67 @@ pub(crate) fn show_amp(
     actions: &mut Vec<Action>,
 ) {
     let prefix = prefix_of(device);
-    let (top, bottom) = (rect.top() + PAD, rect.bottom() - 2.0 * ROW_HEIGHT - 2.0 * PAD);
-    if let Some(pick) = rows_and_picks(ui, top, rect.bottom() - PAD, track, device, &lists.models, lists) {
+    let top = rect.top() + PAD;
+    let bottom = rect.bottom() - PAD;
+    if let Some(pick) = rows_and_picks(ui, rect, top, bottom, track, device, &lists.models, lists, "model", "No model")
+    {
         actions.push(Action::new(
             "device.setNamFile",
             serde_json::json!({ "track": track.0, "device": device.index, "path": pick }),
         ));
     }
-    // The knobs' row: Gain, then the EQ's band knobs, then the output's.
-    let knobs = Rect::from_min_max(
-        egui::pos2(rect.left(), top + ROW_HEIGHT + 2.0),
-        egui::pos2(rect.right(), top + ROW_HEIGHT + 2.0 + 62.0),
+    let controls = controls_rect(rect, top, bottom);
+    // The Gain and Volume columns at the sides; the middle holds the trio, the Mid Freq's
+    // value and the EQ and HQ buttons.
+    let (left, right) = (60.0, 60.0);
+    let gain_cell = Rect::from_min_max(
+        egui::pos2(controls.left(), controls.top()),
+        egui::pos2(controls.left() + left, controls.top() + 62.0),
     );
-    let gain = ["inputGain", "eqBass", "eqMid", "eqTreble", "outputVolume"];
-    let cells = split(knobs, gain.len());
-    for (cell, id) in cells.iter().zip(gain.iter()) {
-        let parameter = amp_parameter(id);
-        let value = value_of(device, parameter);
-        knob(ui, track, device.index, &prefix, parameter, value, actions);
-        let _ = cell;
-    }
-    // The EQ's toggle, the mid band's frequency, the trim delay and HQ.
-    let row2 = Rect::from_min_max(
-        egui::pos2(rect.left(), knobs.bottom() + 2.0),
-        egui::pos2(rect.right(), knobs.bottom() + 2.0 + ROW_HEIGHT + KNOB),
-    );
-
-    let cells = split(row2, 5);
-    let (eq_cell, mid_cell, delay_cell, hq_cell, spare) = (cells[0], cells[1], cells[2], cells[3], cells[4]);
-    let eq_on = value_of(device, parameter_of(AMP_INFO.params, "eqOn")) >= 0.5;
-    toggle(
+    knob(
         ui,
-        Rect::from_center_size(eq_cell.center() + egui::vec2(0.0, 6.0), egui::vec2(48.0, ROW_HEIGHT)),
+        gain_cell.shrink(2.0),
         track,
         device.index,
         &prefix,
-        amp_parameter("eqOn"),
-        eq_on,
+        amp_parameter("inputGain"),
+        value_of(device, amp_parameter("inputGain")),
         actions,
     );
-    let _ = mid_cell;
+    let volume_cell = Rect::from_min_max(
+        egui::pos2(controls.right() - right, controls.top()),
+        egui::pos2(controls.right(), controls.top() + 62.0),
+    );
     knob(
         ui,
+        volume_cell.shrink(2.0),
+        track,
+        device.index,
+        &prefix,
+        amp_parameter("outputVolume"),
+        value_of(device, amp_parameter("outputVolume")),
+        actions,
+    );
+    let middle_rect = Rect::from_min_max(
+        egui::pos2(controls.left() + left + 4.0, controls.top()),
+        egui::pos2(controls.right() - right - 4.0, controls.bottom()),
+    );
+    let trio = Rect::from_min_max(middle_rect.left_top(), egui::pos2(middle_rect.right(), middle_rect.top() + 62.0));
+    let cells = split(trio, 3);
+    for (cell, id) in cells.iter().zip(["eqBass", "eqMid", "eqTreble"]) {
+        let parameter = amp_parameter(id);
+        knob(ui, cell.shrink(2.0), track, device.index, &prefix, parameter, value_of(device, parameter), actions);
+    }
+    // Under the trio: the Mid Freq's draggable value, then the EQ and HQ buttons. The Delay
+    // knob and the HQ button share a narrow column at the trio's right; the trio's stack sits
+    // beside it.
+    let mid_freq_rect = Rect::from_min_max(
+        egui::pos2(middle_rect.left(), trio.bottom() + 2.0),
+        egui::pos2(middle_rect.left() + middle_rect.width() - 78.0, trio.bottom() + 24.0),
+    );
+    mid_freq_pill(
+        ui,
+        mid_freq_rect,
         track,
         device.index,
         &prefix,
@@ -415,28 +652,48 @@ pub(crate) fn show_amp(
         value_of(device, amp_parameter("eqMidFreq")),
         actions,
     );
-    let _ = delay_cell;
-    knob(ui, track, device.index, &prefix, amp_parameter("delay"), value_of(device, amp_parameter("delay")), actions);
-    let hq_on = value_of(device, amp_parameter("hq")) >= 0.5;
+    let bottom_row = Rect::from_min_max(
+        egui::pos2(middle_rect.left(), mid_freq_rect.bottom() + 6.0),
+        egui::pos2(mid_freq_rect.right(), (mid_freq_rect.bottom() + 30.0).min(controls.bottom())),
+    );
+    let eq_cell = Rect::from_center_size(
+        egui::pos2(bottom_row.left() + 32.0, bottom_row.center().y),
+        egui::vec2(48.0, ROW_HEIGHT),
+    );
     toggle(
         ui,
-        Rect::from_center_size(hq_cell.center() + egui::vec2(0.0, 6.0), egui::vec2(48.0, ROW_HEIGHT)),
+        eq_cell,
         track,
         device.index,
         &prefix,
-        amp_parameter("hq"),
-        hq_on,
+        amp_parameter("eqOn"),
+        on_of(device, amp_parameter("eqOn")),
         actions,
     );
-    let _ = spare;
-    // The failure note, beside the file row's left, over the file row's line: drawn with the
-    // text the panel's note carries.
+    // The narrow column at the middle's right: the Delay's knob, the HQ button under it.
+    let aux = Rect::from_min_max(
+        egui::pos2(mid_freq_rect.right() + 8.0, trio.top()),
+        egui::pos2(middle_rect.right(), controls.bottom()),
+    );
+    knob(
+        ui,
+        Rect::from_min_max(aux.left_top(), egui::pos2(aux.right(), aux.top() + 62.0)).shrink(2.0),
+        track,
+        device.index,
+        &prefix,
+        amp_parameter("delay"),
+        value_of(device, amp_parameter("delay")),
+        actions,
+    );
+    let hq_cell = Rect::from_center_size(egui::pos2(aux.center().x, aux.top() + 78.0), egui::vec2(48.0, ROW_HEIGHT));
+    toggle(ui, hq_cell, track, device.index, &prefix, amp_parameter("hq"), on_of(device, amp_parameter("hq")), actions);
+    // The failure note, beside the file row's left, over the file row's line.
     if let Some(note) = note_of(device, lists) {
         widgets::text_in(
             ui.painter(),
             Rect::from_min_max(
-                egui::pos2(rect.left(), bottom + ROW_HEIGHT - 14.0),
-                egui::pos2(rect.right() - PAD, bottom + ROW_HEIGHT),
+                egui::pos2(rect.left(), bottom - ROW_HEIGHT - 14.0),
+                egui::pos2(rect.right() - PAD, bottom - ROW_HEIGHT),
             ),
             Align2::LEFT_CENTER,
             &note,
@@ -446,7 +703,9 @@ pub(crate) fn show_amp(
     }
 }
 
-/// The NAM Cab Loader's panel, drawn in `rect` ([docs/spec/nam-amp-and-cab.md] › The panels).
+/// The NAM Cab Loader's panel, drawn in `rect` ([docs/spec/nam-amp-and-cab.md] › The panels):
+/// Ø and HP at the middle's top, the cuts' knobs, the Mid Freq knob under them, Delay at the
+/// left and the vertical Volume slider at the right.
 pub(crate) fn show_cab(
     ui: &mut Ui,
     rect: Rect,
@@ -456,78 +715,103 @@ pub(crate) fn show_cab(
     actions: &mut Vec<Action>,
 ) {
     let prefix = prefix_of(device);
-    let (top, _) = (rect.top() + PAD, rect.bottom());
-    let files = &lists.irs;
-    if let Some(pick) = rows_and_picks(ui, top, rect.bottom() - PAD, track, device, files, lists) {
+    let top = rect.top() + PAD;
+    let bottom = rect.bottom() - PAD;
+    if let Some(pick) = rows_and_picks(ui, rect, top, bottom, track, device, &lists.irs, lists, "cab", "No IR") {
         actions.push(Action::new(
             "device.setNamFile",
             serde_json::json!({ "track": track.0, "device": device.index, "path": pick }),
         ));
     }
-    // The controls: the phase and high-pass toggles, the cuts' knobs and the volume knob.
-    let row = Rect::from_min_max(
-        egui::pos2(rect.left(), top + ROW_HEIGHT + 2.0),
-        egui::pos2(rect.right(), top + ROW_HEIGHT + 2.0 + 62.0),
-    );
-    let cells = split(row, 6);
-    let phase = cab_parameter("phase");
-    let hp = cab_parameter("hpOn");
-    let (phase_on, hp_on) = (value_of(device, phase) >= 0.5, value_of(device, hp) >= 0.5);
-    toggle(
-        ui,
-        Rect::from_center_size(cells[0].center() + egui::vec2(0.0, 12.0), egui::vec2(48.0, ROW_HEIGHT)),
-        track,
-        device.index,
-        &prefix,
-        phase,
-        phase_on,
-        actions,
-    );
-    toggle(
-        ui,
-        Rect::from_center_size(cells[1].center() + egui::vec2(0.0, 12.0), egui::vec2(48.0, ROW_HEIGHT)),
-        track,
-        device.index,
-        &prefix,
-        hp,
-        hp_on,
-        actions,
+    let controls = controls_rect(rect, top, bottom);
+    // The Delay column at the left and the Volume slider at the right; the middle holds the
+    // Ø and HP buttons, the cuts' knobs and the Mid Freq knob under them.
+    let (left, right) = (64.0, 52.0);
+    let delay_cell = Rect::from_min_max(
+        egui::pos2(controls.left(), controls.top()),
+        egui::pos2(controls.left() + left, controls.top() + 62.0),
     );
     knob(
         ui,
+        delay_cell.shrink(2.0),
         track,
         device.index,
         &prefix,
-        cab_parameter("cutBass"),
-        value_of(device, cab_parameter("cutBass")),
+        cab_parameter("delay"),
+        value_of(device, cab_parameter("delay")),
         actions,
     );
-    knob(ui, track, device.index, &prefix, cab_parameter("cutMid"), value_of(device, cab_parameter("cutMid")), actions);
+    let volume_cell = Rect::from_min_max(
+        egui::pos2(controls.right() - right, controls.top() + 12.0),
+        egui::pos2(controls.right(), controls.bottom()),
+    );
+    vslider(
+        ui,
+        volume_cell,
+        track,
+        device.index,
+        &prefix,
+        cab_parameter("volume"),
+        value_of(device, cab_parameter("volume")),
+        actions,
+    );
+    let middle_rect = Rect::from_min_max(
+        egui::pos2(controls.left() + left + 4.0, controls.top()),
+        egui::pos2(controls.right() - right - 4.0, controls.bottom()),
+    );
+    // The Ø and HP buttons.
+    let toggles =
+        Rect::from_min_max(middle_rect.left_top(), egui::pos2(middle_rect.right(), middle_rect.top() + ROW_HEIGHT));
+    let cells = split(toggles, 2);
+    for (cell, id) in cells.iter().zip(["phase", "hpOn"]) {
+        let parameter = cab_parameter(id);
+        toggle(
+            ui,
+            Rect::from_center_size(
+                cell.center().max(egui::pos2(cell.left() + 24.0, cell.center().y)),
+                egui::vec2(48.0, ROW_HEIGHT),
+            ),
+            track,
+            device.index,
+            &prefix,
+            parameter,
+            on_of(device, parameter),
+            actions,
+        );
+    }
+    // The cuts' knobs, then the Mid Freq's knob under them.
+    let cuts = Rect::from_min_max(
+        egui::pos2(middle_rect.left(), toggles.bottom() + 2.0),
+        egui::pos2(middle_rect.right(), toggles.bottom() + 46.0),
+    );
+    let cells = split(cuts, 3);
+    for (cell, id) in cells.iter().zip(["cutBass", "cutMid", "cutTreble"]) {
+        let parameter = cab_parameter(id);
+        knob(ui, cell.shrink(2.0), track, device.index, &prefix, parameter, value_of(device, parameter), actions);
+    }
+    let mid_freq_rect = Rect::from_min_max(
+        egui::pos2(middle_rect.left(), cuts.bottom() + 2.0),
+        egui::pos2(middle_rect.right(), cuts.bottom() + 66.0).min(egui::pos2(middle_rect.right(), controls.bottom())),
+    );
+    let mid_freq_cell =
+        Rect::from_center_size(mid_freq_rect.center(), egui::vec2(CELL + 20.0, mid_freq_rect.height().min(62.0)));
     knob(
         ui,
+        mid_freq_cell,
         track,
         device.index,
         &prefix,
-        cab_parameter("cutTreble"),
-        value_of(device, cab_parameter("cutTreble")),
+        cab_parameter("cutMidFreq"),
+        value_of(device, cab_parameter("cutMidFreq")),
         actions,
     );
-    knob(ui, track, device.index, &prefix, cab_parameter("volume"), value_of(device, cab_parameter("volume")), actions);
-    // The mid band's frequency and the trim delay.
-    let row2 = Rect::from_min_max(
-        egui::pos2(rect.left(), row.bottom() + 2.0),
-        egui::pos2(rect.right(), row.bottom() + 2.0 + ROW_HEIGHT + KNOB),
-    );
-    let cells = split(row2, 3);
-    let mid_freq = cab_parameter("cutMidFreq");
-    let delay = cab_parameter("delay");
-    let _ = (cells, mid_freq, delay);
+    // The failure note, beside the file row's left, over the file row's line.
     if let Some(note) = note_of(device, lists) {
         widgets::text_in(
             ui.painter(),
             Rect::from_min_max(
-                egui::pos2(rect.left(), rect.bottom() - 14.0),
-                egui::pos2(rect.right() - PAD, rect.bottom()),
+                egui::pos2(rect.left(), bottom - ROW_HEIGHT - 14.0),
+                egui::pos2(rect.right() - PAD, bottom - ROW_HEIGHT),
             ),
             Align2::LEFT_CENTER,
             &note,
