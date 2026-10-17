@@ -62,6 +62,9 @@ const PARAMS: [ParamInfo; param::COUNT] = [
 pub const INFO: DeviceInfo =
     DeviceInfo { id: "nam-cab-loader", name: "NAM Cab Loader", role: Role::Effect, params: &PARAMS };
 
+/// Reading `.wav` files.
+pub mod ir;
+
 const DEFAULT_SAMPLE_RATE: f64 = 48_000.0;
 
 /// One side's filters.

@@ -73,7 +73,6 @@ impl DelayLine {
         self.write = 0;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

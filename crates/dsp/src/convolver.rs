@@ -11,6 +11,9 @@
 
 use std::sync::Arc;
 
+use crate::Resampler;
+use crate::resampler::HALF_TAPS;
+
 pub use fft_convolver::FFTConvolverError;
 
 /// How many frames one uniform partition spans. Smaller pairs with less CPU spent late; 256
@@ -56,6 +59,50 @@ impl Ir {
             Some(s) => s,
             None => &[],
         }
+    }
+
+    /// The IR with its samples moved to `project_rate`, when its own rate is another. Allocates
+    /// and reads everything: run it off the audio thread, as an IR's load is. The same rate
+    /// comes back unchanged.
+    pub fn resampled_to(&self, project_rate: u32) -> Ir {
+        if self.sample_rate == project_rate || self.sample_rate == 0 {
+            return self.clone();
+        }
+        let mut sides: Vec<Box<[f32]>> = Vec::with_capacity(usize::from(self.channels.max(1)));
+        for index in 0..usize::from(self.channels.max(1)) {
+            let side = self.side(index);
+            let mut leg = Resampler::new(f64::from(self.sample_rate), f64::from(project_rate.max(1)));
+            // The room grows when a feed's production would outsurr it; 16 frames of margin
+            // cover the kernels.
+            let mut out: Vec<f64> = vec![0.0; side.len() * 2 + HALF_TAPS * 2 + 16];
+            let mut staged = vec![0.0f64; 1024];
+            let (mut at, mut from) = (0usize, 0usize);
+            while from < side.len() {
+                let take = 1024usize.min(side.len() - from);
+                for (slot, value) in staged.iter_mut().zip(&side[from..from + take]) {
+                    *slot = f64::from(*value);
+                }
+                at += leg.process(&staged[..take], &mut out[at..]);
+                from += take;
+                if at + staged.len() + HALF_TAPS + 8 > out.len() {
+                    out.resize(out.len() + staged.len() * 2, 0.0);
+                }
+            }
+            // The kernel's tail: what waited for input that has now all been fed.
+            loop {
+                if at + HALF_TAPS + 4 > out.len() {
+                    out.resize(out.len() + 256, 0.0);
+                }
+                let n = leg.process(&[], &mut out[at..]);
+                if n == 0 {
+                    break;
+                }
+                at += n;
+            }
+            out.truncate(at);
+            sides.push(out.into_iter().map(|v| v as f32).collect::<Vec<f32>>().into_boxed_slice());
+        }
+        Ir { channels: self.channels.max(1), sample_rate: project_rate.max(1), sides: sides.into() }
     }
 }
 

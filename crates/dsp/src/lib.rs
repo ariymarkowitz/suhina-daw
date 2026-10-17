@@ -23,7 +23,7 @@ pub mod shape;
 pub mod smooth;
 
 pub use biquad::{Biquad, Coefficients};
-pub use convolver::{Convolver, Ir, PARTITION};
+pub use convolver::{Convolver, Ir, MAX_FRAMES as IR_MAX_FRAMES, PARTITION};
 pub use crossover::{LinkwitzRiley, Slope};
 pub use dc::DcBlocker;
 pub use delay::DelayLine;

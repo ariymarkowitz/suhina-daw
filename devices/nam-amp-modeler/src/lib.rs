@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use nam_rs::Model;
-use nam_rs::NamModel;
+pub use nam_rs::NamModel;
 use suhina_device_api::{
     Device, DeviceError, DeviceInfo, ParamInfo, ProcessContext, Role, Scale, Unit, check_sample_rate,
 };
@@ -72,6 +72,9 @@ const PARAMS: [ParamInfo; param::COUNT] = [
 
 pub const INFO: DeviceInfo =
     DeviceInfo { id: "nam-amp-modeler", name: "NAM Amp Modeler", role: Role::Effect, params: &PARAMS };
+
+/// Reading `.nam` files.
+pub mod model;
 
 const DEFAULT_SAMPLE_RATE: f64 = 48_000.0;
 
