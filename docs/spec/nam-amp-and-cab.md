@@ -186,13 +186,51 @@ Projects folder row (a field on the right, the default shown when the setting is
 - The pick bridge gets two fields (`PickField::NamModelsFolder`, `PickField::IrFolder`) so the
   system dialog opens for them like for the Projects folder (macOS waits on the main thread, as
   those already do).
-- **Listing:** a device's dropdown lists the folder's files ending in `.nam` (amp) or `.wav`
-  (cab), non-recursive, name-sorted without regard to case, at most 2000 entries (past that,
-  the first 2000 and a "2000 of N, showing 2000" note). The list is read when the dropdown opens
-  or a panel first shows it — never while drawing.
+- **Listing:** the folder holds **packs** — a device's dropdown lists the folder's files
+  ending in `.nam` (amp) or `.wav` (cab), non-recursive, name-sorted without regard to case, at
+  most 2000 entries (past that, the first 2000 and a "2000 of N, showing 2000" note). The list
+  is read when the dropdown opens or a panel first shows it — never while drawing.
 - Changing the setting does not retune what devices already point at: their stored path stands.
   A project that points into the setting's folder picks up a changed folder the next time its
   file is chosen or the project reopens.
+
+### Packs
+
+The folders the users keep are an everyday thing: a NAM capture drop usually arrives as one
+**pack** — a subfolder with several `.nam` files (one amp, many captures of it). So the lists
+are two levels deep, the same for both devices:
+
+```text
+NAM models/
+├── British Plexi (Slammin Captures)/   ← a pack: one subfolder
+│   ├── Bright Cranked.nam
+│   ├── Crunch.nam
+│   └── …
+├── Fender Super Reverb 1965/
+│   └── …
+└── Loose capture.nam                  ← files beside the packs
+```
+
+- A **pack** is a subfolder of the folder in Settings. Its name is the subfolder's
+  (case-insensitive sorted). The pack's files are its `.nam` or `.wav` files, name-sorted,
+  same 2000 cap per pack.
+- Files that sit beside the packs form a pack of their own, shown as **(entered directly)**.
+- The panels show the pack and the file at the two dropdown rows:
+  - **The pack row** (the name row): the current file's pack's name (the file's parent folder;
+    **(entered directly)** for a loose file), "No model" / "No IR" when none is set. Its
+    dropdown lists every pack's name; its ▲ ▼ steppers step through the packs.
+  - **The file row**: the current file's own name, its dropdown lists the current pack's files
+    by their shown names, its ▲ ▼ steppers step through that pack, wrapping.
+  - Labels: the pack row is `Amp Modeler: pack`, its steppers `previous pack` / `next pack`;
+    the file row is `Amp Modeler: model file` with `previous file` / `next file` (the Cab
+    Loader likewise, with `cab file`). Choosing a pack loads its **first** file; both choices
+    run `device.setNamFile`, one undo step each, as everything else on the panel.
+- The shown name of a model is still its `metadata` name ("Fender Super Reverb 1965") or its
+  file's name without the extension; a cab file's shown name is its pack's name. The pack row
+  itself always shows the pack's folder name.
+- The scan reads the folder's and each pack's write time, re-reading the folder when its own
+  writes change and a pack when its writes change — the app reads it once per frame, and file
+  loading stays on the session thread (the session re-reads at open or by command only).
 
 ## Commands
 
@@ -229,15 +267,16 @@ user reads them, and the tests find the panels by them.
 
 Both panels, top to bottom:
 
-1. **The name row** — the file's friendly name as a full-width dropdown with **previous** and
-   **next** stepper buttons on its right, stepping through the folder's list with a wrap.
-   - Amp Modeler: the model's `metadata` name ("Fender Super Reverb 1965"), or the file's name
-     without its extension when the file names none; "No model" when `state` is empty.
-   - Cab Loader: the file's **parent folder's** name — a cab is the folder's set of IRs — or
-     "No IR".
-   - Choosing one runs `device.setNamFile`. The labels: "Amp Modeler: model" and
-     "Amp Modeler: previous model" (next model); "Cab Loader: cab" and the same previous/next
-     ones.
+1. **The pack row** — a full-width dropdown over the folder's packs ([Folders](#packs) ›
+   Packs: a subfolder of the folder in Settings, each one an amp or cab with several files;
+   **(entered directly)** when files sit beside the packs) with **previous pack** and **next
+   pack** stepper buttons on its right.
+   - The shown text: the current file's pack's name — the file's parent folder; "No model"
+     (Amp Modeler) / "No IR" (Cab Loader) when `state` is empty or the stored path is not a
+     pack's file.
+   - Choosing a pack loads its first file (`device.setNamFile`, one undo step). Labels:
+     "Amp Modeler: pack", "Amp Modeler: previous pack" (next pack); the Cab Loader likewise
+     ("Cab Loader: pack").
 2. **The controls area** — knobs with a label over each and the value under it, drawn with the
    theme's tokens; a drag up or down turns, a double-click returns to the default, arrow keys
    step when a knob has focus.
@@ -248,9 +287,10 @@ Both panels, top to bottom:
      with **Mid Freq** under them; **Delay**; a vertical **Volume** slider.
    - Toggles are lit when on: EQ, HQ, Phase, HP. Labels name the device: "Amp Modeler: gain" …
      "Cab Loader: volume".
-3. **The file row** — the file's name ("FNDR BFSR VB Edge WRM2 CAB FREE.nam") in a dropdown with
-   the same previous/next steppers; "Choose a model file…" when none is set. Labels: "Amp
-   Modeler: model file", "…previous file", "…next file" (Cab Loader likewise).
+3. **The file row** — the file's own name ("FNDR BFSR VB Edge WRM2 CAB FREE.nam") in a dropdown
+   with the same previous/next steppers; "Choose a model file…" when none is set. Its dropdown
+   lists the current pack's files by their shown names. Labels: "Amp Modeler: model file",
+   "…previous file", "…next file" (Cab Loader likewise).
 4. **A note row** when the device is not in shape, one line, plain text: "No model — choose one
    in Amp Modeler: model file", "Model missing: <path>" (the name row falls back to the file's
    name), or what a file faulted with, from the command's error. An A2 model without quality

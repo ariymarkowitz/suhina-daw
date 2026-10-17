@@ -19,19 +19,33 @@ use crate::detail::detail_view::DeviceBox;
 use crate::kit::theme;
 use crate::kit::widgets::{self, Action};
 
-/// The folders' files and a device file's shown names and failure notes, provided each frame
+/// A pack ([docs/spec/nam-amp-and-cab.md] › Folders › Packs): a subfolder of the device's
+/// folder, an amp or cab with several files. Files beside the packs form the
+/// "(entered directly)" pack.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Set {
+    /// The pack's name: its folder's (or "(entered directly)" for the loose files).
+    pub name: String,
+    /// The pack's files: (path, shown name), name-sorted.
+    pub files: Vec<(String, String)>,
+}
+
+/// The folders' packs and a device file's shown names and failure notes, provided each frame
 /// by the app ([docs/spec/nam-amp-and-cab.md] › Folders).
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct Lists {
-    /// The models folder's `.nam` files: (path, shown name).
-    pub models: Vec<(String, String)>,
-    /// The IR folder's `.wav` files: (path, shown name).
-    pub irs: Vec<(String, String)>,
-    /// A file's shown name — the model's metadata name or the cab's folder's — by path.
+    /// The models folder's packs.
+    pub models: Vec<Set>,
+    /// The IR folder's packs.
+    pub irs: Vec<Set>,
+    /// A file's shown name — the model's metadata name or the cab's pack's — by path.
     pub names: HashMap<String, String>,
     /// Why a device's file does not run, by path: what a load gave.
     pub notes: HashMap<String, String>,
 }
+
+/// The pack the files beside the packs make.
+pub const LOOSE_PACK: &str = "(entered directly)";
 
 /// The width a NAM panel asks for in the chain's row layout: the mock's two-column controls
 /// with the knobs' labels and values beside each other.
@@ -490,8 +504,16 @@ fn note_of(device: &DeviceBox, lists: &Lists) -> Option<String> {
     (!lists.names.contains_key(file)).then(|| format!("Model missing: {file}"))
 }
 
-/// The name row's and the file row's picks and the steppers, for one panel in its `rect`'s
-/// rows. `what` is the panel's word for its file ("model", "cab"), `empty` the row's empty
+/// The pack the device's current file is in, by its parent folder: a pack's name, the loose
+/// files' pack, or nothing when the file is not one of the folder's packs (a changed folder,
+/// a missing file).
+fn pack_of_current<'a>(current: &str, sets: &'a [Set]) -> Option<&'a Set> {
+    let parent = std::path::Path::new(current).parent()?.file_name()?.to_string_lossy().into_owned();
+    sets.iter().find(|pack| pack.name == parent)
+}
+
+/// The pack row's and the file row's picks and the steppers, for one panel in its `rect`'s
+/// rows. `what` is the panel's word for its file ("model", "cab"), `empty` the rows' empty
 /// text. Returns the file a click asked for, when one differs from the device's current.
 #[allow(clippy::too_many_arguments)]
 fn rows_and_picks(
@@ -501,8 +523,7 @@ fn rows_and_picks(
     bottom: f32,
     track: TrackId,
     device: &DeviceBox,
-    files: &[(String, String)],
-    lists: &Lists,
+    sets: &[Set],
     what: &str,
     empty: &str,
 ) -> Option<String> {
@@ -510,26 +531,41 @@ fn rows_and_picks(
     let prefix = prefix_of(device);
     let current = device.file.as_deref().unwrap_or("");
     let salt = (track.0, device.index);
-    // The name row: the file's shown name, the folder's files under, the steppers beside.
-    let name_rect =
+    let in_pack = pack_of_current(current, sets);
+    let shown_pack = in_pack.map_or(String::new(), |pack| pack.name.clone());
+    // The pack row: the current pack, the folder's packs under, the steppers beside.
+    let pack_rect =
         Rect::from_min_max(egui::pos2(left, top), egui::pos2(left + wide - 2.0 * STEP - 12.0, top + ROW_HEIGHT));
-    let shown_name = lists.names.get(current).cloned().unwrap_or_default();
-    let (_, name_pick) = file_row(
+    let packs: Vec<(String, String)> = sets.iter().map(|pack| (pack.name.clone(), pack.name.clone())).collect();
+    let (_, pack_pick) = file_row(
         ui,
-        name_rect,
-        egui::Id::new(("nam-name", salt)),
-        files,
-        current,
-        &shown_name,
+        pack_rect,
+        egui::Id::new(("nam-pack", salt)),
+        &packs,
+        &shown_pack,
+        &shown_pack,
         empty,
-        &format!("{prefix}: {what}"),
+        &format!("{prefix}: pack"),
     );
     let up_rect = Rect::from_min_size(egui::pos2(left + wide - 2.0 * STEP - 10.0, top), egui::vec2(STEP, ROW_HEIGHT));
     let down_rect = Rect::from_min_size(egui::pos2(left + wide - STEP - 4.0, top), egui::vec2(STEP, ROW_HEIGHT));
-    let up = stepper(ui, up_rect, egui::Id::new(("nam-step-up", salt)), true, format!("{prefix}: previous {what}"));
-    let down = stepper(ui, down_rect, egui::Id::new(("nam-step-down", salt)), false, format!("{prefix}: next {what}"));
-    // The file row, at the bottom: the same files, the file's own name shown, its own
-    // steppers ("…previous file", "…next file").
+    let up = stepper(ui, up_rect, egui::Id::new(("nam-step-up", salt)), true, format!("{prefix}: previous pack"));
+    let down = stepper(ui, down_rect, egui::Id::new(("nam-step-down", salt)), false, format!("{prefix}: next pack"));
+    // A pack's choice asks for its first file; a pack stepper asks for the pack it steps to's.
+    let pack_step = if up.clicked() {
+        step_through(&packs, &shown_pack, -1)
+    } else if down.clicked() {
+        step_through(&packs, &shown_pack, 1)
+    } else {
+        pack_pick.clone()
+    };
+    let mut ask = pack_step
+        .as_ref()
+        .and_then(|pack_name| sets.iter().find(|pack| &pack.name == pack_name))
+        .and_then(|pack| pack.files.first().map(|(path, _)| path.clone()));
+    // The file row, at the bottom: the current pack's files, the file's own name shown, its
+    // own steppers ("…previous file", "…next file").
+    let files = in_pack.map_or(&[][..], |pack| pack.files.as_slice());
     let file_rect =
         Rect::from_min_max(egui::pos2(left, bottom - ROW_HEIGHT), egui::pos2(left + wide - 2.0 * STEP - 12.0, bottom));
     let file_up = Rect::from_min_size(
@@ -556,12 +592,10 @@ fn rows_and_picks(
     let file_down_clicked =
         stepper(ui, file_down, egui::Id::new(("nam-file-step-down", salt)), false, format!("{prefix}: next file"))
             .clicked();
-    let ask = up.clicked().then(|| step_through(files, current, -1)).flatten();
-    let ask = ask.or_else(|| down.clicked().then(|| step_through(files, current, 1)).flatten());
-    let ask = ask.or_else(|| file_up_clicked.then(|| step_through(files, current, -1)).flatten());
-    let ask = ask.or_else(|| file_down_clicked.then(|| step_through(files, current, 1)).flatten());
-    let asked = ask.or(name_pick).or(file_pick);
-    asked.filter(|candidate| Some(candidate.as_str()) != device.file.as_deref())
+    ask = ask.or_else(|| file_up_clicked.then(|| step_through(files, current, -1)).flatten());
+    ask = ask.or_else(|| file_down_clicked.then(|| step_through(files, current, 1)).flatten());
+    ask = ask.or(file_pick);
+    ask.filter(|candidate| Some(candidate.as_str()) != device.file.as_deref())
 }
 
 /// The rows a panel's controls sit between: under its name row, over its file row.
@@ -586,8 +620,7 @@ pub(crate) fn show_amp(
     let prefix = prefix_of(device);
     let top = rect.top() + PAD;
     let bottom = rect.bottom() - PAD;
-    if let Some(pick) = rows_and_picks(ui, rect, top, bottom, track, device, &lists.models, lists, "model", "No model")
-    {
+    if let Some(pick) = rows_and_picks(ui, rect, top, bottom, track, device, &lists.models, "model", "No model") {
         actions.push(Action::new(
             "device.setNamFile",
             serde_json::json!({ "track": track.0, "device": device.index, "path": pick }),
@@ -717,7 +750,7 @@ pub(crate) fn show_cab(
     let prefix = prefix_of(device);
     let top = rect.top() + PAD;
     let bottom = rect.bottom() - PAD;
-    if let Some(pick) = rows_and_picks(ui, rect, top, bottom, track, device, &lists.irs, lists, "cab", "No IR") {
+    if let Some(pick) = rows_and_picks(ui, rect, top, bottom, track, device, &lists.irs, "cab", "No IR") {
         actions.push(Action::new(
             "device.setNamFile",
             serde_json::json!({ "track": track.0, "device": device.index, "path": pick }),

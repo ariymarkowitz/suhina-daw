@@ -277,7 +277,11 @@ fn a_nam_devices_panel_shows_its_controls_and_files() {
     let (models, irs) = (dir.join("NAM models"), dir.join("IRs"));
     std::fs::create_dir_all(&models).unwrap();
     std::fs::create_dir_all(&irs).unwrap();
-    let model_path = models.join("test amp.nam");
+    // The packs: a NAM folder keeps one amp's captures in a subfolder of it; loose files form
+    // the "(entered directly)" pack.
+    let pack = models.join("Test amp");
+    std::fs::create_dir_all(&pack).unwrap();
+    let model_path = pack.join("test amp.nam");
     std::fs::write(&model_path, r#"{"version":"0.5.4","architecture":"WaveNet","config":{"layers":[{"input_size":1,"condition_size":1,"channels":1,"head_size":1,"kernel_size":1,"dilations":[1],"activation":"ReLU","gated":false,"head_bias":false}],"head":null,"head_scale":1.0},"weights":[1.0,2.0,0.0,0.0,1.0,0.0,1.0,1.0],"metadata":{"name":"Test amp"}}"#).unwrap();
     let ir_path = irs.join("cab.wav");
     std::fs::write(&ir_path, b"RIFF").unwrap();
@@ -311,17 +315,18 @@ fn a_nam_devices_panel_shows_its_controls_and_files() {
     for label in ["Amp Modeler: eq", "Amp Modeler: hq"] {
         assert!(harness.query_by_label(label).is_some(), "missing {label} toggle");
     }
-    // The name row with its steppers and the file row with its own.
+    // The pack row with its steppers and the file row with its own; the pack is listed.
     for label in [
-        "Amp Modeler: model",
-        "Amp Modeler: previous model",
-        "Amp Modeler: next model",
+        "Amp Modeler: pack",
+        "Amp Modeler: previous pack",
+        "Amp Modeler: next pack",
         "Amp Modeler: model file",
         "Amp Modeler: previous file",
         "Amp Modeler: next file",
     ] {
         assert!(harness.query_by_label(label).is_some(), "missing {label}");
     }
+
     assert!(shows_device(&harness, "NAM Cab Loader"), "the cab's panel header is there");
     for label in [
         "Cab Loader: bass",
@@ -337,26 +342,40 @@ fn a_nam_devices_panel_shows_its_controls_and_files() {
         assert!(harness.query_by_label(label).is_some(), "missing {label} toggle");
     }
     for label in [
-        "Cab Loader: cab",
-        "Cab Loader: previous cab",
-        "Cab Loader: next cab",
+        "Cab Loader: pack",
+        "Cab Loader: previous pack",
+        "Cab Loader: next pack",
         "Cab Loader: cab file",
         "Cab Loader: previous file",
         "Cab Loader: next file",
     ] {
         assert!(harness.query_by_label(label).is_some(), "missing {label}");
     }
+
     // One click on the EQ's button turns it on through device.setParam.
     harness.get_by_label("Amp Modeler: eq").click();
     harness.run();
     let project = project_now(&harness);
     let driver = project.channels[0].devices[0].params.iter().find(|p| p.id == "eqOn").unwrap();
     assert_eq!(driver.value, 0.0, "the eq click turned it off (it is on by default)");
-    // The steppers run device.setNamFile: one step takes the folder's first file.
-    // The steppers run device.setNamFile: one step takes the folder's first file.
-    harness.get_by_label("Amp Modeler: previous model").click();
+    // The pack row's dropdown lists the folder's packs; picking one loads its first file.
+    harness.get_by_label("Amp Modeler: pack").click();
+    harness.run();
+    assert!(
+        harness.query_by_label_contains("Amp Modeler: pack: Test amp").is_some(),
+        "the open pack row lists the folder's pack"
+    );
+    harness.get_by_label_contains("Amp Modeler: pack: Test amp").click();
     harness.run();
     assert_eq!(channel_device_state(&harness, 0), model_path.display().to_string());
+    // The pack steppers step through the packs (one here: from none, into it).
+    harness.get_by_label("Amp Modeler: next pack").click();
+    harness.run();
+    assert_eq!(channel_device_state(&harness, 0), model_path.display().to_string());
+    // One undo takes the file choice back (the Edit › Undo key, Ctrl+Z).
+    harness.key_combination_modifiers(Modifiers::COMMAND, &[Key::Z]);
+    harness.run();
+    assert_eq!(channel_device_state(&harness, 0), "");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -165,6 +165,64 @@ enum AfterLeaving {
     Quit(Vec<ProjectId>),
 }
 
+/// A folder's packs ([docs/spec/nam-amp-and-cab.md] › Folders › Packs): its subfolders, each
+/// with its `extension` files name-sorted (the pack is skipped when it holds none), then the
+/// files beside the packs as `(entered directly)`. At most 2000 files a pack. The folder is
+/// re-read only when `folder_writes` changed; a pack, when its own writes changed.
+fn scan_sets(
+    folder: &std::path::Path,
+    extension: &str,
+    previous: &[crate::detail::nam_panel::Set],
+    pack_writes: &mut HashMap<String, Option<std::time::SystemTime>>,
+) -> Vec<crate::detail::nam_panel::Set> {
+    const CAP: usize = 2000;
+    let files_of = |dir: &std::path::Path| -> Vec<(String, String)> {
+        let mut entries =
+            std::fs::read_dir(dir).map(|entries| entries.flatten().collect::<Vec<_>>()).unwrap_or_default();
+        entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+        entries
+            .into_iter()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let right = path.is_file()
+                    && path.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(extension));
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                right.then_some((path.display().to_string(), name))
+            })
+            .take(CAP)
+            .collect()
+    };
+    let mut packs: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut folders_here: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+        .map(|entries| entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect())
+        .unwrap_or_default();
+    folders_here
+        .sort_by_key(|path| path.file_name().map(|name| name.to_string_lossy().to_lowercase()).unwrap_or_default());
+    for pack_folder in folders_here {
+        let name = pack_folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let writes = std::fs::metadata(&pack_folder).ok().and_then(|m| m.modified().ok());
+        let key = pack_folder.display().to_string();
+        let scan = pack_writes.get(&key) != Some(&writes);
+        pack_writes.insert(key, writes);
+        let files = if scan {
+            files_of(&pack_folder)
+        } else {
+            previous.iter().find(|pack| pack.name == name).map(|pack| pack.files.clone()).unwrap_or_default()
+        };
+        if let Some(files) = (!files.is_empty()).then_some(files) {
+            packs.push((name, files));
+        }
+    }
+    let loose = files_of(folder);
+    if !loose.is_empty() {
+        packs.push((crate::detail::nam_panel::LOOSE_PACK.to_owned(), loose));
+    }
+    packs.into_iter().map(|(name, files)| crate::detail::nam_panel::Set { name, files }).collect()
+}
+
 /// A device's file path (its state as UTF-8), when it is a file-running one
 /// ([docs/spec/nam-amp-and-cab.md]).
 fn device_file_path(device: &suhina_engine::model::Device) -> Option<String> {
@@ -183,14 +241,18 @@ fn device_file_path(device: &suhina_engine::model::Device) -> Option<String> {
 /// How long after the level meters last moved the window keeps looking for new levels.
 const METERS_SETTLE_SECONDS: f64 = 0.3;
 
-/// The NAM folders' files the panels list, with each folder's writes when they were read
-/// ([docs/spec/nam-amp-and-cab.md] › Folders).
+/// The NAM folders' packs the panels list ([docs/spec/nam-amp-and-cab.md] › Folders › Packs),
+/// with each folder's writes when they were read and each pack's files keyed by the pack's
+/// path with its writes.
 #[derive(Default)]
 struct NamCache {
+    models: Vec<crate::detail::nam_panel::Set>,
+    irs: Vec<crate::detail::nam_panel::Set>,
     models_writes: Option<std::time::SystemTime>,
     irs_writes: Option<std::time::SystemTime>,
-    models: Vec<(String, String)>,
-    irs: Vec<(String, String)>,
+    /// A pack's write time by its folder's path, so a new capture in one pack re-reads only
+    /// that pack.
+    pack_writes: HashMap<String, Option<std::time::SystemTime>>,
 }
 
 /// The window's state.
@@ -821,41 +883,16 @@ impl App {
         let (models_folder, irs_folder) = (self.nam_models_folder(), self.ir_folder());
         let mut cache = std::mem::take(&mut self.nam_cache);
         let mut folders = [
-            (&models_folder, 0usize, &mut cache.models, &mut cache.models_writes),
-            (&irs_folder, 1usize, &mut cache.irs, &mut cache.irs_writes),
+            (&models_folder, "nam", &mut cache.models, &mut cache.models_writes),
+            (&irs_folder, "wav", &mut cache.irs, &mut cache.irs_writes),
         ];
-        for (folder, which, files, cache_writes) in folders.iter_mut() {
+        for (folder, extension, sets, cache_writes) in folders.iter_mut() {
             let writes = std::fs::metadata(&**folder).ok().and_then(|m| m.modified().ok());
-            let scan = writes != **cache_writes || (**files).is_empty();
+            let scan = writes != **cache_writes || (**sets).is_empty();
             **cache_writes = writes;
-            let files = &mut **files;
             if scan {
-                files.clear();
-                let extension = if *which == 0 { "nam" } else { "wav" };
-                if let Ok(entries) = std::fs::read_dir(folder) {
-                    let mut paths: Vec<String> = entries
-                        .flatten()
-                        .filter_map(|entry| {
-                            let path = entry.path();
-                            let right = path.is_file()
-                                && path
-                                    .extension()
-                                    .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(extension));
-                            right.then(|| path.display().to_string())
-                        })
-                        .collect();
-                    paths.sort_by_key(|path| path.to_lowercase());
-                    *files = paths
-                        .into_iter()
-                        .map(|path| {
-                            let name = std::path::Path::new(&path)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| path.clone());
-                            (path, name)
-                        })
-                        .collect();
-                }
+                let previous = std::mem::take(&mut **sets);
+                **sets = scan_sets(folder, extension, &previous, &mut cache.pack_writes);
             }
         }
         let lists = crate::detail::nam_panel::Lists {
