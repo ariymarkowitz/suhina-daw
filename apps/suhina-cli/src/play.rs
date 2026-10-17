@@ -112,9 +112,8 @@ pub fn launcher(
         println!("note: the project has no clips in its clip launcher; only `play` (the arrangement) will sound");
     }
     let output = chosen_output(choice)?;
-    let mut renderer =
-        Renderer::stopped_with_assets(&project, audio, assets, output.sample_rate(), Plugins::new())
-            .map_err(|e| e.to_string())?;
+    let mut renderer = Renderer::stopped_with_assets(&project, audio, assets, output.sample_rate(), Plugins::new())
+        .map_err(|e| e.to_string())?;
     let mut controller = renderer.controller();
     let progress = Arc::new(Progress::default());
     let stream = output.start(renderer, &mut controller, &progress)?;

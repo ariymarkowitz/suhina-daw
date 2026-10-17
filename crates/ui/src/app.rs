@@ -165,8 +165,33 @@ enum AfterLeaving {
     Quit(Vec<ProjectId>),
 }
 
+/// A device's file path (its state as UTF-8), when it is a file-running one
+/// ([docs/spec/nam-amp-and-cab.md]).
+fn device_file_path(device: &suhina_engine::model::Device) -> Option<String> {
+    let suhina_engine::model::DeviceKind::Builtin(id) = &device.kind else { return None };
+    if !suhina_device_registry::is_file_device(id) {
+        return None;
+    }
+    device
+        .state
+        .as_deref()
+        .and_then(|state| std::str::from_utf8(state).ok())
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+}
+
 /// How long after the level meters last moved the window keeps looking for new levels.
 const METERS_SETTLE_SECONDS: f64 = 0.3;
+
+/// The NAM folders' files the panels list, with each folder's writes when they were read
+/// ([docs/spec/nam-amp-and-cab.md] › Folders).
+#[derive(Default)]
+struct NamCache {
+    models_writes: Option<std::time::SystemTime>,
+    irs_writes: Option<std::time::SystemTime>,
+    models: Vec<(String, String)>,
+    irs: Vec<(String, String)>,
+}
 
 /// The window's state.
 pub struct App {
@@ -269,6 +294,11 @@ pub struct App {
     saved_path: Option<PathBuf>,
     /// Where projects are saved and templates kept when the settings leave them empty.
     default_folders: (PathBuf, PathBuf),
+    /// The NAM models' and IR folders while the settings leave them empty.
+    nam_default_folders: (PathBuf, PathBuf),
+    /// The NAM folders' files, read again when either folder's writes change
+    /// ([docs/spec/nam-amp-and-cab.md] › Folders).
+    nam_cache: NamCache,
     /// The window's title as last set: the active project, marked when it has unsaved changes.
     window_title: String,
     /// The browser panel (`docs/spec/browser.md`), the same for every project.
@@ -364,6 +394,8 @@ impl App {
             new_request: None,
             saved_path: None,
             default_folders: (PathBuf::from("Projects"), PathBuf::from("Templates")),
+            nam_default_folders: (PathBuf::from("NAM models"), PathBuf::from("IRs")),
+            nam_cache: NamCache::default(),
             window_title: String::new(),
             browser: BrowserState::default(),
             sample_map: crate::browser::sample_map_panel::Panel::default(),
@@ -775,10 +807,126 @@ impl App {
         self.default_folders = (projects, templates);
     }
 
+    /// Where the NAM models' and IR folders sit when the settings leave them empty
+    /// ([docs/spec/nam-amp-and-cab.md]): `Suhina/NAM models` and `Suhina/IRs` in the user's
+    /// documents. The app makes both at start when they are not there.
+    pub fn set_nam_default_folders(&mut self, models: PathBuf, irs: PathBuf) {
+        self.nam_default_folders = (models, irs);
+    }
+
+    /// The NAM panels' lists ([docs/spec/nam-amp-and-cab.md] › Folders): the models' and IR
+    /// folders' files, read again when a folder's writes change, and the session's shown names
+    /// and failure notes for the devices' current files.
+    pub fn nam_lists(&mut self) -> crate::detail::nam_panel::Lists {
+        let (models_folder, irs_folder) = (self.nam_models_folder(), self.ir_folder());
+        let mut cache = std::mem::take(&mut self.nam_cache);
+        let mut folders = [
+            (&models_folder, 0usize, &mut cache.models, &mut cache.models_writes),
+            (&irs_folder, 1usize, &mut cache.irs, &mut cache.irs_writes),
+        ];
+        for (folder, which, files, cache_writes) in folders.iter_mut() {
+            let writes = std::fs::metadata(&**folder).ok().and_then(|m| m.modified().ok());
+            let scan = writes != **cache_writes || (**files).is_empty();
+            **cache_writes = writes;
+            let files = &mut **files;
+            if scan {
+                files.clear();
+                let extension = if *which == 0 { "nam" } else { "wav" };
+                if let Ok(entries) = std::fs::read_dir(folder) {
+                    let mut paths: Vec<String> = entries
+                        .flatten()
+                        .filter_map(|entry| {
+                            let path = entry.path();
+                            let right = path.is_file()
+                                && path
+                                    .extension()
+                                    .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(extension));
+                            right.then(|| path.display().to_string())
+                        })
+                        .collect();
+                    paths.sort_by_key(|path| path.to_lowercase());
+                    *files = paths
+                        .into_iter()
+                        .map(|path| {
+                            let name = std::path::Path::new(&path)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.clone());
+                            (path, name)
+                        })
+                        .collect();
+                }
+            }
+        }
+        let lists = crate::detail::nam_panel::Lists {
+            models: cache.models.clone(),
+            irs: cache.irs.clone(),
+            names: self.nam_names(),
+            notes: self.nam_notes(),
+        };
+        self.nam_cache = cache;
+        lists
+    }
+
+    /// The shown names of the session's NAM devices' current files, by path (a lookup per
+    /// device file, no file reads).
+    fn nam_names(&self) -> HashMap<String, String> {
+        let mut names = HashMap::new();
+        if let Some(session) = self.session() {
+            let project = session.project();
+            for track in project.tracks.iter() {
+                let channel = track.channel.and_then(|ch| project.channels.iter().find(|c| c.id == ch));
+                for device in channel.iter().flat_map(|c| c.devices.iter()) {
+                    if let Some(path) = device_file_path(device) {
+                        names.insert(path.clone(), session.device_asset_name(&path).unwrap_or_default());
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    /// The failure notes of the session's NAM devices' current files, by path.
+    fn nam_notes(&self) -> HashMap<String, String> {
+        let mut notes = HashMap::new();
+        if let Some(session) = self.session() {
+            let project = session.project();
+            for track in project.tracks.iter() {
+                let channel = track.channel.and_then(|ch| project.channels.iter().find(|c| c.id == ch));
+                for device in channel.iter().flat_map(|c| c.devices.iter()) {
+                    if let Some(path) =
+                        device_file_path(device).filter(|path| session.device_asset_note(path).is_some())
+                        && let Some(note) = session.device_asset_note(&path)
+                    {
+                        notes.insert(path, note.to_owned());
+                    }
+                }
+            }
+        }
+        notes
+    }
+
     /// The folder new projects are saved in: the setting, or the default.
     pub fn projects_folder(&self) -> PathBuf {
         match self.settings.projects_folder.trim() {
             "" => self.default_folders.0.clone(),
+            folder => PathBuf::from(folder),
+        }
+    }
+
+    /// The folder the NAM models list from: the setting, or the default
+    /// ([docs/spec/nam-amp-and-cab.md]).
+    pub fn nam_models_folder(&self) -> PathBuf {
+        match self.settings.nam_models_folder.trim() {
+            "" => self.nam_default_folders.0.clone(),
+            folder => PathBuf::from(folder),
+        }
+    }
+
+    /// The folder the IRs list from: the setting, or the default.
+    pub fn ir_folder(&self) -> PathBuf {
+        match self.settings.irs_folder.trim() {
+            "" => self.nam_default_folders.1.clone(),
             folder => PathBuf::from(folder),
         }
     }
@@ -916,6 +1064,8 @@ impl App {
         };
         let start = match field {
             PickField::ProjectsFolder | PickField::OpenProject => Some(self.projects_folder()),
+            PickField::NamModelsFolder => Some(self.nam_models_folder()),
+            PickField::IrFolder => Some(self.ir_folder()),
             PickField::TemplatesFolder | PickField::StartTemplate => Some(self.templates_folder()),
             PickField::SaveFolder => self.save_prompt.as_ref().and_then(|p| folder_of(&p.folder)),
             PickField::BrowserFolder => None,
@@ -935,6 +1085,8 @@ impl App {
         let text = path.display().to_string();
         match field {
             PickField::ProjectsFolder => self.settings.projects_folder = text,
+            PickField::NamModelsFolder => self.settings.nam_models_folder = text,
+            PickField::IrFolder => self.settings.irs_folder = text,
             PickField::TemplatesFolder => self.settings.templates_folder = text,
             PickField::StartTemplate => self.settings.start_template = text,
             PickField::SaveFolder => {
@@ -1785,8 +1937,9 @@ impl App {
         if let Some(shown_track) = clip.map(ClipRef::track).or(track) {
             self.detail_drop = Some((detail, shown_track));
         }
+        let nam_lists = self.nam_lists();
         let mut shown = self.session().map_or(detail_view::Detail::Nothing, |s| {
-            detail_view::build_with(s.project(), track, clip, &mut |t, i| reports.remove(&(t, i)))
+            detail_view::build_with(s.project(), track, clip, &mut |t, i| reports.remove(&(t, i)), nam_lists)
         });
         // What the piano roll has selected, described for the clip column (› Clip column).
         if let (detail_view::Detail::Clip(info, _), Some(piano), Some(session)) = (&mut shown, &piano, self.session()) {
@@ -2361,6 +2514,8 @@ impl App {
         let themes = self.themes.view(&self.settings.theme);
         self.about.projects_default = self.default_folders.0.display().to_string();
         self.about.templates_default = self.default_folders.1.display().to_string();
+        self.about.nam_models_default = self.nam_default_folders.0.display().to_string();
+        self.about.irs_default = self.nam_default_folders.1.display().to_string();
         self.about.last_backup = match self.session().and_then(Session::last_backup) {
             Some(backup) => {
                 format!("{} to {}", suhina_session::backup::date_time(backup.written), backup.path.display())

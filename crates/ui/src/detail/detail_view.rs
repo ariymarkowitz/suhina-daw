@@ -63,6 +63,13 @@ pub struct DeviceBox {
     pub enabled: bool,
     /// Parameter ids and values as text.
     pub params: Vec<(String, String)>,
+    /// Built-in parameter values, by id (in the parameter's unit, so a panel's knobs take them).
+    pub values: Vec<(String, f64)>,
+    /// The id of a device that runs a file ([docs/spec/nam-amp-and-cab.md]); the file is the
+    /// state's path.
+    pub file_device: Option<&'static str>,
+    /// The file's path, when the device runs one.
+    pub file: Option<String>,
     pub graph: Option<GraphBox>,
     /// For a plug-in: where it stands, while the project plays.
     pub plugin: Option<PluginBox>,
@@ -284,6 +291,9 @@ pub struct Chain {
     pub track: TrackId,
     pub name: String,
     pub devices: Vec<DeviceBox>,
+    /// The NAM panels' folders' files and a file's names and notes
+    /// ([docs/spec/nam-amp-and-cab.md] › Folders).
+    pub nam: crate::detail::nam_panel::Lists,
 }
 
 /// What the detail area shows: a selected clip comes with its track's chain, since that chain
@@ -298,7 +308,7 @@ pub enum Detail {
 
 /// The detail for a selected clip (it wins, with its own track's chain) or track.
 pub fn build(project: &Project, track: Option<TrackId>, clip: Option<ClipRef>) -> Detail {
-    build_with(project, track, clip, &mut |_, _| None)
+    build_with(project, track, clip, &mut |_, _| None, crate::detail::nam_panel::Lists::default())
 }
 
 /// [`build`], with each plug-in device's state from `plugins` (track, device index).
@@ -307,6 +317,7 @@ pub fn build_with(
     track: Option<TrackId>,
     clip: Option<ClipRef>,
     plugins: &mut dyn FnMut(TrackId, usize) -> Option<PluginReport>,
+    nam: crate::detail::nam_panel::Lists,
 ) -> Detail {
     let bar = bar_beats(project);
     let track_name =
@@ -360,14 +371,19 @@ pub fn build_with(
                 selection: SelectionInfo::default(),
                 switch: None,
             }),
-            chain(project, id, plugins),
+            chain(project, id, plugins, nam.clone()),
         );
     }
-    track.map_or(Detail::Nothing, |id| Detail::Devices(chain(project, id, plugins)))
+    track.map_or(Detail::Nothing, |id| Detail::Devices(chain(project, id, plugins, nam.clone())))
 }
 
 /// A track's devices as the detail area shows them.
-fn chain(project: &Project, id: TrackId, plugins: &mut dyn FnMut(TrackId, usize) -> Option<PluginReport>) -> Chain {
+fn chain(
+    project: &Project,
+    id: TrackId,
+    plugins: &mut dyn FnMut(TrackId, usize) -> Option<PluginReport>,
+    nam: crate::detail::nam_panel::Lists,
+) -> Chain {
     let track_name = project.tracks.iter().find(|t| t.id == id).map(|t| t.name.clone()).unwrap_or_default();
     let channel = project
         .tracks
@@ -406,6 +422,38 @@ fn chain(project: &Project, id: TrackId, plugins: &mut dyn FnMut(TrackId, usize)
                     },
                     enabled: d.enabled,
                     params: d.params.iter().map(|p| (p.id.clone(), format_value(p.value))).collect(),
+                    values: if let DeviceKind::Builtin(id) = &d.kind {
+                        let info = suhina_device_registry::info(id);
+                        info.map(|info| {
+                            info.params
+                                .iter()
+                                .map(|p| {
+                                    (
+                                        p.id.to_owned(),
+                                        d.params
+                                            .iter()
+                                            .find(|stored| stored.id == p.id)
+                                            .map_or(p.default, |stored| p.clamp(stored.value)),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
+                    file_device: match &d.kind {
+                        DeviceKind::Builtin(id) if suhina_device_registry::is_file_device(id) => {
+                            suhina_device_registry::info(id).map(|info| info.id)
+                        }
+                        _ => None,
+                    },
+                    file: d
+                        .state
+                        .as_deref()
+                        .and_then(|state| std::str::from_utf8(state).ok())
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_owned),
                     graph: match (&d.kind, d.state.as_deref()) {
                         (DeviceKind::Sd, Some(state)) => crate::detail::device_canvas::graph(state).map(|cached| {
                             let graph = &cached.graph;
@@ -454,7 +502,7 @@ fn chain(project: &Project, id: TrackId, plugins: &mut dyn FnMut(TrackId, usize)
                 .collect()
         })
         .unwrap_or_default();
-    Chain { track: id, name: track_name, devices }
+    Chain { track: id, name: track_name, devices, nam }
 }
 
 fn format_value(value: f64) -> String {
@@ -531,7 +579,7 @@ fn chain_row(
             break;
         }
         name_for_readers(ui, rect.intersect(area), device);
-        device_panel(ui, &painter.with_clip_rect(area), rect, chain.track, device, actions);
+        device_panel(ui, &painter.with_clip_rect(area), rect, chain.track, device, actions, &chain.nam);
         plugin_button(ui, &painter.with_clip_rect(area), rect, chain.track, device, actions);
         if let Some(editor) = editor {
             places.push(editor_place(ui, area, rect, editor, chain.track, device));
@@ -638,7 +686,7 @@ fn chain_stack(
             break;
         }
         name_for_readers(ui, rect.intersect(area), device);
-        device_panel(ui, &painter.with_clip_rect(area), rect, chain.track, device, actions);
+        device_panel(ui, &painter.with_clip_rect(area), rect, chain.track, device, actions, &chain.nam);
         plugin_button(ui, &painter.with_clip_rect(area), rect, chain.track, device, actions);
         if let Some(editor) = editor {
             places.push(editor_place(ui, area, rect, editor, chain.track, device));
@@ -731,7 +779,9 @@ fn hint(painter: &egui::Painter, area: Rect, text: &str) {
     painter.text(area.center(), Align2::CENTER_CENTER, text, theme::ui_font(theme::TEXT), theme::text_hint());
 }
 
-/// One device: a header with its on switch and name, then its parameters, one per row.
+/// One device: a header with its on switch and name, then its parameters, one per row. A NAM
+/// Amp Modeler or NAM Cab Loader draws its own panel instead
+/// ([docs/spec/nam-amp-and-cab.md] › The panels).
 fn device_panel(
     ui: &mut Ui,
     painter: &egui::Painter,
@@ -739,6 +789,7 @@ fn device_panel(
     track: TrackId,
     device: &DeviceBox,
     actions: &mut Vec<Action>,
+    nam: &crate::detail::nam_panel::Lists,
 ) {
     painter.rect_filled(rect, 0.0, theme::panel_background());
     let header = Rect::from_min_size(rect.min, Vec2::new(rect.width(), ROW));
@@ -775,6 +826,17 @@ fn device_panel(
         Pos2::new(rect.left() + PAD, header.bottom() + PAD),
         Pos2::new(rect.right() - PAD, rect.bottom() - PAD),
     );
+    match device.file_device {
+        Some("nam-amp-modeler") => {
+            crate::detail::nam_panel::show_amp(ui, body, track, device, nam, actions);
+            return;
+        }
+        Some("nam-cab-loader") => {
+            crate::detail::nam_panel::show_cab(ui, body, track, device, nam, actions);
+            return;
+        }
+        _ => {}
+    }
     if let Some(plugin) = &device.plugin {
         let color = match plugin.state {
             PluginState::Crashed => theme::recording(),
@@ -1588,9 +1650,13 @@ mod tests {
     fn a_plug_in_shows_where_it_stands_and_what_its_button_does() {
         let project = with_plugin();
         let shown = |status: Option<PluginStatus>, open: bool| {
-            let Detail::Devices(chain) =
-                build_with(&project, Some(TrackId(1)), None, &mut |_, _| status.clone().map(|s| report(s, open)))
-            else {
+            let Detail::Devices(chain) = build_with(
+                &project,
+                Some(TrackId(1)),
+                None,
+                &mut |_, _| status.clone().map(|s| report(s, open)),
+                crate::detail::nam_panel::Lists::default(),
+            ) else {
                 panic!()
             };
             chain.devices[0].plugin.clone().unwrap()
@@ -1618,8 +1684,13 @@ mod tests {
         use egui_kittest::Harness;
         let project = with_plugin();
         let embedded = PluginReport { editor_embedded: Some((300, 200)), ..report(PluginStatus::Running, true) };
-        let Detail::Devices(chain) = build_with(&project, Some(TrackId(1)), None, &mut |_, _| Some(embedded.clone()))
-        else {
+        let Detail::Devices(chain) = build_with(
+            &project,
+            Some(TrackId(1)),
+            None,
+            &mut |_, _| Some(embedded.clone()),
+            crate::detail::nam_panel::Lists::default(),
+        ) else {
             panic!()
         };
         assert_eq!(chain.devices[0].plugin.as_ref().unwrap().embedded, Some((300, 200)));
@@ -1688,9 +1759,13 @@ mod tests {
         use egui_kittest::Harness;
         use egui_kittest::kittest::Queryable;
         let project = with_plugin();
-        let Detail::Devices(chain) =
-            build_with(&project, Some(TrackId(1)), None, &mut |_, _| Some(report(PluginStatus::Running, false)))
-        else {
+        let Detail::Devices(chain) = build_with(
+            &project,
+            Some(TrackId(1)),
+            None,
+            &mut |_, _| Some(report(PluginStatus::Running, false)),
+            crate::detail::nam_panel::Lists::default(),
+        ) else {
             panic!()
         };
         let detail = Detail::Devices(chain);

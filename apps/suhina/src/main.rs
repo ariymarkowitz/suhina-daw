@@ -120,6 +120,13 @@ fn main() -> ExitCode {
     }
     let (projects, templates) = default_folders();
     window.app.set_default_folders(projects, templates);
+    // The NAM devices' folders: the defaults exist from the start, so a user's first step is
+    // only to drop files in ([docs/spec/nam-amp-and-cab.md]).
+    let nam_base = documents_base();
+    let (nam_models, irs) = (nam_base.join("NAM models"), nam_base.join("IRs"));
+    let _ = std::fs::create_dir_all(&nam_models);
+    let _ = std::fs::create_dir_all(&irs);
+    window.app.set_nam_default_folders(nam_models, irs);
     // Backups of projects never saved, and the journal of the newest backups, beside the
     // settings; what a crash left there is offered once the window starts (`docs/spec/backups.md`).
     let backups = eframe::storage_dir(app_id()).map(|d| d.join(suhina_session::backup::SETTINGS_SUBFOLDER));
@@ -509,11 +516,17 @@ fn app_id() -> &'static str {
 /// in the user's documents folder, or the folder made under the program's old name while only
 /// that one exists (projects there stay where recent lists and links expect them).
 fn default_folders() -> (PathBuf, PathBuf) {
+    let base = documents_base();
+    (base.join("Projects"), base.join("Templates"))
+}
+
+/// `Suhina` in the user's documents folder, or the folder made under the program's old name
+/// while only that one exists; defaults are built beside it.
+fn documents_base() -> PathBuf {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
     let documents = home.map(|h| h.join("Documents")).unwrap_or_default();
     let (new, old) = (documents.join("Suhina"), documents.join(OLD_APP_ID));
-    let base = if !new.exists() && old.is_dir() { old } else { new };
-    (base.join("Projects"), base.join("Templates"))
+    if !new.exists() && old.is_dir() { old } else { new }
 }
 
 /// Connects the output `choice` names to `session`, playing its audio; a device that is gone

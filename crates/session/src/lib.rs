@@ -1016,8 +1016,11 @@ impl Session {
                 if !suhina_device_registry::is_file_device(id) {
                     continue;
                 }
-                if let Some(path) =
-                    device.state.as_deref().and_then(|state| std::str::from_utf8(state).ok()).filter(|path| !path.is_empty())
+                if let Some(path) = device
+                    .state
+                    .as_deref()
+                    .and_then(|state| std::str::from_utf8(state).ok())
+                    .filter(|path| !path.is_empty())
                 {
                     need.insert(path.to_string(), id.clone());
                 }
