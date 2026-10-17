@@ -5,8 +5,11 @@ type: decision
 status: current
 last_verified: 2026-10-17
 covers:
+  - crates/automation/src/attach.rs
+  - crates/automation/src/endpoint.rs
   - crates/automation/src/server.rs
   - crates/automation/src/workspace.rs
+  - crates/ui/src/app/project_dialog.rs
   - apps/suhina/src/main.rs
   - apps/suhina-cli/src/main.rs
 ---
@@ -41,8 +44,8 @@ anything listens, so the rules are decided here, before the code.
 ### 1. The app serves MCP for its open tabs, off by default
 
 The desktop app can serve the same MCP tools as `suhina-cli mcp` (one `SuhinaMcp`, not a second
-server) for the projects it has open. It is off until the person turns on **Settings › Agents ›
-Let agents work on open projects**; with it off, nothing listens.
+server) for the projects it has open. It is off until the person turns on **Settings › General ›
+Agents › Let agents work on open projects**; with it off, nothing listens.
 
 The tools run on the app's own `Projects`, on the thread that runs the window's commands: the
 server hands each tool call to the window as a job, the window runs the jobs between frames, in order
@@ -60,8 +63,9 @@ stdout to it and back, so a client changes only its arguments.
   Windows). The CLI of a build therefore reaches that build's app and no other, and test builds of
   several pull requests, `main` and the nightly, each in a folder of its own, never meet.
 - **Local only.** On Windows the endpoint is a named pipe (`\\.\pipe\suhina-<hash>-mcp`) that
-  refuses remote clients. Elsewhere it is a Unix domain socket in a folder of Suhina's settings
-  folder that only the user can enter (0700), the socket itself 0600. There is no TCP port.
+  refuses remote clients. Elsewhere it is a Unix domain socket in a folder only the user can enter
+  (0700): `suhina` in the session's runtime folder (`$XDG_RUNTIME_DIR`), or
+  `~/.local/state/suhina/run` without one; the socket itself is 0600. There is no TCP port.
 - `--attach` takes no `--read-root` or `--write-root`: the app decides the roots (decision 4). With
   no app of its build running, or with agent connections turned off, it says which and exits.
 
