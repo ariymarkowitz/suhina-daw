@@ -4,6 +4,8 @@
 //! The app's endpoints end to end (ADR 0028): one instance per build, and an agent that waits
 //! for the person's answer and then works on the window's projects through its job queue.
 
+#![allow(clippy::panic, clippy::unwrap_used)] // test helpers outside #[test] functions
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
