@@ -202,6 +202,26 @@ fn a_time_change_glides_fades_or_jumps() {
 }
 
 #[test]
+fn a_tempo_change_glides_the_synced_time() {
+    // Synced to "4" at 120 BPM (500 ms), then the song jumps to 97 BPM: the time lengthens to
+    // about 619 ms through Repitch, without a step in the 200 Hz tone.
+    let mut d = delay(&[(param::SYNC_LEFT, 1.0), (param::SIXTEENTHS_LEFT, 3.0)]);
+    let tone = sine(200.0, 96_000);
+    let at = |tempo: f64| ProcessContext { tempo, beat: 0.0, playing: true };
+    let mut out = run(&mut d, tone.get(..48_000 * 2).unwrap_or_default(), 48_000, at(120.0));
+    out.extend(run(&mut d, tone.get(48_000 * 2..).unwrap_or_default(), 48_000, at(97.0)));
+    let step = largest_step(out.get(30_000 * 2..).unwrap_or_default());
+    assert!(step < 0.03, "step {step}");
+
+    // Once the glide is over, an impulse comes back after the new time.
+    d.reset();
+    let out = run(&mut d, &impulse(1.0, 0.0), 40_000, at(97.0));
+    let left = taps(&side(&out, false));
+    let expected = 4.0 * 15.0 / 97.0 * SR;
+    assert!(left.iter().all(|t| (t.0 as f64 - expected).abs() < 3.0), "{left:?}");
+}
+
+#[test]
 fn repitch_bends_the_pitch_while_the_time_glides() {
     let mut d = delay(&[]);
     let tone = sine(1_000.0, 48_000);

@@ -189,10 +189,11 @@ cost -- --ignored --nocapture` to measure it.
 ## Tests
 
 `devices/delay/src/tests.rs`: the device contract (`device_api::conformance`); impulse tests for
-the time, feedback, sync with offset and Link, ping-pong, freeze; the band-pass in the loop and
-held to its range; Repitch's pitch bend, the three transitions, the LFO's swing (square LFO, Jump),
-synced LFO position, both mix laws, the longest time at 8 kHz and 384 kHz; every control moved
-from one end to the other without a click; the same repeats at 44.1 and 96 kHz.
+the time, feedback, sync with offset and Link, a tempo change gliding the synced time, ping-pong,
+freeze; the band-pass in the loop and held to its range; Repitch's pitch bend, the three
+transitions, the LFO's swing (square LFO, Jump), synced LFO position, both mix laws, the longest
+time at 8 kHz and 384 kHz; every control moved from one end to the other without a click; the same
+repeats at 44.1 and 96 kHz.
 
 `devices/delay/src/golden_tests.rs`: golden renders of eleven scenarios (the defaults, free and
 synced times, ping-pong, both LFO kinds, each transition, freeze, the equal-loudness mix), compared
