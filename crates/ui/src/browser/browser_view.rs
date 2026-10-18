@@ -1619,9 +1619,14 @@ fn footer_view(
 }
 
 /// The browser's resize handle at its inner edge; returns the new width while dragged.
-pub fn resize_handle(ui: &Ui, handle: Rect, width: f32, left: bool) -> Option<f32> {
-    let response =
-        ui.interact(handle, Id::new("browser-resize"), Sense::drag()).on_hover_cursor(CursorIcon::ResizeHorizontal);
+/// The browser's edge: dragged, the width it is dragged to; double-clicked, `default`.
+pub fn resize_handle(ui: &Ui, handle: Rect, width: f32, left: bool, default: f32) -> Option<f32> {
+    let response = ui
+        .interact(handle, Id::new("browser-resize"), Sense::click_and_drag())
+        .on_hover_cursor(CursorIcon::ResizeHorizontal);
+    if response.double_clicked() {
+        return Some(default);
+    }
     ui.painter().rect_filled(
         handle,
         0.0,

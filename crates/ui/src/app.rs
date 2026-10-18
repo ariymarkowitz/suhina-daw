@@ -2147,6 +2147,10 @@ impl App {
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Detail area splitter"));
         if response.double_clicked() && pullable {
             self.detail_max = !self.detail_max;
+        } else if response.double_clicked() {
+            // Elsewhere a double-click puts the detail area back to its default size.
+            self.detail_height = DETAIL_HEIGHT;
+            self.detail_width = detail_view::STACK_WIDTH;
         }
         if response.dragged_by(egui::PointerButton::Primary) {
             let delta = response.drag_delta();
@@ -3610,7 +3614,8 @@ impl App {
             );
             (panel, handle, Rect::from_min_max(area.min, Pos2::new(handle.left(), area.bottom())))
         };
-        if let Some(new) = browser_view::resize_handle(ui, handle, width, left) {
+        let default_width = crate::settings::Settings::default().browser_width;
+        if let Some(new) = browser_view::resize_handle(ui, handle, width, left, default_width as f32) {
             let new = new.round().clamp(low as f32, widest) as u32;
             if new != self.settings.browser_width {
                 self.settings.browser_width = new;
