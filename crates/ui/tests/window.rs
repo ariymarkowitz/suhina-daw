@@ -4353,5 +4353,4 @@ fn a_devices_switch_bypasses_it_and_a_click_again_enables_it() {
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert!(!enabled(&harness), "the undo undid the enable");
-
 }

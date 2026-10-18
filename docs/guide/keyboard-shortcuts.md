@@ -40,7 +40,7 @@ A key does nothing while you type in a text field, such as the browser's search 
 
 | Key | Action | Where | What it does |
 |---|---|---|---|
-| Ctrl+T | `file.new` | Anywhere | Opens the project dialog, where you make a new project or open an existing one. The project opens in a tab of its own. |
+| Ctrl+T | `file.new` | Anywhere but the start panel, which offers the same | Opens the project dialog, where you make a new project or open an existing one. The project opens in a tab of its own. |
 | Ctrl+O | `file.open` | Anywhere | Opens the same project dialog with the cursor in its file path field, ready to open a project file. The project opens in a tab of its own. |
 | Ctrl+S | `file.save` | Anywhere | Saves the project in the file it came from. A project that has never been saved asks for a name and a place first. |
 | Ctrl+Shift+S | `file.saveAs` | Anywhere | Saves the project under a new name or in a new place. From then on, Ctrl+S saves into the new file. |

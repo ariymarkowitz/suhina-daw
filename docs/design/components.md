@@ -454,19 +454,22 @@ chosen in the field; cancelling leaves it as it was. The dialog opens in the fie
 
 ## Start panel
 
-While no project is open, the area right of the browser shows the start panel (`start_panel.rs`)
-on `window.background`: at start when Settings › General › At start is Panel (the default), and
+While no project is open, the start panel (`start_panel.rs`) fills the area below the menu and
+control bar on `window.background`; the browser is hidden while it shows (Ctrl+B's setting keeps
+its value for when a project opens), and Ctrl+T (File › New or open…) does nothing there, since the
+panel offers the same: at start when Settings › General › At start is Panel (the default), and
 after the last project is closed. Its content is at most 820 px wide, centred, 24 px from the
 top. Files dropped anywhere on it open as on the rest of the window.
 
 | Part | Spec |
 |---|---|
 | Actions | Three 132 × 24 px buttons along the top, 6 px apart: **New project** (a blank one), **From a template** (shows the Templates tab), **Open…** (the system's file dialog; a project chosen opens) |
+| Drop hint | One line under the actions, 11 px `text.secondary`: "Drop a project (.suhina) or a Live Set (.als) here to open it"; the status bar says the same at start |
 | List | A `panel.background` card with a 1 px `border`: the tabs **Recent** and **Templates** (11 px, the chosen one `text.primary` over a 2 px `accent` line, the other `text.hint`) and a search field up to 200 px wide on the right (hint "Search") that filters both lists by name, ignoring case |
 | Recent | The projects opened and saved lately, newest first, as 20 px rows: the name, and on the right when it was last saved in words ("Just now", "5 minutes ago", "Yesterday", "3 weeks ago", "Last year"), or its folder when that cannot be read; the whole path as the tooltip. A click opens it as File › Open would; right-click › **Remove from list** takes it off `recent.txt`. "No projects yet: start a new one, or drop a project here" when there are none |
 | Templates | The templates folder's projects as in the project dialog; a click makes a new project from one; the folder in 10 px `text.hint` at the bottom |
 | Audio | A 240 px card on the right: "Audio" heading, Output, Sample rate and Buffer as the settings choose them ("Default" when unset), and an **Audio settings…** button that opens Settings › Audio. Below 560 px of width it goes under the list |
-| Footer | "Suhina" and the version on the left, "Drop a project or a Live Set (.als) here to open it" on the right, 10 px `text.hint` |
+| Footer | "Suhina" and the version on the left, 10 px `text.hint` |
 
 ## Device panel
 

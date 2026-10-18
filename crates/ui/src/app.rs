@@ -422,7 +422,7 @@ impl App {
             view: SessionViewState::default(),
             meters_moved_at: 0.0,
             arrangement: ArrangementViewState::default(),
-            status: Status::Hint("Drop a Live Set (.als) on the window to open it".into()),
+            status: Status::Hint(start_panel::DROP_HINT.into()),
             tempo_drag: None,
             open_request: None,
             revision: 0,
@@ -1632,7 +1632,10 @@ impl App {
             let full_width = grid.is_some()
                 && self.settings.view.detail_layout == crate::settings::view_settings::DetailLayout::FullWidth
                 && self.settings.device_layout != DeviceLayout::Stack;
-            let inner = if self.settings.browser_open && !full_width { self.browser_panel(ui, inner) } else { inner };
+            // The browser stays hidden on the start panel (nothing to drop into); its setting keeps
+            // its value for when a project opens.
+            let browser_shown = self.settings.browser_open && !self.start_panel_open();
+            let inner = if browser_shown && !full_width { self.browser_panel(ui, inner) } else { inner };
             let mut view_area = inner;
             self.detail_drop = None;
             // A clip selected (or clicked) while the editor was closed by hand opens it again.
@@ -1666,7 +1669,7 @@ impl App {
                     inner
                 }
             };
-            let inner = if self.settings.browser_open && full_width {
+            let inner = if browser_shown && full_width {
                 let rest = self.browser_panel(ui, inner);
                 view_area = Rect::from_min_max(
                     Pos2::new(rest.left(), view_area.top()),
@@ -2756,7 +2759,10 @@ impl App {
         let file_menu_was_open = std::mem::take(&mut self.file_menu_open);
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.add(egui::Button::new("New or open…").shortcut_text(keys("file.new"))).clicked() {
+                // The start panel already offers new and open; the dialog would only cover it.
+                if ui.add(egui::Button::new("New or open…").shortcut_text(keys("file.new"))).clicked()
+                    && !self.start_panel_open()
+                {
                     self.open_project_dialog(false);
                 }
                 if ui.add(egui::Button::new("Open…").shortcut_text(keys("file.open"))).clicked() {
@@ -3049,6 +3055,7 @@ impl App {
         match action {
             "settings.open" => self.settings_open = !self.settings_open,
             "help.about" => self.about_open = !self.about_open,
+            "file.new" if self.start_panel_open() => {}
             "file.new" => self.open_project_dialog(false),
             "file.open" => self.open_project_dialog(true),
             "view.browser" if self.keymap.keys("view.browser").is_empty() => {
