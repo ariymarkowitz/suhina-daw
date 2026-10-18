@@ -176,12 +176,16 @@ pub fn midi_input_choices(ui: &mut Ui, track: TrackId, input: &MidiInput, ports:
 /// group, delete.
 pub fn track_menu(ui: &mut Ui, menu: &TrackMenu<'_>, actions: &mut Vec<Action>) {
     let track = menu.track.0;
+    // A compact menu: as wide as its widest item needs, never the window's width.
     ui.set_min_width(180.0);
+    ui.set_max_width(220.0);
+    ui.spacing_mut().item_spacing.y = 2.0;
+    ui.spacing_mut().button_padding.y = 2.0;
 
     // Name: edited in place, applied with Enter.
     let id = Id::new(("rename", track));
     let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| menu.name.to_string());
-    let response = ui.add(egui::TextEdit::singleline(&mut text).hint_text("Name").desired_width(f32::INFINITY));
+    let response = ui.add(egui::TextEdit::singleline(&mut text).hint_text("Name").desired_width(200.0));
     if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
         let name = text.trim();
         if !name.is_empty() && name != menu.name {
