@@ -285,6 +285,65 @@ fn reads_plugins_and_placeholders() {
     assert!(!eq.enabled);
 }
 
+/// MIDI effects come before the instrument and keep that order: Pitch becomes Suhina's pitch, a
+/// MIDI effect without a Suhina device a placeholder (`docs/spec/als-format.md` › MIDI effects).
+#[test]
+fn midi_effects_keep_their_place_before_the_instrument() {
+    use suhina_model::DeviceKind;
+    let manual = |name: &str, value: &str| format!(r#"<{name}><Manual Value="{value}"/></{name}>"#);
+    let pitch: String = [
+        ("On", "true"),
+        ("Pitch", "-5.6"),
+        ("PitchScaleDegrees", "2"),
+        ("Lowest", "48"),
+        ("Range", "24"),
+        ("RangeMode", "1"),
+        ("UseCurrentScale", "false"),
+        ("StepWidth", "12"),
+    ]
+    .iter()
+    .map(|(name, value)| manual(name, value))
+    .collect();
+    let chord = format!(r#"{}{}<UserName Value="Stack"/>"#, manual("On", "false"), manual("Shift1", "7"));
+    let devices = format!(
+        r#"<MidiChord Id="0">{chord}</MidiChord>
+           <MidiPitcher Id="1">{pitch}<UserName Value=""/></MidiPitcher>
+           <OriginalSimpler Id="2">{}<UserName Value=""/></OriginalSimpler>"#,
+        manual("On", "true")
+    );
+    let xml = format!(
+        r#"<Ableton><LiveSet><Tracks><MidiTrack Id="1"><Name><EffectiveName Value="M"/></Name>
+           <DeviceChain><DeviceChain><Devices>{devices}</Devices></DeviceChain></DeviceChain></MidiTrack></Tracks></LiveSet></Ableton>"#
+    );
+    let import = read_xml(&xml).unwrap();
+    let channel = import.project.channels.iter().find(|c| c.name == "M").unwrap();
+    let [chord, pitch, simpler] = channel.devices.as_slice() else {
+        panic!("expected three devices: {:?}", channel.devices)
+    };
+
+    assert_eq!(chord.kind, DeviceKind::Foreign { format: "als".into(), id: "MidiChord".into() });
+    assert_eq!(chord.name, "Stack");
+    assert!(!chord.enabled);
+    assert!(chord.params.is_empty());
+
+    assert_eq!(pitch.kind, DeviceKind::Builtin("pitch".into()));
+    assert_eq!(pitch.name, "Pitch");
+    assert!(pitch.enabled);
+    let value = |id: &str| pitch.params.iter().find(|p| p.id == id).map(|p| p.value);
+    // The stored number goes in as it is; the device drops the fraction, as Live does.
+    assert_eq!(value("pitch"), Some(-5.6));
+    assert_eq!(value("pitchDegrees"), Some(2.0));
+    assert_eq!(value("followScale"), Some(0.0));
+    assert_eq!(value("lowest"), Some(48.0));
+    assert_eq!(value("range"), Some(24.0));
+    assert_eq!(value("mode"), Some(1.0));
+
+    assert_eq!(simpler.kind, DeviceKind::Foreign { format: "als".into(), id: "OriginalSimpler".into() });
+    let placeholders: Vec<_> = import.warnings.iter().filter(|w| w.contains("placeholder")).collect();
+    assert_eq!(placeholders.len(), 2, "{:?}", import.warnings);
+    assert!(placeholders.iter().any(|w| w.contains("MidiChord")), "{placeholders:?}");
+}
+
 /// Locators become arrangement markers in beat order; one without a usable time is skipped with
 /// a warning, and a set without locators has no markers (`docs/spec/als-format.md` › Locators).
 #[test]

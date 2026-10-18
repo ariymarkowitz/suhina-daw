@@ -55,6 +55,27 @@ fn without_an_instrument_the_changed_notes_play_as_the_tracks_sine_tones() {
     assert!(max_diff(&out, &reference) < 1e-5, "{}", max_diff(&out, &reference));
 }
 
+/// A device imported as a placeholder (a MIDI effect or an instrument Suhina has not built) is
+/// left out of the chain: the notes reach the next device unchanged, and with no instrument left
+/// they play as the track's sine tones (`docs/spec/device-import.md`).
+#[test]
+fn placeholders_around_a_midi_effect_pass_the_notes_on() {
+    let placeholder = |id: &str| Device::new(id, DeviceKind::Foreign { format: "als".into(), id: id.into() });
+    let notes = vec![note(0.0, 1.0, 60), note(1.0, 1.0, 64)];
+    let pitch = || device("pitch", &[("pitch", 12.0)]);
+
+    let with = project(notes.clone(), 2.0, vec![placeholder("MidiChord"), pitch(), device(SYNTH, &[])]);
+    let without = project(notes.clone(), 2.0, vec![pitch(), device(SYNTH, &[])]);
+    let reference = render(&without);
+    assert!(peak(&reference) > 0.05);
+    assert!(max_diff(&render(&with), &reference) < 1e-6);
+
+    let unbuilt = project(notes.clone(), 2.0, vec![placeholder("MidiChord"), pitch(), placeholder("OriginalSimpler")]);
+    let tones = render(&project(notes, 2.0, vec![pitch()]));
+    assert!(peak(&tones) > 0.05);
+    assert!(max_diff(&render(&unbuilt), &tones) < 1e-6);
+}
+
 #[test]
 fn notes_the_window_blocks_are_never_played() {
     let notes = vec![note(0.0, 1.0, 40), note(1.0, 1.0, 60)];
