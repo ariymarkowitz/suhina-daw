@@ -587,4 +587,6 @@ impl Device for Delay {
 }
 
 #[cfg(test)]
+mod golden_tests;
+#[cfg(test)]
 mod tests;

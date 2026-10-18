@@ -288,3 +288,8 @@ alike; the same level at both rates; Stereo's correlation at 0, 100 and 120; Ref
 independent; the dry signal undelayed and the mix equal-power; the first reflection at the
 predelay; Freeze holding the tail and Cut keeping new input out; silence decaying to exact zeros;
 every control moved from one end to the other without a click.
+
+`devices/reverb/src/golden_tests.rs`: golden renders of nine scenarios (the defaults, no
+modulation, the densities, damping, Chorus and Spin, Reflect and Diffuse, Freeze with and without
+Cut, a size change), compared within 1e-6 with the files in `devices/reverb/tests/golden`; its
+README lists them and how to make them again when a change to the sound is intended.

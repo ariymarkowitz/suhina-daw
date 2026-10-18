@@ -1033,4 +1033,6 @@ impl Device for Reverb {
 }
 
 #[cfg(test)]
+mod golden_tests;
+#[cfg(test)]
 mod tests;
