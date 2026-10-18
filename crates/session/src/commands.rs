@@ -1232,7 +1232,11 @@ static COMMANDS: &[CommandSpec] = &[
         params: &[
             TRACK,
             param("path", ParamType::Text, "path to a validated .sd AudioEffect graph"),
-            optional("position", ParamType::Integer, "where in the chain, from 0 (default: last)"),
+            optional(
+                "position",
+                ParamType::Integer,
+                "where in the chain, from 0 (default: last; an instrument always goes right after the MIDI effects, a MIDI effect among them, an effect after both)",
+            ),
         ],
         kind: CommandKind::Edit,
         run: devices::add_sd,

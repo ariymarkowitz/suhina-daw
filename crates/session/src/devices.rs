@@ -143,6 +143,7 @@ fn info_json(info: &DeviceInfo) -> Value {
     })
 }
 
+/// A device role as commands name it: `effect`, `instrument` or `midi_effect`.
 pub(crate) fn role_name(role: Role) -> &'static str {
     match role {
         Role::Effect => "effect",
@@ -378,30 +379,32 @@ pub(crate) fn add_sd(session: &mut Session, params: &Value) -> Result<Value, Com
     if channel.devices.len() >= MAX_DEVICES {
         return Err(format!("a track holds at most {MAX_DEVICES} devices").into());
     }
-    let instrument_position = channel.devices.iter().position(|device| chain_role(device) == Some(Role::Instrument));
-    if graph.role == suhina_device_sdk::DeviceRole::Instrument && instrument_position.is_some() {
+    let has_instrument = channel.devices.iter().any(|device| chain_role(device) == Some(Role::Instrument));
+    if graph.role == suhina_device_sdk::DeviceRole::Instrument && has_instrument {
         return Err("the track already has an instrument; remove it first".into());
     }
+    // A MIDI effect or an instrument goes right after the MIDI effects that lead the chain, an
+    // effect at the end.
     let midi_prefix = midi_prefix(&channel.devices);
-    let max_position = if graph.role == suhina_device_sdk::DeviceRole::MidiEffect {
-        instrument_position.unwrap_or(channel.devices.len())
-    } else if graph.role == suhina_device_sdk::DeviceRole::Instrument {
-        midi_prefix
-    } else {
-        channel.devices.len()
-    };
     let position = match params.get("position") {
-        None => max_position,
+        None if graph.role == suhina_device_sdk::DeviceRole::Effect => channel.devices.len(),
+        None => midi_prefix,
         Some(value) => value
             .as_u64()
             .and_then(|n| usize::try_from(n).ok())
-            .filter(|&n| n <= max_position)
-            .ok_or_else(|| format!("position must be from 0 to {max_position}"))?,
+            .filter(|&n| n <= channel.devices.len())
+            .ok_or_else(|| format!("position must be from 0 to {}", channel.devices.len()))?,
     };
     match graph.role {
         suhina_device_sdk::DeviceRole::Instrument if position != midi_prefix => {
             return Err(format!(
                 "an instrument goes after the track's {midi_prefix} MIDI effects (position {midi_prefix})"
+            )
+            .into());
+        }
+        suhina_device_sdk::DeviceRole::MidiEffect if position > midi_prefix => {
+            return Err(format!(
+                "a MIDI effect goes before the instrument and the audio effects (position 0 to {midi_prefix})"
             )
             .into());
         }
