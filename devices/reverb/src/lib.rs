@@ -311,8 +311,8 @@ impl Tuning {
 struct Line {
     delay: DelayLine,
     high_shelf: Biquad,
-    high_pass: FirstOrder,
-    low: Biquad,
+    low_pass: FirstOrder,
+    low_shelf: Biquad,
     air: FirstOrder,
 }
 
@@ -346,8 +346,8 @@ impl Line {
     fn clear(&mut self) {
         self.delay.clear();
         self.high_shelf.reset();
-        self.high_pass.reset();
-        self.low.reset();
+        self.low_pass.reset();
+        self.low_shelf.reset();
         self.air.reset();
     }
 
@@ -365,15 +365,15 @@ impl Line {
         }
         let y = if amounts.high > 0.0 {
             let shelf = heard(&mut self.high_shelf, y, 1.0 - amounts.low_pass);
-            let pass = heard(&mut self.high_pass, y, amounts.low_pass);
+            let pass = heard(&mut self.low_pass, y, amounts.low_pass);
             let high = shelf + (pass - shelf) * amounts.low_pass;
             y + (high - y) * amounts.high
         } else {
             self.high_shelf.reset();
-            self.high_pass.reset();
+            self.low_pass.reset();
             y
         };
-        let y = y + (heard(&mut self.low, y, amounts.low) - y) * amounts.low;
+        let y = y + (heard(&mut self.low_shelf, y, amounts.low) - y) * amounts.low;
         y + (heard(&mut self.air, y, amounts.air) - y) * amounts.air
     }
 }
@@ -387,74 +387,70 @@ struct Damping {
     air: f64,
 }
 
-/// Values that ramp to their settings, so moving a control does not click.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Ramps {
-    /// Predelay (frames), Reflect and Diffuse (linear), Dry/Wet, Stereo's mixing angle (radians).
-    predelay: Smoother,
-    reflect: Smoother,
-    diffuse: Smoother,
-    mix: Smoother,
-    angle: Smoother,
-    /// Gain of the input into the network (0 while frozen with Cut on).
-    feed: Smoother,
-    /// How much of each input cut is heard (0 off, 1 on).
-    low_cut: Smoother,
-    high_cut: Smoother,
-    /// Spin's and Chorus's swing (frames).
-    spin: Smoother,
-    chorus: Smoother,
-    /// Read at the control rate: Shape, Scale, the natural log of Decay, log2 of the input band's
-    /// centre and its width.
-    shape: Smoother,
-    scale: Smoother,
-    decay: Smoother,
-    centre: Smoother,
-    width: Smoother,
-    /// The diffusers' gain.
-    diffusion: Smoother,
-    /// Read at the control rate: log2 of the damping frequencies, and their gains.
-    high_frequency: Smoother,
-    high_gain: Smoother,
-    low_frequency: Smoother,
-    low_gain: Smoother,
-    /// How much of the damping filters is heard (see [`Damping`]).
-    high: Smoother,
-    low_pass: Smoother,
-    low: Smoother,
-    air: Smoother,
+/// Declares [`Ramps`] from one list of fields, so the smoothers and their targets are paired by
+/// name and cannot fall out of step.
+macro_rules! ramps {
+    ($($(#[$doc:meta])* $field:ident,)*) => {
+        /// Values that ramp to their settings, so moving a control does not click:
+        /// `Ramps<Smoother>` holds the smoothers and `Ramps<f64>` their targets.
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        struct Ramps<T> {
+            $($(#[$doc])* $field: T,)*
+        }
+
+        impl<T: Copy> Ramps<T> {
+            /// Every field set to `value`.
+            fn splat(value: T) -> Self {
+                Self { $($field: value,)* }
+            }
+        }
+
+        impl Ramps<Smoother> {
+            /// Calls `f` with each smoother and its target.
+            fn each(&mut self, targets: &Ramps<f64>, mut f: impl FnMut(&mut Smoother, f32)) {
+                $(f(&mut self.$field, targets.$field as f32);)*
+            }
+        }
+    };
 }
 
-impl Ramps {
-    fn all(&mut self) -> [&mut Smoother; 24] {
-        [
-            &mut self.predelay,
-            &mut self.reflect,
-            &mut self.diffuse,
-            &mut self.mix,
-            &mut self.angle,
-            &mut self.feed,
-            &mut self.low_cut,
-            &mut self.high_cut,
-            &mut self.spin,
-            &mut self.chorus,
-            &mut self.shape,
-            &mut self.scale,
-            &mut self.decay,
-            &mut self.centre,
-            &mut self.width,
-            &mut self.diffusion,
-            &mut self.high_frequency,
-            &mut self.high_gain,
-            &mut self.low_frequency,
-            &mut self.low_gain,
-            &mut self.high,
-            &mut self.low_pass,
-            &mut self.low,
-            &mut self.air,
-        ]
-    }
+ramps! {
+    /// Predelay (frames), Reflect and Diffuse (linear), Dry/Wet, Stereo's mixing angle (radians).
+    predelay,
+    reflect,
+    diffuse,
+    mix,
+    angle,
+    /// Gain of the input into the network (0 while frozen with Cut on).
+    feed,
+    /// How much of each input cut is heard (0 off, 1 on).
+    low_cut,
+    high_cut,
+    /// Spin's and Chorus's swing (frames).
+    spin,
+    chorus,
+    /// Read at the control rate: Shape, Scale, the natural log of Decay, log2 of the input band's
+    /// centre and its width.
+    shape,
+    scale,
+    decay,
+    centre,
+    width,
+    /// The diffusers' gain.
+    diffusion,
+    /// Read at the control rate: log2 of the damping frequencies, and their gains.
+    high_frequency,
+    high_gain,
+    low_frequency,
+    low_gain,
+    /// How much of the damping filters is heard (see [`Damping`]).
+    high,
+    low_pass,
+    low,
+    air,
+}
 
+impl Ramps<Smoother> {
     /// Whether the values read at the control rate are still moving.
     fn control_moving(&self) -> bool {
         [
@@ -478,7 +474,7 @@ impl Ramps {
 pub struct Reverb {
     sample_rate: f64,
     values: [f64; param::COUNT],
-    ramps: Ramps,
+    ramps: Ramps<Smoother>,
     low_cut: FirstOrder,
     /// The fixed roll-off of the lowest octaves at the input.
     rumble: FirstOrder,
@@ -486,8 +482,12 @@ pub struct Reverb {
     input: DelayLine,
     diffusers: [Allpass; 4],
     lines: [Line; 16],
-    /// Lines running (Density).
+    /// Lines running (Density), and each one's share of the input.
     active: usize,
+    weights: [f64; 16],
+    /// Cosine and sine of each tap's and each line's phase offset.
+    spin_offsets: [(f64, f64); 32],
+    chorus_offsets: [(f64, f64); 16],
     /// The size factor `(size / 100)^(1/3)` as it glides.
     room: f64,
     /// The tuning at the last control point, at the next one, and in between for this frame.
@@ -515,9 +515,20 @@ fn db_to_gain(db: f64) -> f64 {
     10.0f64.powf(db / 20.0)
 }
 
-/// Golden-angle phase offsets, so no two taps or lines swing together.
-fn phase_offset(k: usize) -> f64 {
-    (k as f64 * 0.381_966_011_250_105).fract()
+/// Cosine and sine of golden-angle phase offsets, from the `first`th on, so no two taps or lines
+/// swing together.
+fn phase_offsets<const N: usize>(first: usize) -> [(f64, f64); N] {
+    std::array::from_fn(|k| {
+        let p = std::f64::consts::TAU * ((k + first) as f64 * 0.381_966_011_250_105).fract();
+        (p.cos(), p.sin())
+    })
+}
+
+/// Each line's share of the network's input with `active` lines running: the longer lines take
+/// more, so the tail builds up rather than starting at its loudest.
+fn input_weights(active: usize) -> [f64; 16] {
+    let norm = LINES.iter().take(active).map(|l| l * l).sum::<f64>().sqrt().max(1e-9);
+    std::array::from_fn(|k| LINES.get(k).map_or(0.0, |l| l / norm) * INPUT_SIGNS.get(k).copied().unwrap_or(1.0))
 }
 
 /// Mixes the first `n` lines' outputs with an orthogonal matrix in which every line feeds every
@@ -525,31 +536,26 @@ fn phase_offset(k: usize) -> f64 {
 /// within each group of four followed by a Householder reflection across the three groups.
 #[inline]
 fn mix_lines(v: &mut [f64; 16], n: usize) {
-    fn hadamard(v: &mut [f64], n: usize) {
+    /// The normalised fast Walsh-Hadamard transform; `v`'s length is a power of two.
+    fn hadamard(v: &mut [f64]) {
         let mut h = 1;
-        while h < n {
-            for start in (0..n).step_by(h * 2) {
-                for i in start..start + h {
-                    if let (Some(&a), Some(&b)) = (v.get(i), v.get(i + h)) {
-                        if let Some(x) = v.get_mut(i) {
-                            *x = a + b;
-                        }
-                        if let Some(y) = v.get_mut(i + h) {
-                            *y = a - b;
-                        }
-                    }
+        while h < v.len() {
+            for block in v.chunks_exact_mut(2 * h) {
+                let (a, b) = block.split_at_mut(h);
+                for (x, y) in a.iter_mut().zip(b) {
+                    (*x, *y) = (*x + *y, *x - *y);
                 }
             }
             h *= 2;
         }
-        let scale = 1.0 / (n as f64).sqrt();
-        for x in v.iter_mut().take(n) {
+        let scale = 1.0 / (v.len() as f64).sqrt();
+        for x in v.iter_mut() {
             *x *= scale;
         }
     }
     if n == 12 {
         for group in v.chunks_mut(4).take(3) {
-            hadamard(group, 4);
+            hadamard(group);
         }
         let (first, rest) = v.split_at_mut(4);
         let (second, third) = rest.split_at_mut(4);
@@ -559,8 +565,8 @@ fn mix_lines(v: &mut [f64; 16], n: usize) {
             *b -= sum;
             *c -= sum;
         }
-    } else {
-        hadamard(v, n.min(16));
+    } else if let Some(lines) = v.get_mut(..n) {
+        hadamard(lines);
     }
     // Each line passes its share on to the next one: a Hadamard matrix is its own inverse, and
     // without the shift two trips round the loop would undo each other's mixing.
@@ -579,36 +585,10 @@ fn limit(x: f64) -> f64 {
 impl Reverb {
     pub fn new() -> Self {
         let sr = DEFAULT_SAMPLE_RATE;
-        let still = Smoother::new(0.0, 1);
         let mut reverb = Self {
             sample_rate: sr,
             values: PARAMS.map(|p| p.default),
-            ramps: Ramps {
-                predelay: still,
-                reflect: still,
-                diffuse: still,
-                mix: still,
-                angle: still,
-                feed: still,
-                low_cut: still,
-                high_cut: still,
-                spin: still,
-                chorus: still,
-                shape: still,
-                scale: still,
-                decay: still,
-                centre: still,
-                width: still,
-                diffusion: still,
-                high_frequency: still,
-                high_gain: still,
-                low_frequency: still,
-                low_gain: still,
-                high: still,
-                low_pass: still,
-                low: still,
-                air: still,
-            },
+            ramps: Ramps::splat(Smoother::new(0.0, 1)),
             low_cut: FirstOrder::default(),
             rumble: FirstOrder::default(),
             high_cut: Biquad::default(),
@@ -616,6 +596,9 @@ impl Reverb {
             diffusers: Default::default(),
             lines: Default::default(),
             active: 8,
+            weights: input_weights(8),
+            spin_offsets: phase_offsets(0),
+            chorus_offsets: phase_offsets(7),
             room: 1.0,
             from: Tuning::default(),
             to: Tuning::default(),
@@ -651,38 +634,37 @@ impl Reverb {
         self.on(param::FREEZE)
     }
 
-    fn targets(&self) -> [f32; 24] {
+    fn targets(&self) -> Ramps<f64> {
         let sr = self.sample_rate;
         let flag = |index| if self.on(index) { 1.0 } else { 0.0 };
         // Frozen with Flat on, the damping is left out; frozen at all, the fixed loss is.
         let filtered = if self.frozen() && self.on(param::FLAT) { 0.0 } else { 1.0 };
-        [
-            self.value(param::PREDELAY) * sr,
-            db_to_gain(self.value(param::REFLECT)),
-            db_to_gain(self.value(param::DIFFUSE)),
-            self.value(param::MIX),
-            std::f64::consts::FRAC_PI_4 * (1.0 - self.value(param::STEREO) / 120.0),
-            if self.frozen() && self.on(param::CUT) { 0.0 } else { 1.0 },
-            flag(param::LOW_CUT),
-            flag(param::HIGH_CUT),
-            flag(param::SPIN) * SPIN_SECONDS * self.value(param::SPIN_AMOUNT) * sr,
-            flag(param::CHORUS) * CHORUS_SECONDS * self.value(param::CHORUS_AMOUNT) * sr,
-            self.value(param::SHAPE),
-            self.value(param::SCALE),
-            self.value(param::DECAY).max(0.01).ln(),
-            self.value(param::INPUT_FREQUENCY).max(1.0).log2(),
-            self.value(param::INPUT_WIDTH),
-            self.value(param::DIFFUSION),
-            self.value(param::HIGH_DAMPING_FREQUENCY).max(1.0).log2(),
-            self.value(param::HIGH_DAMPING_GAIN),
-            self.value(param::LOW_DAMPING_FREQUENCY).max(1.0).log2(),
-            self.value(param::LOW_DAMPING_GAIN),
-            flag(param::HIGH_DAMPING) * filtered,
-            flag(param::HIGH_DAMPING_TYPE),
-            flag(param::LOW_DAMPING) * filtered,
-            if self.frozen() { 0.0 } else { 1.0 },
-        ]
-        .map(|v| v as f32)
+        Ramps {
+            predelay: self.value(param::PREDELAY) * sr,
+            reflect: db_to_gain(self.value(param::REFLECT)),
+            diffuse: db_to_gain(self.value(param::DIFFUSE)),
+            mix: self.value(param::MIX),
+            angle: std::f64::consts::FRAC_PI_4 * (1.0 - self.value(param::STEREO) / 120.0),
+            feed: if self.frozen() && self.on(param::CUT) { 0.0 } else { 1.0 },
+            low_cut: flag(param::LOW_CUT),
+            high_cut: flag(param::HIGH_CUT),
+            spin: flag(param::SPIN) * SPIN_SECONDS * self.value(param::SPIN_AMOUNT) * sr,
+            chorus: flag(param::CHORUS) * CHORUS_SECONDS * self.value(param::CHORUS_AMOUNT) * sr,
+            shape: self.value(param::SHAPE),
+            scale: self.value(param::SCALE),
+            decay: self.value(param::DECAY).max(0.01).ln(),
+            centre: self.value(param::INPUT_FREQUENCY).max(1.0).log2(),
+            width: self.value(param::INPUT_WIDTH),
+            diffusion: self.value(param::DIFFUSION),
+            high_frequency: self.value(param::HIGH_DAMPING_FREQUENCY).max(1.0).log2(),
+            high_gain: self.value(param::HIGH_DAMPING_GAIN),
+            low_frequency: self.value(param::LOW_DAMPING_FREQUENCY).max(1.0).log2(),
+            low_gain: self.value(param::LOW_DAMPING_GAIN),
+            high: flag(param::HIGH_DAMPING) * filtered,
+            low_pass: flag(param::HIGH_DAMPING_TYPE),
+            low: flag(param::LOW_DAMPING) * filtered,
+            air: if self.frozen() { 0.0 } else { 1.0 },
+        }
     }
 
     fn room_target(&self) -> f64 {
@@ -693,10 +675,10 @@ impl Reverb {
     fn rebuild(&mut self) {
         let ramp = Smoother::ramp_frames(RAMP_SECONDS, self.sample_rate);
         let targets = self.targets();
-        for (smoother, target) in self.ramps.all().into_iter().zip(targets) {
+        self.ramps.each(&targets, |smoother, target| {
             smoother.set_ramp(ramp);
             smoother.reset(target);
-        }
+        });
         self.ramps.predelay.set_ramp(Smoother::ramp_frames(PREDELAY_RAMP_SECONDS, self.sample_rate));
         self.low_cut.reset();
         self.rumble = FirstOrder::new(FirstOrderCoefficients::highpass(self.sample_rate, RUMBLE_FREQUENCY));
@@ -708,7 +690,7 @@ impl Reverb {
         for line in &mut self.lines {
             line.clear();
         }
-        self.active = self.density_lines();
+        self.set_active(self.density_lines());
         self.room = self.room_target();
         self.spin_phase = 0.0;
         self.chorus_phase = 0.0;
@@ -718,6 +700,13 @@ impl Reverb {
         self.from = self.to;
         self.now = self.to;
         self.moving = false;
+        self.dirty = false;
+    }
+
+    /// Runs the first `lines` lines of the network.
+    fn set_active(&mut self, lines: usize) {
+        self.active = lines.clamp(1, LINES.len());
+        self.weights = input_weights(self.active);
     }
 
     fn density_lines(&self) -> usize {
@@ -757,13 +746,13 @@ impl Reverb {
         let settled = self.room == self.room_target() && !self.ramps.control_moving();
         let density = DENSITY_TRIM_DB.get(self.value(param::DENSITY) as usize).copied().unwrap_or(0.0);
         let t = &mut self.to;
-        for (k, &(time, _, level)) in TAPS.iter().enumerate() {
+        for (k, ((delay, gain), &(time, _, level))) in
+            t.tap_delays.iter_mut().zip(&mut t.tap_gains).zip(&TAPS).enumerate()
+        {
             let time = time * room;
-            if let (Some(delay), Some(gain)) = (t.tap_delays.get_mut(k), t.tap_gains.get_mut(k)) {
-                *delay = time * ms;
-                let later = if k > 0 { TAP_LATER_DB } else { 0.0 };
-                *gain = TAP_GAIN * db_to_gain(level + later - TAP_PREDELAY_FADE * predelay_ms - fade * time);
-            }
+            *delay = time * ms;
+            let later = if k > 0 { TAP_LATER_DB } else { 0.0 };
+            *gain = TAP_GAIN * db_to_gain(level + later - TAP_PREDELAY_FADE * predelay_ms - fade * time);
         }
         let (a, b, c) = SHAPE_DELAY_MS;
         t.shape_delay = ((a + (b + c * (shape - 0.5)) * room) * ms).max(0.0);
@@ -789,11 +778,10 @@ impl Reverb {
             let trips = base * room / 1_000.0 / LOSS_TRIP_SECONDS;
             let db = |g: f64| 20.0 * g.max(1e-6).log10() * trips;
             line.high_shelf.set(Coefficients::high_shelf(sr, high_f, SHELF_Q, db(high_g)));
-            line.high_pass.set(FirstOrderCoefficients::lowpass(sr, high_f / trips.sqrt()));
-            line.low.set(Coefficients::low_shelf(sr, low_f, SHELF_Q, db(low_g)));
+            line.low_pass.set(FirstOrderCoefficients::lowpass(sr, high_f / trips.sqrt()));
+            line.low_shelf.set(Coefficients::low_shelf(sr, low_f, SHELF_Q, db(low_g)));
             line.air.set(FirstOrderCoefficients::high_shelf(sr, AIR_FREQUENCY, db_to_gain(-air_db * trips)));
         }
-        self.dirty = false;
     }
 
     /// Size moves toward its setting, as fast as Smooth says, over one control period.
@@ -821,11 +809,11 @@ impl Reverb {
         if self.ramps.band_moving() {
             self.tune_input();
         }
-        if self.dirty || self.ramps.control_moving() {
-            // One more update once the ramps stop, so the lines settle on whole frames.
-            let was_moving = self.ramps.control_moving();
+        let moving = self.ramps.control_moving();
+        if self.dirty || moving {
             self.tune();
-            self.dirty = was_moving;
+            // One more update once the ramps stop, so the lines settle on whole frames.
+            self.dirty = moving;
         }
         self.moving = self.from != self.to;
     }
@@ -852,9 +840,7 @@ impl Device for Reverb {
         let Some(slot) = self.values.get_mut(index) else { return };
         *slot = info.clamp(value);
         let targets = self.targets();
-        for (smoother, target) in self.ramps.all().into_iter().zip(targets) {
-            smoother.set_target(target);
-        }
+        self.ramps.each(&targets, |smoother, target| smoother.set_target(target));
         self.dirty = true;
     }
 
@@ -870,26 +856,16 @@ impl Device for Reverb {
             for line in self.lines.iter_mut().skip(self.active).take(wanted.saturating_sub(self.active)) {
                 line.clear();
             }
-            self.active = wanted.clamp(1, LINES.len());
+            self.set_active(wanted);
         }
         let active = self.active;
         let norm = 1.0 / (active as f64).sqrt();
-        // The longer lines take more of the input, so the tail builds up rather than starting at
-        // its loudest.
-        let weight_norm = LINES.iter().take(active).map(|l| l * l).sum::<f64>().sqrt().max(1e-9);
-        let weights: [f64; 16] = std::array::from_fn(|k| {
-            LINES.get(k).map_or(0.0, |l| l / weight_norm) * INPUT_SIGNS.get(k).copied().unwrap_or(1.0)
-        });
         let (spin_step, chorus_step) = (self.value(param::SPIN_RATE) / sr, self.value(param::CHORUS_RATE) / sr);
         let frozen = self.frozen();
-        let spin_offsets: [(f64, f64); 32] = std::array::from_fn(|k| {
-            let p = std::f64::consts::TAU * phase_offset(k);
-            (p.cos(), p.sin())
-        });
-        let chorus_offsets: [(f64, f64); 16] = std::array::from_fn(|k| {
-            let p = std::f64::consts::TAU * phase_offset(k + 7);
-            (p.cos(), p.sin())
-        });
+        // Stereo's rotation and the mix's gains, worked out again only when their inputs move
+        // (NaN never equals an input, so the first frame works them out).
+        let mut output_key = (f64::NAN, f64::NAN);
+        let (mut rotation, mut gains) = ((0.0, 0.0), (0.0, 0.0));
 
         for frame in buffer.as_chunks_mut::<2>().0 {
             let step = self.frame % CONTROL_FRAMES;
@@ -897,8 +873,7 @@ impl Device for Reverb {
                 self.control();
             }
             if self.moving {
-                let (from, to) = (self.from, self.to);
-                self.now.between(&from, &to, (step + 1) as f64 / CONTROL_FRAMES as f64);
+                self.now.between(&self.from, &self.to, (step + 1) as f64 / CONTROL_FRAMES as f64);
             }
             let r = &mut self.ramps;
             let [predelay, reflect, diffuse, mix, angle, feed, low_cut, high_cut, spin_swing, chorus_swing] = [
@@ -936,10 +911,8 @@ impl Device for Reverb {
             };
 
             let input = frame.map(|s| if s.is_finite() { f64::from(s) } else { 0.0 });
-            let x = (input[0] + input[1]) / 2.0;
             // Both cuts always run, so switching one crossfades instead of clicking.
-            let x = self.rumble.process(x);
-            let mut x = x;
+            let mut x = self.rumble.process((input[0] + input[1]) / 2.0);
             x += (self.low_cut.process(x) - x) * low_cut;
             x += (self.high_cut.process(x) - x) * high_cut;
             let t = if self.moving { &self.now } else { &self.to };
@@ -949,7 +922,7 @@ impl Device for Reverb {
             if spin_swing > 0.0 {
                 let (spin_sin, spin_cos) = (std::f64::consts::TAU * self.spin_phase).sin_cos();
                 for (((&delay, &gain), &(c, s)), &side) in
-                    t.tap_delays.iter().zip(&t.tap_gains).zip(&spin_offsets).zip(&TAP_SIDES)
+                    t.tap_delays.iter().zip(&t.tap_gains).zip(&self.spin_offsets).zip(&TAP_SIDES)
                 {
                     // Each tap swings either way round its place; the earliest ones by less, so
                     // they never read ahead of the input.
@@ -981,30 +954,32 @@ impl Device for Reverb {
             }
             let u = f64::from(u) * t.feed;
 
-            // The network.
-            let (chorus_sin, chorus_cos) = (std::f64::consts::TAU * self.chorus_phase).sin_cos();
-            let mut outs = [0.0f64; 16];
+            // The network. Without Chorus the swing is zero whatever the phase.
+            let (chorus_sin, chorus_cos) =
+                if chorus_swing > 0.0 { (std::f64::consts::TAU * self.chorus_phase).sin_cos() } else { (0.0, 0.0) };
             let mut damped = [0.0f64; 16];
-            for (k, line) in self.lines.iter_mut().take(active).enumerate() {
-                let (Some(&length), Some(&gain), Some(&(c, s))) =
-                    (t.lines.get(k), t.gains.get(k), chorus_offsets.get(k))
-                else {
-                    continue;
-                };
+            for ((((line, slot), &length), &gain), &(c, s)) in self
+                .lines
+                .iter_mut()
+                .zip(&mut damped)
+                .zip(&t.lines)
+                .zip(&t.gains)
+                .zip(&self.chorus_offsets)
+                .take(active)
+            {
                 let swing = chorus_swing.min(0.5 * length) * (chorus_sin * c + chorus_cos * s);
                 let y = f64::from(line.delay.read_hermite(length + swing));
-                let d = line.damp(y, &damping) * gain;
-                // The tail is heard after each line's gain and damping, so even a line's first
-                // arrival has decayed for as long as the line is.
-                if let (Some(out), Some(slot)) = (outs.get_mut(k), damped.get_mut(k)) {
-                    *out = d;
-                    *slot = d;
-                }
+                *slot = line.damp(y, &damping) * gain;
             }
+            // The tail is heard after each line's gain and damping, so even a line's first arrival
+            // has decayed for as long as the line is.
+            let outs = damped;
             mix_lines(&mut damped, active);
             let mut tail = [0.0f64; 2];
-            for (k, ((line, &y), &d)) in self.lines.iter_mut().take(active).zip(&outs).zip(&damped).enumerate() {
-                let mut next = d + u * weights.get(k).copied().unwrap_or(0.0);
+            for (k, (((line, &y), &d), &weight)) in
+                self.lines.iter_mut().zip(&outs).zip(&damped).zip(&self.weights).take(active).enumerate()
+            {
+                let mut next = d + u * weight;
                 if frozen {
                     next = limit(next);
                 }
@@ -1017,10 +992,14 @@ impl Device for Reverb {
 
             // Output: the two parts, Stereo's rotation, then the mix.
             let wet = [reflect * early[0] + diffuse * norm * tail[0], reflect * early[1] + diffuse * norm * tail[1]];
-            let (sin, cos) = angle.sin_cos();
+            if (angle, mix) != output_key {
+                output_key = (angle, mix);
+                rotation = angle.sin_cos();
+                let (wet_gain, dry_gain) = (mix * std::f64::consts::FRAC_PI_2).sin_cos();
+                gains = (dry_gain, wet_gain);
+            }
+            let ((sin, cos), (dry_gain, wet_gain)) = (rotation, gains);
             let wet = [cos * wet[0] + sin * wet[1], sin * wet[0] + cos * wet[1]];
-            let mix = mix * std::f64::consts::FRAC_PI_2;
-            let (dry_gain, wet_gain) = (mix.cos(), mix.sin());
             for ((sample, dry), wet) in frame.iter_mut().zip(input).zip(wet) {
                 *sample = (dry * dry_gain + wet * wet_gain) as f32;
             }

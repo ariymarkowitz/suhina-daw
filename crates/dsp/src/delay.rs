@@ -104,9 +104,11 @@ impl DelayLine {
         let whole = delay as usize;
         let t = (delay - whole as f64) as f32;
         // The four samples around the position, oldest first.
-        let oldest = self.write.wrapping_sub(whole + 2);
-        let at = |k: usize| self.buffer.get(oldest.wrapping_add(k) & self.mask).copied().unwrap_or(0.0);
-        let (y2, y1, y0, before) = (at(0), at(1), at(2), at(3));
+        let oldest = self.write.wrapping_sub(whole + 2) & self.mask;
+        let [y2, y1, y0, before] = match self.buffer.get(oldest..oldest + 4) {
+            Some(&[y2, y1, y0, before]) => [y2, y1, y0, before],
+            _ => [self.at(whole + 2), self.at(whole + 1), self.at(whole), self.at(whole - 1)],
+        };
         let c1 = 0.5 * (y1 - before);
         let c2 = before - 2.5 * y0 + 2.0 * y1 - 0.5 * y2;
         let c3 = 0.5 * (y2 - before) + 1.5 * (y0 - y1);

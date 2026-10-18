@@ -238,7 +238,7 @@ fn a_synced_lfo_follows_the_song_position() {
         d.set_param(param::LFO_SYNCED, 6.0); // one bar
         let _ = d.prepare(SR);
         let _ = run(&mut d, &[], 1, ProcessContext { tempo: 120.0, beat, playing: true });
-        d.lfo_value(beat / 4.0)
+        d.lfo().at(beat / 4.0)
     };
     // A triangle a bar long is at its top a quarter of the bar in, and at its bottom three
     // quarters in.

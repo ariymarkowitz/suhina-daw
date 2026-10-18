@@ -133,6 +133,40 @@ enum Transition {
     Jump,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LfoShape {
+    /// A periodic wave, its cycle bent by Morph.
+    Wave(Shape),
+    Random,
+    Wander,
+}
+
+/// The LFO's waveform and where Morph puts the middle of its cycle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Lfo {
+    shape: LfoShape,
+    /// The first half of the waveform takes this much of the cycle, and the second half the rest.
+    split: f64,
+}
+
+impl Lfo {
+    /// The value, -1..1, at position `cycles`.
+    #[inline]
+    fn at(self, cycles: f64) -> f64 {
+        match self.shape {
+            LfoShape::Random => wave(Shape::Random, cycles),
+            LfoShape::Wander => wander(cycles),
+            LfoShape::Wave(shape) => {
+                let whole = cycles.floor();
+                let (phase, split) = (cycles - whole, self.split);
+                let warped =
+                    if phase < split { 0.5 * phase / split } else { 0.5 + 0.5 * (phase - split) / (1.0 - split) };
+                wave(shape, whole + warped)
+            }
+        }
+    }
+}
+
 const PARAMS: [ParamInfo; param::COUNT] = [
     ParamInfo::toggle("link", "Link", true),
     ParamInfo::toggle("syncLeft", "Sync Left", true),
@@ -189,6 +223,13 @@ struct Reader {
     fade: f64,
 }
 
+impl Reader {
+    /// A reader settled at `frames`, with no glide or fade running.
+    fn at(frames: f64) -> Self {
+        Self { slewed: frames, glide: frames, from: frames, to: frames, fade: 1.0 }
+    }
+}
+
 /// One side: its line and band-pass.
 #[derive(Debug, Clone, PartialEq, Default)]
 struct Side {
@@ -214,16 +255,14 @@ impl Side {
     fn read(&mut self, target: f64, transition: Transition, fresh: bool, rates: &Rates) -> f32 {
         let r = &mut self.reader;
         if fresh {
-            *r = Reader { slewed: target, glide: target, from: target, to: target, fade: 1.0 };
+            *r = Reader::at(target);
         }
         match transition {
             Transition::Repitch => {
-                r.slewed += (target - r.slewed).clamp(-REPITCH_RATE, REPITCH_RATE);
-                r.glide = r.slewed + (r.glide - r.slewed) * rates.repitch;
-                r.from = r.glide;
-                r.to = r.glide;
-                r.fade = 1.0;
-                self.line.read_hermite(r.glide)
+                let slewed = r.slewed + (target - r.slewed).clamp(-REPITCH_RATE, REPITCH_RATE);
+                let glide = slewed + (r.glide - slewed) * rates.repitch;
+                *r = Reader { slewed, ..Reader::at(glide) };
+                self.line.read_hermite(glide)
             }
             Transition::Fade => {
                 if r.fade >= 1.0 && (target - r.to).abs() >= 1.0 {
@@ -245,7 +284,7 @@ impl Side {
             }
             Transition::Jump => {
                 let whole = target.round();
-                *r = Reader { slewed: whole, glide: whole, from: whole, to: whole, fade: 1.0 };
+                *r = Reader::at(whole);
                 self.line.read(whole as usize)
             }
         }
@@ -273,6 +312,31 @@ struct Rates {
 impl Rates {
     fn new(sample_rate: f64) -> Self {
         Self { repitch: (-1.0 / (REPITCH_SECONDS * sample_rate)).exp(), fade_step: 1.0 / (FADE_SECONDS * sample_rate) }
+    }
+}
+
+/// The dry and wet gains for the mix and the share of the equal-loudness law, worked out again
+/// only when one of them changes.
+struct MixLaw {
+    key: (f32, f32),
+    gains: (f64, f64),
+}
+
+impl MixLaw {
+    fn new() -> Self {
+        // NaN never equals a key, so the first frame works the gains out.
+        Self { key: (f32::NAN, f32::NAN), gains: (0.0, 0.0) }
+    }
+
+    #[inline]
+    fn gains(&mut self, mix: f32, loudness: f32) -> (f64, f64) {
+        if (mix, loudness) != self.key {
+            self.key = (mix, loudness);
+            let (mix, loudness) = (f64::from(mix), f64::from(loudness));
+            let (sin, cos) = (mix * std::f64::consts::FRAC_PI_2).sin_cos();
+            self.gains = ((1.0 - mix) + (cos - (1.0 - mix)) * loudness, mix + (sin - mix) * loudness);
+        }
+        self.gains
     }
 }
 
@@ -313,19 +377,20 @@ impl Default for Delay {
 impl Delay {
     pub fn new() -> Self {
         let sr = DEFAULT_SAMPLE_RATE;
+        let still = Smoother::new(0.0, 1);
         let mut delay = Self {
             sample_rate: sr,
             rates: Rates::new(sr),
             values: PARAMS.map(|p| p.default),
-            filter: Smoother::new(0.0, 1),
-            feedback: Smoother::new(0.0, 1),
-            mix: Smoother::new(0.0, 1),
-            freeze: Smoother::new(0.0, 1),
-            centre: Smoother::new(0.0, 1),
-            width: Smoother::new(0.0, 1),
-            to_time: Smoother::new(0.0, 1),
-            to_filter: Smoother::new(0.0, 1),
-            loudness: Smoother::new(0.0, 1),
+            filter: still,
+            feedback: still,
+            mix: still,
+            freeze: still,
+            centre: still,
+            width: still,
+            to_time: still,
+            to_filter: still,
+            loudness: still,
             sides: [Side::new(sr), Side::new(sr)],
             lfo_edge: OnePole::new(LFO_EDGE_SECONDS, sr),
             lfo_cycles: 0,
@@ -346,16 +411,17 @@ impl Delay {
     }
 
     fn targets(&self) -> [f32; 9] {
+        let flag = |index| if self.on(index) { 1.0 } else { 0.0 };
         [
-            if self.on(param::FILTER) { 1.0 } else { 0.0 },
+            flag(param::FILTER),
             self.value(param::FEEDBACK) as f32,
             self.value(param::MIX) as f32,
-            if self.on(param::FREEZE) { 1.0 } else { 0.0 },
+            flag(param::FREEZE),
             self.value(param::FILTER_FREQUENCY).max(1.0).log2() as f32,
             self.value(param::FILTER_WIDTH) as f32,
             self.value(param::LFO_TO_TIME) as f32,
             self.value(param::LFO_TO_FILTER) as f32,
-            if self.on(param::EQUAL_LOUDNESS) { 1.0 } else { 0.0 },
+            flag(param::EQUAL_LOUDNESS),
         ]
     }
 
@@ -401,16 +467,14 @@ impl Delay {
     /// One side's delay time in seconds before the LFO, at `tempo`. With Link on, the right side
     /// takes the left side's settings except its offset.
     fn base_seconds(&self, right: bool, tempo: f64) -> f64 {
-        let own = |left: usize, right_index: usize| if right { right_index } else { left };
-        let source = |left: usize, right_index: usize| {
-            if right && !self.on(param::LINK) { right_index } else { left }
-        };
-        let seconds = if self.on(source(param::SYNC_LEFT, param::SYNC_RIGHT)) {
-            let step = self.value(source(param::SIXTEENTHS_LEFT, param::SIXTEENTHS_RIGHT)) as usize;
+        let own = |l: usize, r: usize| if right { r } else { l };
+        let linked = |l: usize, r: usize| if right && !self.on(param::LINK) { r } else { l };
+        let seconds = if self.on(linked(param::SYNC_LEFT, param::SYNC_RIGHT)) {
+            let step = self.value(linked(param::SIXTEENTHS_LEFT, param::SIXTEENTHS_RIGHT)) as usize;
             let sixteenths = SIXTEENTHS.get(step).map_or(1.0, |s| s.1);
             sixteenths * 15.0 / tempo * (1.0 + self.value(own(param::OFFSET_LEFT, param::OFFSET_RIGHT)))
         } else {
-            self.value(source(param::TIME_LEFT, param::TIME_RIGHT))
+            self.value(linked(param::TIME_LEFT, param::TIME_RIGHT))
         };
         seconds.min(MAX_DELAY_SECONDS / (1.0 + LFO_TIME_SWING))
     }
@@ -435,26 +499,19 @@ impl Delay {
         }
     }
 
-    /// The LFO's value, -1..1, at position `cycles`, after Morph.
-    fn lfo_value(&self, cycles: f64) -> f64 {
-        let shape = self.value(param::LFO_SHAPE) as usize;
-        let phase = cycles - cycles.floor();
-        // Morph moves the middle of the cycle: the first half of the waveform takes (1 + morph) / 2
-        // of the cycle and the second half the rest.
-        let split = ((1.0 + self.value(param::LFO_MORPH)) / 2.0).clamp(0.02, 0.98);
-        let warped = if phase < split { 0.5 * phase / split } else { 0.5 + 0.5 * (phase - split) / (1.0 - split) };
-        let warped = cycles.floor() + warped;
-        match shape {
-            5 => wave(Shape::Random, cycles),
-            6 => wander(cycles),
-            _ => wave(
-                [Shape::Sine, Shape::Triangle, Shape::SawUp, Shape::SawDown, Shape::Square]
-                    .get(shape)
-                    .copied()
-                    .unwrap_or(Shape::Sine),
-                warped,
-            ),
-        }
+    /// The LFO's waveform. Morph moves the middle of the cycle: the first half of the waveform
+    /// takes (1 + morph) / 2 of the cycle and the second half the rest.
+    fn lfo(&self) -> Lfo {
+        let shape = match self.value(param::LFO_SHAPE) as usize {
+            1 => LfoShape::Wave(Shape::Triangle),
+            2 => LfoShape::Wave(Shape::SawUp),
+            3 => LfoShape::Wave(Shape::SawDown),
+            4 => LfoShape::Wave(Shape::Square),
+            5 => LfoShape::Random,
+            6 => LfoShape::Wander,
+            _ => LfoShape::Wave(Shape::Sine),
+        };
+        Lfo { shape, split: ((1.0 + self.value(param::LFO_MORPH)) / 2.0).clamp(0.02, 0.98) }
     }
 
     /// Band-pass coefficients for the current (smoothed) centre and width, moved by `lfo`
@@ -517,19 +574,21 @@ impl Device for Delay {
         };
         let beats_per_frame = tempo / 60.0 / sr;
         let lfo_beats = self.lfo_beats();
+        let lfo_wave = self.lfo();
         let follows_song = lfo_beats.is_some() && context.playing && context.beat.is_finite();
         let cycles_per_frame = lfo_beats.map_or(self.lfo_hertz() / sr, |beats| beats_per_frame / beats.max(1e-6));
         let bases = [self.base_seconds(false, tempo) * sr, self.base_seconds(true, tempo) * sr];
         let transition = self.transition();
         let ping_pong = self.on(param::PING_PONG);
         let longest = MAX_DELAY_SECONDS * sr;
+        let mut law = MixLaw::new();
 
         for (n, frame) in buffer.as_chunks_mut::<2>().0.iter_mut().enumerate() {
             let cycles = match lfo_beats {
                 Some(beats) if follows_song => (context.beat + n as f64 * beats_per_frame) / beats.max(1e-6),
                 _ => self.lfo_cycles as f64 + self.lfo_phase,
             };
-            let raw = self.lfo_value(cycles);
+            let raw = lfo_wave.at(cycles);
             if self.fresh {
                 self.lfo_edge.reset(raw);
             }
@@ -565,10 +624,7 @@ impl Device for Delay {
                 right.write(input[1] + fb * f64::from(wet[1]), wet[1], filter, freeze);
             }
 
-            let (mix, loudness) = (f64::from(mix), f64::from(self.loudness.next_value()));
-            let angle = mix * std::f64::consts::FRAC_PI_2;
-            let dry_gain = (1.0 - mix) + (angle.cos() - (1.0 - mix)) * loudness;
-            let wet_gain = mix + (angle.sin() - mix) * loudness;
+            let (dry_gain, wet_gain) = law.gains(mix, self.loudness.next_value());
             for ((sample, x), y) in frame.iter_mut().zip(input).zip(wet) {
                 *sample = (x * dry_gain + f64::from(y) * wet_gain) as f32;
             }
