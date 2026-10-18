@@ -973,18 +973,35 @@ fn device_panel(
         painter.rect_stroke(switch, 0.0, theme::hairline(theme::text_hint()), egui::StrokeKind::Inside);
     }
     let name_color = if device.enabled { theme::text_primary() } else { theme::text_hint() };
+    // The X at the header's right end removes the device, as Remove device in its menu does.
+    let close = Rect::from_center_size(Pos2::new(header.right() - PAD - 6.0, header.center().y), Vec2::splat(12.0));
+    let remove = ui
+        .interact(close, Id::new(("device-remove", track.0, device.index)), Sense::click())
+        .on_hover_text(format!("Remove {}", device.name));
+    remove.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Remove {}", device.name)));
+    if remove.clicked() {
+        actions.push(Action::new("device.remove", json!({ "track": track.0, "device": device.index })));
+    }
+    let cross = if remove.hovered() { theme::text_primary() } else { theme::text_hint() };
+    let arm = 3.5;
+    painter.line_segment(
+        [close.center() + Vec2::new(-arm, -arm), close.center() + Vec2::new(arm, arm)],
+        egui::Stroke::new(1.2, cross),
+    );
+    painter.line_segment(
+        [close.center() + Vec2::new(-arm, arm), close.center() + Vec2::new(arm, -arm)],
+        egui::Stroke::new(1.2, cross),
+    );
+    let kind_right = close.left() - 4.0;
     let kind_width = widgets::text_width(ui, &device.kind, theme::ui_font(theme::TEXT_TINY));
     let name = Rect::from_min_max(
         Pos2::new(switch.right() + PAD, header.top()),
-        Pos2::new((header.right() - PAD * 2.0 - kind_width).max(switch.right() + PAD), header.bottom()),
+        Pos2::new((kind_right - PAD - kind_width).max(switch.right() + PAD), header.bottom()),
     );
     widgets::text_in(painter, name, Align2::LEFT_CENTER, &device.name, theme::ui_font(theme::TEXT), name_color);
     widgets::text_in(
         painter,
-        Rect::from_min_max(
-            Pos2::new(header.right() - PAD - kind_width, header.top()),
-            Pos2::new(header.right() - PAD, header.bottom()),
-        ),
+        Rect::from_min_max(Pos2::new(kind_right - kind_width, header.top()), Pos2::new(kind_right, header.bottom())),
         Align2::RIGHT_CENTER,
         &device.kind,
         theme::ui_font(theme::TEXT_TINY),

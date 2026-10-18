@@ -278,6 +278,13 @@ pub fn show(
     if let Some(probe) = state.drop.as_mut() {
         let row_of = |y: f32| ((y - bands.top) / PITCH).floor().max(0.0) as usize;
         for (column, span) in &spans {
+            // Devices alone land on the track wherever its column is under the pointer: the
+            // header, the slots or the mixer strip, a group's and a return's too.
+            if probe.devices && !probe.files && !probe.clip {
+                let whole = Rect::from_x_y_ranges(*span, egui::Rangef::new(header.top(), mixer.bottom()));
+                probe.offer(whole, DropTarget::Track(column.track));
+                continue;
+            }
             if column.kind != ColumnKind::Track {
                 continue;
             }
