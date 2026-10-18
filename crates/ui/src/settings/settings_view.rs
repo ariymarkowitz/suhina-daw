@@ -59,6 +59,9 @@ pub struct About {
     /// empty.
     pub projects_default: String,
     pub templates_default: String,
+    /// The NAM devices' folders ([docs/spec/nam-amp-and-cab.md]) the same way.
+    pub nam_models_default: String,
+    pub irs_default: String,
     /// The active project's newest backup, as Settings › General shows it: when and where.
     pub last_backup: String,
 }
@@ -73,6 +76,8 @@ impl Default for About {
             editors_embeddable: false,
             projects_default: String::new(),
             templates_default: String::new(),
+            nam_models_default: String::new(),
+            irs_default: String::new(),
             last_backup: Default::default(),
         }
     }

@@ -85,6 +85,8 @@ exists in `devices/`, passes its tests and runs in track chains.
 | compressor: stereo-linked, soft knee, side-chain high-pass, dry/wet | own | done |
 | bus compressor | own, Airwindows (MIT) for reference | planned |
 | limiter: brickwall, 1.5 ms lookahead | own | done |
+| NAM Amp Modeler: a `.nam` capture through the pure-Rust `nam-rs` inference (MIT), with trims, its own EQ, HQ for the A2 width dial, a trim delay | nam-rs (MIT) | done |
+| NAM Cab Loader: a `.wav` impulse response through uniform-partitioned FFT convolution, with a phase invert, a high pass, tone cuts, a trim delay and a volume | fft-convolver (MIT) under `dsp` | done |
 | multiband dynamics, upward and downward | own crossovers and detectors | planned |
 | delays | own delay lines | planned |
 | algorithmic and convolution reverb | Dragonfly Reverb (GPL-3.0), own convolution | planned |
@@ -170,6 +172,9 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
   master volume and mute apply. A group with devices is a bus: its devices run over the sum of
   its tracks, with latency compensation on every path. `--fm` on `play` and `render` puts the FM synth on every MIDI
   track, with a voice from a DX7 file; `suhina-cli fm-synth voices` lists a file's voices.
+- The NAM Amp Modeler and NAM Cab Loader run a `.nam` model and a `.wav` impulse response from
+  the NAM folders in Settings, with `device.setNamFile` to load a file and `device.file` to read
+  it ([nam spec](docs/spec/nam-amp-and-cab.md)).
 - Sends and return tracks play: each track sends to each return before or after its fader; a
   return runs its devices over what it is sent and plays into the main channel or a group, with
   latency compensation on every send; loops are refused (`track.setSend`, `track.setSendMode`,

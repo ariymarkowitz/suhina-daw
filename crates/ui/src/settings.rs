@@ -295,6 +295,10 @@ pub struct Settings {
     /// (`App::set_default_folders`).
     pub projects_folder: String,
     pub templates_folder: String,
+    /// Where the NAM devices' models and IRs list from
+    /// ([docs/spec/nam-amp-and-cab.md]); empty for the defaults the app gives.
+    pub nam_models_folder: String,
+    pub irs_folder: String,
     /// The browser panel shows, on which side, and how wide (`docs/spec/browser.md`).
     pub browser_open: bool,
     pub browser_side: Side,
@@ -372,6 +376,8 @@ impl Default for Settings {
             theme: crate::kit::theme::BUILT_IN.into(),
             projects_folder: String::new(),
             templates_folder: String::new(),
+            nam_models_folder: String::new(),
+            irs_folder: String::new(),
             browser_open: true,
             browser_side: Side::Left,
             browser_width: BROWSER_WIDTH,
@@ -492,7 +498,7 @@ impl Settings {
             EditorPlacement::DeviceView => "device",
         };
         format!(
-            "# Suhina settings; changed from Options > Settings.\nanimations = {}\ntrack_headers = {headers}\nrenderer = {graphics}\nsample_stacking = {}\nmidi_stacking = {}\nopen_projects = {on_open}\nat_start = {at_start}\nstart_template = {}\nstop = {stop}\nplay_from = {play_from}\ndevice_chain = {devices}\nmixer_controls = {mixer}\nselect_on_launch = {select_on_launch}\nplugin_editors = {editors}\ntheme = {}\nprojects_folder = {}\ntemplates_folder = {}\nbrowser = {}\nbrowser_side = {browser_side}\nbrowser_width = {}\npreview_autoplay = {}\npreview_volume = {}\ndrop_files = {drop}\nwarp_mode = {}\nmap_layout = {map_layout}\nmap_hover_preview = {}\nmap_max_seconds = {}\nmap_dot_size = {}\nmap_window = {}\nmap_window_rect = {}\naudio_host = {}\naudio_device = {}\naudio_sample_rate = {}\naudio_buffer = {}\naudio_exclusive = {}\naudio_cue_pair = {}\naudio_cue_volume = {}\naudio_input = {}\nzoom = {}\nwaveform_scale = {waveform_scale}\npiano_roll_top = {piano_top}\npiano_roll_grid = {piano_grid}\npiano_roll_toolbar = {piano_toolbar}\nbackup = {}\nbackup_clean_up = {}\n",
+            "# Suhina settings; changed from Options > Settings.\nanimations = {}\ntrack_headers = {headers}\nrenderer = {graphics}\nsample_stacking = {}\nmidi_stacking = {}\nopen_projects = {on_open}\nat_start = {at_start}\nstart_template = {}\nstop = {stop}\nplay_from = {play_from}\ndevice_chain = {devices}\nmixer_controls = {mixer}\nselect_on_launch = {select_on_launch}\nplugin_editors = {editors}\ntheme = {}\nprojects_folder = {}\ntemplates_folder = {}\nnam_models_folder = {}\nirs_folder = {}\nbrowser = {}\nbrowser_side = {browser_side}\nbrowser_width = {}\npreview_autoplay = {}\npreview_volume = {}\ndrop_files = {drop}\nwarp_mode = {}\nmap_layout = {map_layout}\nmap_hover_preview = {}\nmap_max_seconds = {}\nmap_dot_size = {}\nmap_window = {}\nmap_window_rect = {}\naudio_host = {}\naudio_device = {}\naudio_sample_rate = {}\naudio_buffer = {}\naudio_exclusive = {}\naudio_cue_pair = {}\naudio_cue_volume = {}\naudio_input = {}\nzoom = {}\nwaveform_scale = {waveform_scale}\npiano_roll_top = {piano_top}\npiano_roll_grid = {piano_grid}\npiano_roll_toolbar = {piano_toolbar}\nbackup = {}\nbackup_clean_up = {}\n",
             on(self.animations),
             on(self.sample_stacking),
             on(self.midi_stacking),
@@ -500,6 +506,8 @@ impl Settings {
             self.theme,
             self.projects_folder,
             self.templates_folder,
+            self.nam_models_folder,
+            self.irs_folder,
             on(self.browser_open),
             self.browser_width,
             on(self.preview_autoplay),
@@ -578,6 +586,8 @@ impl Settings {
                 ("plugin_editors", "device") => settings.plugin_editors = EditorPlacement::DeviceView,
                 ("projects_folder", folder) => settings.projects_folder = folder.to_string(),
                 ("templates_folder", folder) => settings.templates_folder = folder.to_string(),
+                ("nam_models_folder", folder) => settings.nam_models_folder = folder.to_string(),
+                ("irs_folder", folder) => settings.irs_folder = folder.to_string(),
                 ("open_projects", "ask") => settings.on_open = OnOpen::Ask,
                 ("open_projects", "tab") => settings.on_open = OnOpen::NewTab,
                 ("open_projects", "replace") => settings.on_open = OnOpen::Replace,
@@ -779,6 +789,8 @@ midi_input_off = Keys
             theme: "night".into(),
             projects_folder: "/music/projects".into(),
             templates_folder: "/music/templates".into(),
+            nam_models_folder: String::new(),
+            irs_folder: String::new(),
             browser_open: false,
             browser_side: Side::Left,
             browser_width: 320,
@@ -839,6 +851,8 @@ midi_input_off = Keys
             theme: "Night blue".into(),
             projects_folder: "C:/Music/Songs = mine".into(),
             templates_folder: "/home/me/templates".into(),
+            nam_models_folder: "/home/me/nam models".into(),
+            irs_folder: "/home/me/irs".into(),
             browser_open: false,
             browser_side: Side::Right,
             browser_width: 420,

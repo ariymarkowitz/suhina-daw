@@ -1396,6 +1396,24 @@ static COMMANDS: &[CommandSpec] = &[
         run: devices::set_enabled,
     },
     CommandSpec {
+        id: "device.setNamFile",
+        label: "Load a .nam model into a NAM Amp Modeler, or a .wav impulse response into a NAM Cab Loader (docs/spec/nam-amp-and-cab.md)",
+        params: &[
+            TRACK,
+            DEVICE,
+            param("path", ParamType::Text, "path to a .nam model file, or a .wav impulse response for the Cab Loader"),
+        ],
+        kind: CommandKind::Edit,
+        run: devices::set_file,
+    },
+    CommandSpec {
+        id: "device.file",
+        label: "The file a NAM Amp Modeler or NAM Cab Loader runs: its absolute path (empty when none is set) and the model's or cab's name",
+        params: &[TRACK, DEVICE],
+        kind: CommandKind::Read,
+        run: devices::device_file,
+    },
+    CommandSpec {
         id: "device.setParam",
         label: "Set a parameter of a device on a track, heard from the next block; the value is limited to the parameter's range",
         params: &[
@@ -3998,6 +4016,19 @@ pub(crate) fn channel_param<'a>(session: &'a mut Session, params: &Value) -> Res
         .and_then(|t| t.channel)
         .ok_or("the track has no mixer channel")?;
     session.project.channels.iter_mut().find(|c| c.id == channel).ok_or_else(|| "the track's channel is missing".into())
+}
+
+/// The read-only form of [`channel_param`], for the `Read` commands that do not edit.
+pub(crate) fn channel_read<'a>(session: &'a Session, params: &Value) -> Result<&'a Channel, CommandError> {
+    let track = track_id(&session.project, params)?;
+    let channel = session
+        .project
+        .tracks
+        .iter()
+        .find(|t| t.id == track)
+        .and_then(|t| t.channel)
+        .ok_or("the track has no mixer channel")?;
+    session.project.channels.iter().find(|c| c.id == channel).ok_or_else(|| "the track's channel is missing".into())
 }
 
 fn channel_of<'a>(p: &'a Project, track: &Track) -> Option<&'a Channel> {

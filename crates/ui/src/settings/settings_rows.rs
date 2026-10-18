@@ -84,6 +84,28 @@ pub(crate) static ROWS: &[Entry] = &[
     .when(|s| s.at_start == AtStart::Template),
     row(
         Page::General,
+        "NAM",
+        "NAM models folder",
+        "Where the NAM Amp Modeler lists .nam models ([docs/spec/nam-amp-and-cab.md])",
+        &["nam_models_folder"],
+        |cx, r| {
+            let default = cx.about.nam_models_default.clone();
+            cx.folder(r, &default, crate::interaction::pick::PickField::NamModelsFolder, |s| &mut s.nam_models_folder);
+        },
+    ),
+    row(
+        Page::General,
+        "NAM",
+        "IR folder",
+        "Where the NAM Cab Loader lists .wav impulse responses",
+        &["irs_folder"],
+        |cx, r| {
+            let default = cx.about.irs_default.clone();
+            cx.folder(r, &default, crate::interaction::pick::PickField::IrFolder, |s| &mut s.irs_folder);
+        },
+    ),
+    row(
+        Page::General,
         "Backups",
         "Backups",
         "When a copy of each changed project is written to .backup beside it",

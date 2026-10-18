@@ -64,6 +64,13 @@ pub struct DeviceBox {
     pub enabled: bool,
     /// Parameter ids and values as text.
     pub params: Vec<(String, String)>,
+    /// Built-in parameter values, by id (in the parameter's unit, so a panel's knobs take them).
+    pub values: Vec<(String, f64)>,
+    /// The id of a device that runs a file ([docs/spec/nam-amp-and-cab.md]); the file is the
+    /// state's path.
+    pub file_device: Option<&'static str>,
+    /// The file's path, when the device runs one.
+    pub file: Option<String>,
     pub graph: Option<GraphBox>,
     /// For a plug-in: where it stands, while the project plays.
     pub plugin: Option<PluginBox>,
@@ -294,6 +301,9 @@ pub struct Chain {
     pub track: TrackId,
     pub name: String,
     pub devices: Vec<DeviceBox>,
+    /// The NAM panels' folders' files and a file's names and notes
+    /// ([docs/spec/nam-amp-and-cab.md] › Folders).
+    pub nam: crate::detail::nam_panel::Lists,
 }
 
 /// What the detail area shows: a selected clip comes with its track's chain, since that chain
@@ -308,7 +318,7 @@ pub enum Detail {
 
 /// The detail for a selected clip (it wins, with its own track's chain) or track.
 pub fn build(project: &Project, track: Option<TrackId>, clip: Option<ClipRef>) -> Detail {
-    build_with(project, track, clip, &mut |_, _| None)
+    build_with(project, track, clip, &mut |_, _| None, crate::detail::nam_panel::Lists::default())
 }
 
 /// [`build`], with each plug-in device's state from `plugins` (track, device index).
@@ -317,6 +327,7 @@ pub fn build_with(
     track: Option<TrackId>,
     clip: Option<ClipRef>,
     plugins: &mut dyn FnMut(TrackId, usize) -> Option<PluginReport>,
+    nam: crate::detail::nam_panel::Lists,
 ) -> Detail {
     let bar = bar_beats(project);
     let track_name =
@@ -370,14 +381,19 @@ pub fn build_with(
                 selection: SelectionInfo::default(),
                 switch: None,
             }),
-            chain(project, id, plugins),
+            chain(project, id, plugins, nam.clone()),
         );
     }
-    track.map_or(Detail::Nothing, |id| Detail::Devices(chain(project, id, plugins)))
+    track.map_or(Detail::Nothing, |id| Detail::Devices(chain(project, id, plugins, nam.clone())))
 }
 
 /// A track's devices as the detail area shows them.
-fn chain(project: &Project, id: TrackId, plugins: &mut dyn FnMut(TrackId, usize) -> Option<PluginReport>) -> Chain {
+fn chain(
+    project: &Project,
+    id: TrackId,
+    plugins: &mut dyn FnMut(TrackId, usize) -> Option<PluginReport>,
+    nam: crate::detail::nam_panel::Lists,
+) -> Chain {
     let track_name = project.tracks.iter().find(|t| t.id == id).map(|t| t.name.clone()).unwrap_or_default();
     let channel = project
         .tracks
@@ -416,6 +432,38 @@ fn chain(project: &Project, id: TrackId, plugins: &mut dyn FnMut(TrackId, usize)
                     },
                     enabled: d.enabled,
                     params: d.params.iter().map(|p| (p.id.clone(), format_value(p.value))).collect(),
+                    values: if let DeviceKind::Builtin(id) = &d.kind {
+                        let info = suhina_device_registry::info(id);
+                        info.map(|info| {
+                            info.params
+                                .iter()
+                                .map(|p| {
+                                    (
+                                        p.id.to_owned(),
+                                        d.params
+                                            .iter()
+                                            .find(|stored| stored.id == p.id)
+                                            .map_or(p.default, |stored| p.clamp(stored.value)),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
+                    file_device: match &d.kind {
+                        DeviceKind::Builtin(id) if suhina_device_registry::is_file_device(id) => {
+                            suhina_device_registry::info(id).map(|info| info.id)
+                        }
+                        _ => None,
+                    },
+                    file: d
+                        .state
+                        .as_deref()
+                        .and_then(|state| std::str::from_utf8(state).ok())
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_owned),
                     graph: match (&d.kind, d.state.as_deref()) {
                         (DeviceKind::Sd, Some(state)) => crate::detail::device_canvas::graph(state).map(|cached| {
                             let graph = &cached.graph;
@@ -464,7 +512,7 @@ fn chain(project: &Project, id: TrackId, plugins: &mut dyn FnMut(TrackId, usize)
                 .collect()
         })
         .unwrap_or_default();
-    Chain { track: id, name: track_name, devices }
+    Chain { track: id, name: track_name, devices, nam }
 }
 
 fn format_value(value: f64) -> String {
@@ -528,7 +576,11 @@ fn chain_row(
     let mut x = area.left();
     for device in &chain.devices {
         let editor = device.plugin.as_ref().and_then(|p| p.editor_size(scale));
-        let authored_width = device.graph.as_ref().map_or(DEVICE_WIDTH, |graph| {
+        // A NAM panel asks for the mock's wider box (nam spec › The panels); the rest keep
+        // the plain device width.
+        let authored_base =
+            if device.file_device.is_some() { crate::detail::nam_panel::NAM_WIDTH } else { DEVICE_WIDTH };
+        let authored_width = device.graph.as_ref().map_or(authored_base, |graph| {
             graph.canvas.as_ref().map_or_else(
                 || {
                     parameter_layout(&graph.parameters, DEVICE_WIDTH - PAD * 2.0, &[])
@@ -540,13 +592,22 @@ fn chain_row(
             )
         });
         let width = editor.map_or(authored_width, |e| authored_width.max(e.x + PAD * 2.0));
-        let bottom =
-            sdk_viewport(device).map_or(area.bottom(), |v| (area.top() + ROW + PAD * 2.0 + v[1]).min(area.bottom()));
+        let bottom = sdk_viewport(device).map_or(
+            if device.file_device.is_some() {
+                // A NAM panel's own height, not the whole area's (nam spec › The panels).
+                area.top() + crate::detail::nam_panel::NAM_HEIGHT
+            } else {
+                area.bottom()
+            },
+            |v| (area.top() + ROW + PAD * 2.0 + v[1]).min(area.bottom()),
+        );
         let rect = Rect::from_min_max(Pos2::new(x, area.top()), Pos2::new(x + width, bottom));
+        eprintln!("[nam-debug] row box {rect:?} area {area:?} bottom {bottom}");
         x = rect.right() + 1.0;
         if rect.left() > area.right() {
             break;
         }
+        name_for_readers(ui, rect.intersect(area), device);
         let clicked = device_panel(
             ui,
             &painter.with_clip_rect(area),
@@ -555,6 +616,7 @@ fn chain_row(
             device,
             selected == Some((chain.track, device.index)),
             actions,
+            &chain.nam,
         );
         // Keep a device an earlier iteration clicked: the later panels were not clicked.
         if clicked {
@@ -649,6 +711,8 @@ fn chain_stack(
             if device.plugin.is_some() { 2.0 + BUTTON_HEIGHT / PARAM_ROW } else { device.params.len().max(1) as f32 };
         let height = match editor {
             Some(editor) => EDITOR_TOP + editor.y + PAD,
+            // A NAM panel's own height (nam spec › The panels); the rest take their rows.
+            None if device.file_device.is_some() => crate::detail::nam_panel::NAM_HEIGHT,
             None => {
                 ROW + PAD * 2.0
                     + device.graph.as_ref().map_or(rows * PARAM_ROW, |graph| {
@@ -673,6 +737,7 @@ fn chain_stack(
         if rect.top() > area.bottom() {
             break;
         }
+        name_for_readers(ui, rect.intersect(area), device);
         let clicked = device_panel(
             ui,
             &painter.with_clip_rect(area),
@@ -681,6 +746,7 @@ fn chain_stack(
             device,
             selected == Some((chain.track, device.index)),
             actions,
+            &chain.nam,
         );
         // Keep a device an earlier iteration clicked: the later panels were not clicked.
         if clicked {
@@ -772,7 +838,9 @@ fn hint(painter: &egui::Painter, area: Rect, text: &str) {
     painter.text(area.center(), Align2::CENTER_CENTER, text, theme::ui_font(theme::TEXT), theme::text_hint());
 }
 
-/// One device: a header with its on switch and name, then its parameters, one per row.
+/// One device: a header with its on switch and name, then its parameters, one per row. A NAM
+/// Amp Modeler or NAM Cab Loader draws its own panel instead
+/// ([docs/spec/nam-amp-and-cab.md] › The panels).
 #[allow(clippy::too_many_arguments)]
 fn device_panel(
     ui: &mut Ui,
@@ -782,6 +850,7 @@ fn device_panel(
     device: &DeviceBox,
     selected: bool,
     actions: &mut Vec<Action>,
+    nam: &crate::detail::nam_panel::Lists,
 ) -> bool {
     // The panel answers a right-click with its menu (the device's remove); its label is the
     // screen-reader and test name the chain drew for it before. A click selects the device, so
@@ -851,6 +920,19 @@ fn device_panel(
         Pos2::new(rect.left() + PAD, header.bottom() + PAD),
         Pos2::new(rect.right() - PAD, rect.bottom() - PAD),
     );
+    match device.file_device {
+        Some("nam-amp-modeler") => {
+            crate::detail::nam_panel::show_amp(ui, body, track, device, nam, actions);
+            outline(painter);
+            return clicked;
+        }
+        Some("nam-cab-loader") => {
+            crate::detail::nam_panel::show_cab(ui, body, track, device, nam, actions);
+            outline(painter);
+            return clicked;
+        }
+        _ => {}
+    }
     if let Some(plugin) = &device.plugin {
         let color = match plugin.state {
             PluginState::Crashed => theme::recording(),
@@ -1669,9 +1751,13 @@ mod tests {
     fn a_plug_in_shows_where_it_stands_and_what_its_button_does() {
         let project = with_plugin();
         let shown = |status: Option<PluginStatus>, open: bool| {
-            let Detail::Devices(chain) =
-                build_with(&project, Some(TrackId(1)), None, &mut |_, _| status.clone().map(|s| report(s, open)))
-            else {
+            let Detail::Devices(chain) = build_with(
+                &project,
+                Some(TrackId(1)),
+                None,
+                &mut |_, _| status.clone().map(|s| report(s, open)),
+                crate::detail::nam_panel::Lists::default(),
+            ) else {
                 panic!()
             };
             chain.devices[0].plugin.clone().unwrap()
@@ -1699,8 +1785,13 @@ mod tests {
         use egui_kittest::Harness;
         let project = with_plugin();
         let embedded = PluginReport { editor_embedded: Some((300, 200)), ..report(PluginStatus::Running, true) };
-        let Detail::Devices(chain) = build_with(&project, Some(TrackId(1)), None, &mut |_, _| Some(embedded.clone()))
-        else {
+        let Detail::Devices(chain) = build_with(
+            &project,
+            Some(TrackId(1)),
+            None,
+            &mut |_, _| Some(embedded.clone()),
+            crate::detail::nam_panel::Lists::default(),
+        ) else {
             panic!()
         };
         assert_eq!(chain.devices[0].plugin.as_ref().unwrap().embedded, Some((300, 200)));
@@ -1769,9 +1860,13 @@ mod tests {
         use egui_kittest::Harness;
         use egui_kittest::kittest::Queryable;
         let project = with_plugin();
-        let Detail::Devices(chain) =
-            build_with(&project, Some(TrackId(1)), None, &mut |_, _| Some(report(PluginStatus::Running, false)))
-        else {
+        let Detail::Devices(chain) = build_with(
+            &project,
+            Some(TrackId(1)),
+            None,
+            &mut |_, _| Some(report(PluginStatus::Running, false)),
+            crate::detail::nam_panel::Lists::default(),
+        ) else {
             panic!()
         };
         let detail = Detail::Devices(chain);
