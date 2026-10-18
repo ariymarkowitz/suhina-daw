@@ -19,7 +19,9 @@ pub const SAMPLE_FLOOR: f32 = 1e-30;
 /// never allocate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DelayLine {
+    /// The samples, a power of two long so positions wrap with a mask.
     buffer: Vec<f32>,
+    /// `buffer.len() - 1`, which wraps a position into the buffer.
     mask: usize,
     /// Where the next sample goes.
     write: usize,
@@ -120,6 +122,7 @@ impl DelayLine {
 /// frequency at the same level and smears an impulse into a train of echoes.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Allpass {
+    /// The allpass's state: its input plus the fed-back output.
     line: DelayLine,
 }
 
@@ -140,6 +143,7 @@ impl Allpass {
         delayed - gain * v
     }
 
+    /// Silences the allpass.
     pub fn clear(&mut self) {
         self.line.clear();
     }

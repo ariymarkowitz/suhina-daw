@@ -49,39 +49,68 @@ const CONTROL_FRAMES: u64 = 4;
 
 /// Parameter indices, in [`INFO`] order.
 pub mod param {
+    /// Right side takes the left side's time settings (all but its offset).
     pub const LINK: usize = 0;
+    /// Left time follows the tempo in sixteenth notes instead of seconds.
     pub const SYNC_LEFT: usize = 1;
+    /// Right time follows the tempo in sixteenth notes instead of seconds.
     pub const SYNC_RIGHT: usize = 2;
+    /// Left synced time, an index into the sixteenth-note buttons.
     pub const SIXTEENTHS_LEFT: usize = 3;
+    /// Right synced time, an index into the sixteenth-note buttons.
     pub const SIXTEENTHS_RIGHT: usize = 4;
+    /// Left free time in seconds.
     pub const TIME_LEFT: usize = 5;
+    /// Right free time in seconds.
     pub const TIME_RIGHT: usize = 6;
+    /// Left synced time made longer or shorter, as a fraction of it.
     pub const OFFSET_LEFT: usize = 7;
+    /// Right synced time made longer or shorter, as a fraction of it.
     pub const OFFSET_RIGHT: usize = 8;
+    /// How much of the wet signal goes back into the line.
     pub const FEEDBACK: usize = 9;
+    /// Holds what the lines have, taking no new input.
     pub const FREEZE: usize = 10;
+    /// Repeats alternate between the left and right sides.
     pub const PING_PONG: usize = 11;
+    /// How the time follows a change: Repitch, Fade or Jump.
     pub const TRANSITION: usize = 12;
+    /// Band-pass in the feedback loop on or off.
     pub const FILTER: usize = 13;
+    /// Centre of the band-pass in hertz.
     pub const FILTER_FREQUENCY: usize = 14;
+    /// Width of the band-pass in octaves.
     pub const FILTER_WIDTH: usize = 15;
+    /// How the LFO's speed is set: rate, time, synced, triplet, dotted or sixteenths.
     pub const LFO_MODE: usize = 16;
+    /// LFO speed in hertz, in the Rate mode.
     pub const LFO_RATE: usize = 17;
+    /// Length of one LFO cycle in seconds, in the Time mode.
     pub const LFO_TIME: usize = 18;
+    /// Synced LFO cycle, an index into the synced rates.
     pub const LFO_SYNCED: usize = 19;
+    /// Length of one LFO cycle in sixteenth notes, in the Sixteenths mode.
     pub const LFO_SIXTEENTHS: usize = 20;
+    /// LFO waveform, an index into the shape names.
     pub const LFO_SHAPE: usize = 21;
+    /// Moves the middle of the LFO's cycle earlier or later.
     pub const LFO_MORPH: usize = 22;
+    /// How far the LFO swings the delay time.
     pub const LFO_TO_TIME: usize = 23;
+    /// How far the LFO swings the band's centre.
     pub const LFO_TO_FILTER: usize = 24;
+    /// Share of the wet signal in the output.
     pub const MIX: usize = 25;
+    /// Dry/wet mix by the equal-loudness law instead of the linear one.
     pub const EQUAL_LOUDNESS: usize = 26;
+    /// How many parameters there are.
     pub(crate) const COUNT: usize = 27;
 }
 
 /// The sync buttons, and how many sixteenth notes each is.
 const SIXTEENTHS: [(&str, f64); 8] =
     [("1", 1.0), ("2", 2.0), ("3", 3.0), ("4", 4.0), ("5", 5.0), ("6", 6.0), ("8", 8.0), ("16", 16.0)];
+/// The sync buttons' labels.
 const SIXTEENTH_NAMES: [&str; 8] = names(SIXTEENTHS);
 
 /// The synced LFO rates, and one cycle's length in bars.
@@ -109,8 +138,10 @@ const SYNCED_RATES: [(&str, f64); 22] = [
     ("1/48", 1.0 / 48.0),
     ("1/64", 0.015625),
 ];
+/// The synced LFO rates' labels.
 const SYNCED_RATE_NAMES: [&str; 22] = names(SYNCED_RATES);
 
+/// The labels of a table of labels and values, for a choice parameter.
 const fn names<const N: usize>(table: [(&'static str, f64); N]) -> [&'static str; N] {
     let mut names = [""; N];
     let mut i = 0;
@@ -121,29 +152,39 @@ const fn names<const N: usize>(table: [(&'static str, f64); N]) -> [&'static str
     names
 }
 
+/// How the delay time can follow a change, in [`Transition`] order.
 const TRANSITIONS: [&str; 3] = ["Repitch", "Fade", "Jump"];
+/// How the LFO's speed can be set.
 const LFO_MODES: [&str; 6] = ["Rate", "Time", "Synced", "Triplet", "Dotted", "Sixteenths"];
+/// The LFO's waveforms.
 const LFO_SHAPES: [&str; 7] = ["Sine", "Triangle", "Ramp Up", "Ramp Down", "Square", "Sample and Hold", "Wander"];
 
 /// How the delay time follows a change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Transition {
+    /// The time glides to the new value, so the pitch bends.
     Repitch,
+    /// The old time crossfades into the new one.
     Fade,
+    /// The time changes at once, in whole frames.
     Jump,
 }
 
+/// The LFO's waveform.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum LfoShape {
     /// A periodic wave, its cycle bent by Morph.
     Wave(Shape),
+    /// Sample and hold: a new random value every cycle.
     Random,
+    /// A random curve that glides from one value to the next.
     Wander,
 }
 
 /// The LFO's waveform and where Morph puts the middle of its cycle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Lfo {
+    /// The waveform.
     shape: LfoShape,
     /// The first half of the waveform takes this much of the cycle, and the second half the rest.
     split: f64,
@@ -167,6 +208,7 @@ impl Lfo {
     }
 }
 
+/// The parameters, in [`param`] order.
 const PARAMS: [ParamInfo; param::COUNT] = [
     ParamInfo::toggle("link", "Link", true),
     ParamInfo::toggle("syncLeft", "Sync Left", true),
@@ -204,8 +246,10 @@ const PARAMS: [ParamInfo; param::COUNT] = [
     ParamInfo::toggle("equalLoudness", "Equal-Loudness Mix", false),
 ];
 
+/// What the delay is and the parameters it has.
 pub const INFO: DeviceInfo = DeviceInfo { id: "delay", name: "Delay", role: Role::Effect, params: &PARAMS };
 
+/// Sample rate assumed until [`Device::prepare`] gives one.
 const DEFAULT_SAMPLE_RATE: f64 = 48_000.0;
 /// Tempo used when the host gives none that makes sense.
 const FALLBACK_TEMPO: f64 = 120.0;
@@ -215,11 +259,14 @@ const FALLBACK_TEMPO: f64 = 120.0;
 struct Reader {
     /// Repitch: the time after the rate limit, then after the rounding filter (frames).
     slewed: f64,
+    /// Repitch: the read position, the rate-limited time after the rounding filter (frames).
     glide: f64,
     /// Fade: the time being faded out and the one faded in, and how far the fade is (0..1; 1 when
     /// no fade runs).
     from: f64,
+    /// Fade: the time being faded in (frames).
     to: f64,
+    /// Fade: how far the fade is.
     fade: f64,
 }
 
@@ -233,17 +280,23 @@ impl Reader {
 /// One side: its line and band-pass.
 #[derive(Debug, Clone, PartialEq, Default)]
 struct Side {
+    /// The side's delay line.
     line: DelayLine,
+    /// The band-pass's lower corner.
     high_pass: Biquad,
+    /// The band-pass's upper corner.
     low_pass: Biquad,
+    /// Where the line is read.
     reader: Reader,
 }
 
 impl Side {
+    /// A silent side with a line long enough for the longest delay (allocates).
     fn new(sample_rate: f64) -> Self {
         Self { line: DelayLine::for_seconds(MAX_DELAY_SECONDS, sample_rate), ..Self::default() }
     }
 
+    /// Silences the line and the band-pass and forgets the read position.
     fn clear(&mut self) {
         self.line.clear();
         self.high_pass.reset();
@@ -310,6 +363,7 @@ struct Rates {
 }
 
 impl Rates {
+    /// The constants at `sample_rate`.
     fn new(sample_rate: f64) -> Self {
         Self { repitch: (-1.0 / (REPITCH_SECONDS * sample_rate)).exp(), fade_step: 1.0 / (FADE_SECONDS * sample_rate) }
     }
@@ -318,16 +372,20 @@ impl Rates {
 /// The dry and wet gains for the mix and the share of the equal-loudness law, worked out again
 /// only when one of them changes.
 struct MixLaw {
+    /// The mix and the equal-loudness share the gains were worked out for.
     key: (f32, f32),
+    /// The dry and wet gains.
     gains: (f64, f64),
 }
 
 impl MixLaw {
+    /// A law that works the gains out on its first use.
     fn new() -> Self {
         // NaN never equals a key, so the first frame works the gains out.
         Self { key: (f32::NAN, f32::NAN), gains: (0.0, 0.0) }
     }
 
+    /// The dry and wet gains for `mix` and `loudness`, the share of the equal-loudness law.
     #[inline]
     fn gains(&mut self, mix: f32, loudness: f32) -> (f64, f64) {
         if (mix, loudness) != self.key {
@@ -340,27 +398,39 @@ impl MixLaw {
     }
 }
 
+/// The stereo delay: two lines with a band-pass in their feedback loop and an LFO.
 pub struct Delay {
+    /// The sample rate it was prepared for.
     sample_rate: f64,
+    /// Per-frame constants from the sample rate.
     rates: Rates,
+    /// Every parameter's value, in [`param`] order.
     values: [f64; param::COUNT],
     /// How much of the band-pass is heard (0 off, 1 on).
     filter: Smoother,
+    /// Feedback gain.
     feedback: Smoother,
+    /// Share of the wet signal.
     mix: Smoother,
+    /// How much the lines hold what they have (0 off, 1 frozen).
     freeze: Smoother,
     /// log2 of the band's centre, and its width in octaves.
     centre: Smoother,
+    /// The band's width in octaves.
     width: Smoother,
     /// The LFO's depths on the time and the band.
     to_time: Smoother,
+    /// The LFO's depth on the band.
     to_filter: Smoother,
     /// How much of the equal-loudness mix law is used (0 linear, 1 equal loudness).
     loudness: Smoother,
+    /// The left and right sides.
     sides: [Side; 2],
+    /// Softens the edges of the square and sample-and-hold LFO shapes.
     lfo_edge: OnePole,
     /// Free-running LFO position: whole cycles and the fraction of the current one.
     lfo_cycles: u64,
+    /// Free-running LFO position: the fraction of the current cycle.
     lfo_phase: f64,
     /// Frames since the last reset, for the filter update grid.
     frame: u64,
@@ -369,12 +439,15 @@ pub struct Delay {
 }
 
 impl Default for Delay {
+    /// The same as [`Delay::new`].
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Delay {
+    /// A delay with every parameter at its default, prepared for the default sample rate
+    /// (allocates).
     pub fn new() -> Self {
         let sr = DEFAULT_SAMPLE_RATE;
         let still = Smoother::new(0.0, 1);
@@ -402,14 +475,17 @@ impl Delay {
         delay
     }
 
+    /// The value of parameter `index`, 0.0 for an unknown one.
     fn value(&self, index: usize) -> f64 {
         self.values.get(index).copied().unwrap_or(0.0)
     }
 
+    /// Whether switch `index` is on.
     fn on(&self, index: usize) -> bool {
         self.value(index) >= 0.5
     }
 
+    /// Where each smoother is heading, in [`smoothers`](Self::smoothers) order.
     fn targets(&self) -> [f32; 9] {
         let flag = |index| if self.on(index) { 1.0 } else { 0.0 };
         [
@@ -425,6 +501,7 @@ impl Delay {
         ]
     }
 
+    /// The smoothed values, in [`targets`](Self::targets) order.
     fn smoothers(&mut self) -> [&mut Smoother; 9] {
         [
             &mut self.filter,
@@ -439,6 +516,8 @@ impl Delay {
         ]
     }
 
+    /// Silences the delay and settles every smoother at its target, after a new sample rate or
+    /// a reset.
     fn rebuild(&mut self) {
         let ramp = Smoother::ramp_frames(RAMP_SECONDS, self.sample_rate);
         let targets = self.targets();
@@ -456,6 +535,7 @@ impl Delay {
         self.tune_filters(0.0);
     }
 
+    /// How the delay time follows a change.
     fn transition(&self) -> Transition {
         match self.value(param::TRANSITION) as usize {
             1 => Transition::Fade,
@@ -492,6 +572,7 @@ impl Delay {
         }
     }
 
+    /// The LFO's speed in hertz when it runs free of the tempo.
     fn lfo_hertz(&self) -> f64 {
         match self.value(param::LFO_MODE) as usize {
             1 => 1.0 / self.value(param::LFO_TIME).max(1e-3),
@@ -533,10 +614,12 @@ impl Delay {
 }
 
 impl Device for Delay {
+    /// The delay's [`INFO`].
     fn info(&self) -> &'static DeviceInfo {
         &INFO
     }
 
+    /// Allocates the lines for `sample_rate` and starts silent.
     fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
         let sr = check_sample_rate(sample_rate)?;
         self.sample_rate = sr;
@@ -547,10 +630,12 @@ impl Device for Delay {
         Ok(())
     }
 
+    /// Silences the lines and restarts the LFO.
     fn reset(&mut self) {
         self.rebuild();
     }
 
+    /// Sets parameter `index`, clamped to its range; the smoothed values ramp to it.
     fn set_param(&mut self, index: usize, value: f64) {
         let Some(info) = PARAMS.get(index) else { return };
         let Some(slot) = self.values.get_mut(index) else { return };
@@ -561,10 +646,13 @@ impl Device for Delay {
         }
     }
 
+    /// The value of parameter `index`, or `None` for an unknown one.
     fn param(&self, index: usize) -> Option<f64> {
         self.values.get(index).copied()
     }
 
+    /// Runs interleaved stereo `buffer` through the delay in place, at the tempo and song
+    /// position in `context`.
     fn process(&mut self, context: &ProcessContext, buffer: &mut [f32]) {
         let sr = self.sample_rate;
         let tempo = if context.tempo.is_finite() && context.tempo > 0.0 {

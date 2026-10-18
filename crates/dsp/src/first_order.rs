@@ -9,8 +9,11 @@ use crate::{flush, usable_frequency, usable_sample_rate};
 /// `y[n] = b0 x[n] + b1 x[n-1] - a1 y[n-1]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FirstOrderCoefficients {
+    /// Gain of the current input.
     pub b0: f64,
+    /// Gain of the previous input.
     pub b1: f64,
+    /// Gain of the previous output, subtracted.
     pub a1: f64,
 }
 
@@ -34,6 +37,7 @@ fn usable_gain(gain: f64) -> f64 {
 }
 
 impl FirstOrderCoefficients {
+    /// Coefficients that pass the signal through unchanged.
     pub const IDENTITY: Self = Self { b0: 1.0, b1: 0.0, a1: 0.0 };
 
     /// The digital filter of the analog `(n1 s + n0) / (s + d0)`.
@@ -83,11 +87,14 @@ impl FirstOrderCoefficients {
 /// One first-order section, `f64` state.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct FirstOrder {
+    /// The filter it runs.
     c: FirstOrderCoefficients,
+    /// The one state variable (transposed direct form II).
     z: f64,
 }
 
 impl FirstOrder {
+    /// A silent section running `coefficients`.
     pub fn new(coefficients: FirstOrderCoefficients) -> Self {
         Self { c: coefficients, z: 0.0 }
     }
@@ -97,10 +104,12 @@ impl FirstOrder {
         self.c = coefficients;
     }
 
+    /// The coefficients it runs.
     pub fn coefficients(&self) -> FirstOrderCoefficients {
         self.c
     }
 
+    /// One sample through the filter.
     #[inline]
     pub fn process(&mut self, x: f64) -> f64 {
         let y = self.c.b0 * x + self.z;
@@ -108,6 +117,7 @@ impl FirstOrder {
         y
     }
 
+    /// Silences the filter and keeps the coefficients.
     pub fn reset(&mut self) {
         self.z = 0.0;
     }

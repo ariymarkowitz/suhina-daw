@@ -68,6 +68,7 @@ fn step(node: Node, name: &str, count: usize, what: &str, warn: &mut dyn FnMut(S
 struct Params(Vec<DeviceParam>);
 
 impl Params {
+    /// Adds `value` under `id` when there is one and it is finite.
     fn set(&mut self, id: &str, value: Option<f64>) {
         if let Some(value) = value.filter(|v| v.is_finite()) {
             self.0.push(DeviceParam::new(id, value));

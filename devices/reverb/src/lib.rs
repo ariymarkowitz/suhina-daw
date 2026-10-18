@@ -27,8 +27,9 @@ use suhina_dsp::{Allpass, Biquad, Coefficients, DelayLine, FirstOrder, FirstOrde
 pub const RAMP_SECONDS: f64 = 0.02;
 /// Ramp for predelay changes: slower, so a long jump bends the pitch less on the way.
 pub const PREDELAY_RAMP_SECONDS: f64 = 0.1;
-/// Size glides with this time constant when Smooth is Slow, and with the next when Fast.
+/// Size glides with this time constant when Smooth is Slow.
 pub const SMOOTH_SLOW_SECONDS: f64 = 0.5;
+/// Size glides with this time constant when Smooth is Fast.
 pub const SMOOTH_FAST_SECONDS: f64 = 0.1;
 /// Frames between updates of delay lengths, tap levels and filters, counted from the last reset.
 const CONTROL_FRAMES: u64 = 32;
@@ -86,12 +87,16 @@ const TAP_GAIN: f64 = 0.064;
 /// How fast the reflections fade, in dB per ms after the first: this plus the next times Shape at
 /// [`TAP_FADE_DECAY`], faster in proportion for shorter decays and slower for longer ones.
 const TAP_FADE: f64 = 0.020;
+/// How much faster the reflections fade per unit of Shape, in dB per ms.
 const TAP_FADE_PER_SHAPE: f64 = 0.055;
+/// Decay time (seconds) at which the reflections fade at [`TAP_FADE`] plus [`TAP_FADE_PER_SHAPE`]
+/// times Shape.
 const TAP_FADE_DECAY: f64 = 1.2;
 /// The reflections are this many dB quieter per ms of predelay.
 const TAP_PREDELAY_FADE: f64 = 0.057;
-/// Peak swing of a tap's delay per unit of Spin Amount, and of a line's per unit of Chorus Amount.
+/// Peak swing of a tap's delay per unit of Spin Amount.
 const SPIN_SECONDS: f64 = 0.000_7;
+/// Peak swing of a line's delay per unit of Chorus Amount.
 const CHORUS_SECONDS: f64 = 0.001_8;
 
 /// Delay from the predelay to the diffusers: this plus the next times the size factor, plus the
@@ -105,6 +110,7 @@ const DIFFUSERS: [f64; 4] = [4.7, 7.3, 11.1, 16.9];
 const LINES: [f64; 16] = [
     33.25, 72.60, 47.93, 103.32, 40.67, 85.46, 57.08, 127.18, 37.20, 78.39, 54.62, 115.08, 43.33, 93.96, 66.02, 140.45,
 ];
+/// How many lines each Density runs.
 const DENSITY_LINES: [usize; 4] = [4, 8, 12, 16];
 /// Level of the tail for each Density against Low (dB), so the four sound equally loud, as
 /// measured (docs/spec/reverb.md).
@@ -124,6 +130,7 @@ const OUTPUT_SIGNS: [[f64; 16]; 2] = [
 /// Level of the late reverb against the input, for the longest decays; shorter ones start lower,
 /// as if the tail had already decayed for [`TAIL_FADE_SECONDS`] when it is heard.
 const TAIL_GAIN: f64 = 1.525;
+/// How long the shortest decays' tail counts as having decayed already when it is heard.
 const TAIL_FADE_SECONDS: f64 = 0.027;
 /// The damping filters' loss is per trip round a loop this long (seconds, reference room).
 const LOSS_TRIP_SECONDS: f64 = 0.17;
@@ -135,7 +142,9 @@ const TAP_LATER_DB: f64 = 2.0;
 /// A loss of the highs built into the loop: a high shelf half way at this frequency, this many dB
 /// per trip up to [`AIR_DECAY`]; longer decays lose less, with the cube root of the decay.
 const AIR_FREQUENCY: f64 = 8_000.0;
+/// The fixed loss of the highs per trip, in dB, for decays up to [`AIR_DECAY`].
 const AIR_LOSS_DB: f64 = 0.96;
+/// Decay time (seconds) above which the fixed loss of the highs shrinks.
 const AIR_DECAY: f64 = 3.46;
 /// Decay time the network is tuned to, against the Decay setting.
 const DECAY_RATIO: f64 = 0.9;
@@ -151,51 +160,87 @@ const HIGH_CUT_LIMIT: f64 = 20_000.0;
 /// cannot grow without end.
 const FREEZE_LIMIT: f64 = 2.0;
 
-/// Longest delays the lines need, with some room.
+/// Longest delay the predelay line needs, with some room.
 const PREDELAY_LINE_SECONDS: f64 = 0.6;
+/// Longest delay a network line needs, with some room.
 const LINE_SECONDS: f64 = 0.3;
+/// Longest delay a diffuser needs, with some room.
 const DIFFUSER_SECONDS: f64 = 0.035;
 
 /// Parameter indices, in [`INFO`] order.
 pub mod param {
+    /// Time from the input to the first reflection, in seconds.
     pub const PREDELAY: usize = 0;
+    /// Low Cut on the input band.
     pub const LOW_CUT: usize = 1;
+    /// High Cut on the input band.
     pub const HIGH_CUT: usize = 2;
+    /// Centre of the input band in hertz.
     pub const INPUT_FREQUENCY: usize = 3;
+    /// Width of the input band in octaves.
     pub const INPUT_WIDTH: usize = 4;
+    /// Spin, which swings the early reflections' delays, on or off.
     pub const SPIN: usize = 5;
+    /// How fast Spin swings, in hertz.
     pub const SPIN_RATE: usize = 6;
+    /// How far Spin swings.
     pub const SPIN_AMOUNT: usize = 7;
+    /// How the reflections fade and when the tail sets in, 0..1.
     pub const SHAPE: usize = 8;
+    /// High damping in the loop on or off.
     pub const HIGH_DAMPING: usize = 9;
+    /// High damping as a shelf (0) or a low-pass (1).
     pub const HIGH_DAMPING_TYPE: usize = 10;
+    /// High damping's frequency in hertz.
     pub const HIGH_DAMPING_FREQUENCY: usize = 11;
+    /// High damping's gain per second, linear.
     pub const HIGH_DAMPING_GAIN: usize = 12;
+    /// Low damping in the loop on or off.
     pub const LOW_DAMPING: usize = 13;
+    /// Low damping's frequency in hertz.
     pub const LOW_DAMPING_FREQUENCY: usize = 14;
+    /// Low damping's gain per second, linear.
     pub const LOW_DAMPING_GAIN: usize = 15;
+    /// The diffusers' allpass gain.
     pub const DIFFUSION: usize = 16;
+    /// The diffusers' delays as a fraction of their longest.
     pub const SCALE: usize = 17;
+    /// Chorus, which swings the network's line lengths, on or off.
     pub const CHORUS: usize = 18;
+    /// How fast Chorus swings, in hertz.
     pub const CHORUS_RATE: usize = 19;
+    /// How far Chorus swings.
     pub const CHORUS_AMOUNT: usize = 20;
+    /// The room's size; 100 is the reference room.
     pub const SIZE: usize = 21;
+    /// How Size glides to a new value: None, Slow or Fast.
     pub const SMOOTH: usize = 22;
+    /// Decay time of the tail, in seconds.
     pub const DECAY: usize = 23;
+    /// Holds the tail without decay.
     pub const FREEZE: usize = 24;
+    /// While frozen, leaves the damping out.
     pub const FLAT: usize = 25;
+    /// While frozen, takes no new input.
     pub const CUT: usize = 26;
+    /// Width of the wet signal, 0 (mono) to 120.
     pub const STEREO: usize = 27;
+    /// How many lines the network runs: Sparse, Low, Mid or High.
     pub const DENSITY: usize = 28;
+    /// Level of the early reflections in decibels.
     pub const REFLECT: usize = 29;
+    /// Level of the late reverb in decibels.
     pub const DIFFUSE: usize = 30;
+    /// Share of the wet signal in the output.
     pub const MIX: usize = 31;
+    /// How many parameters there are.
     pub(crate) const COUNT: usize = 32;
 }
 
 /// Lowest Reflect and Diffuse level: a linear gain of 0.03.
 pub const MIN_LEVEL_DB: f64 = -30.4576;
 
+/// The parameters, in [`param`] order.
 const PARAMS: [ParamInfo; param::COUNT] = [
     ParamInfo::continuous("predelay", "Predelay", (0.000_5, 0.25), 0.002_5, Unit::Seconds, Scale::Logarithmic),
     ParamInfo::toggle("lowCut", "Low Cut", false),
@@ -252,19 +297,24 @@ const PARAMS: [ParamInfo; param::COUNT] = [
     ParamInfo::continuous("mix", "Dry/Wet", (0.0, 1.0), 0.55, Unit::Percent, Scale::Linear),
 ];
 
+/// What the reverb is and the parameters it has.
 pub const INFO: DeviceInfo = DeviceInfo { id: "reverb", name: "Reverb", role: Role::Effect, params: &PARAMS };
 
+/// Sample rate assumed until [`Device::prepare`] gives one.
 const DEFAULT_SAMPLE_RATE: f64 = 48_000.0;
 
 /// What the control-rate update works out for the taps and lines.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Tuning {
-    /// Each tap's delay after the predelay, and its gain (frames, linear).
+    /// Each tap's delay after the predelay (frames).
     tap_delays: [f64; 32],
+    /// Each tap's gain (linear).
     tap_gains: [f64; 32],
-    /// Delay from the predelay to the diffusers, the diffusers' and the lines' lengths (frames).
+    /// Delay from the predelay to the diffusers (frames).
     shape_delay: f64,
+    /// The diffusers' lengths (frames).
     diffusers: [f64; 4],
+    /// The lines' lengths (frames).
     lines: [f64; 16],
     /// Each line's gain per trip.
     gains: [f64; 16],
@@ -273,6 +323,7 @@ struct Tuning {
 }
 
 impl Default for Tuning {
+    /// Silent taps and lines at the shortest lengths, until the first tuning.
     fn default() -> Self {
         Self {
             tap_delays: [2.0; 32],
@@ -309,16 +360,23 @@ impl Tuning {
 /// switches crossfade, so turning one on, off or to the other type does not click.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Line {
+    /// The line's delay.
     delay: DelayLine,
+    /// High damping as a shelf.
     high_shelf: Biquad,
+    /// High damping as a low-pass.
     low_pass: FirstOrder,
+    /// Low damping.
     low_shelf: Biquad,
+    /// The fixed loss of the highs.
     air: FirstOrder,
 }
 
 /// A filter section the damping runs.
 trait Section {
+    /// One sample through the section.
     fn run(&mut self, x: f64) -> f64;
+    /// Silences the section.
     fn clear(&mut self);
 }
 
@@ -343,6 +401,7 @@ impl Section for Biquad {
 }
 
 impl Line {
+    /// Silences the line and its damping.
     fn clear(&mut self) {
         self.delay.clear();
         self.high_shelf.reset();
@@ -381,9 +440,13 @@ impl Line {
 /// How much of each damping filter is heard, 0..1.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Damping {
+    /// High damping.
     high: f64,
+    /// The low-pass's share of high damping (the shelf has the rest).
     low_pass: f64,
+    /// Low damping.
     low: f64,
+    /// The fixed loss of the highs.
     air: f64,
 }
 
@@ -415,38 +478,53 @@ macro_rules! ramps {
 }
 
 ramps! {
-    /// Predelay (frames), Reflect and Diffuse (linear), Dry/Wet, Stereo's mixing angle (radians).
+    /// Predelay (frames).
     predelay,
+    /// Reflect (linear).
     reflect,
+    /// Diffuse (linear).
     diffuse,
+    /// Dry/Wet.
     mix,
+    /// Stereo's mixing angle (radians).
     angle,
     /// Gain of the input into the network (0 while frozen with Cut on).
     feed,
-    /// How much of each input cut is heard (0 off, 1 on).
+    /// How much of Low Cut is heard (0 off, 1 on).
     low_cut,
+    /// How much of High Cut is heard (0 off, 1 on).
     high_cut,
-    /// Spin's and Chorus's swing (frames).
+    /// Spin's swing (frames).
     spin,
+    /// Chorus's swing (frames).
     chorus,
-    /// Read at the control rate: Shape, Scale, the natural log of Decay, log2 of the input band's
-    /// centre and its width.
+    /// Shape, read at the control rate.
     shape,
+    /// Scale, read at the control rate.
     scale,
+    /// The natural log of Decay, read at the control rate.
     decay,
+    /// log2 of the input band's centre, read at the control rate.
     centre,
+    /// The input band's width in octaves, read at the control rate.
     width,
     /// The diffusers' gain.
     diffusion,
-    /// Read at the control rate: log2 of the damping frequencies, and their gains.
+    /// log2 of high damping's frequency, read at the control rate.
     high_frequency,
+    /// High damping's gain, read at the control rate.
     high_gain,
+    /// log2 of low damping's frequency, read at the control rate.
     low_frequency,
+    /// Low damping's gain, read at the control rate.
     low_gain,
-    /// How much of the damping filters is heard (see [`Damping`]).
+    /// How much high damping is heard (see [`Damping`]).
     high,
+    /// The low-pass's share of high damping (see [`Damping`]).
     low_pass,
+    /// How much low damping is heard (see [`Damping`]).
     low,
+    /// How much of the fixed loss of the highs is heard (see [`Damping`]).
     air,
 }
 
@@ -466,38 +544,54 @@ impl Ramps<Smoother> {
         .any(|s| !s.is_settled())
     }
 
+    /// Whether the input band's centre or width is still moving.
     fn band_moving(&self) -> bool {
         !self.centre.is_settled() || !self.width.is_settled()
     }
 }
 
+/// The algorithmic room reverb: input filters, predelay, early reflections and a feedback delay
+/// network.
 pub struct Reverb {
+    /// The sample rate it was prepared for.
     sample_rate: f64,
+    /// Every parameter's value, in [`param`] order.
     values: [f64; param::COUNT],
+    /// Values that ramp to their settings.
     ramps: Ramps<Smoother>,
+    /// Low Cut, a first-order low shelf.
     low_cut: FirstOrder,
     /// The fixed roll-off of the lowest octaves at the input.
     rumble: FirstOrder,
+    /// High Cut, a second-order low-pass.
     high_cut: Biquad,
+    /// The predelay line, which the taps and the Shape delay read.
     input: DelayLine,
+    /// The allpasses in front of the network.
     diffusers: [Allpass; 4],
+    /// The network's lines; the first [`active`](Self::active) run.
     lines: [Line; 16],
-    /// Lines running (Density), and each one's share of the input.
+    /// Lines running (Density).
     active: usize,
+    /// Each line's share of the input.
     weights: [f64; 16],
-    /// Cosine and sine of each tap's and each line's phase offset.
+    /// Cosine and sine of each tap's phase offset.
     spin_offsets: [(f64, f64); 32],
+    /// Cosine and sine of each line's phase offset.
     chorus_offsets: [(f64, f64); 16],
     /// The size factor `(size / 100)^(1/3)` as it glides.
     room: f64,
-    /// The tuning at the last control point, at the next one, and in between for this frame.
+    /// The tuning at the last control point.
     from: Tuning,
+    /// The tuning at the next control point.
     to: Tuning,
+    /// The tuning in between, for this frame.
     now: Tuning,
     /// Whether `from` and `to` differ, so frames in between need `now`.
     moving: bool,
-    /// Spin's and Chorus's LFO positions, in cycles (0..1).
+    /// Spin's LFO position, in cycles (0..1).
     spin_phase: f64,
+    /// Chorus's LFO position, in cycles (0..1).
     chorus_phase: f64,
     /// Frames since the last reset, for the control-rate grid.
     frame: u64,
@@ -506,11 +600,13 @@ pub struct Reverb {
 }
 
 impl Default for Reverb {
+    /// The same as [`Reverb::new`].
     fn default() -> Self {
         Self::new()
     }
 }
 
+/// A level in decibels as a linear gain.
 fn db_to_gain(db: f64) -> f64 {
     10.0f64.powf(db / 20.0)
 }
@@ -583,6 +679,8 @@ fn limit(x: f64) -> f64 {
 }
 
 impl Reverb {
+    /// A reverb with every parameter at its default, prepared for the default sample rate
+    /// (allocates).
     pub fn new() -> Self {
         let sr = DEFAULT_SAMPLE_RATE;
         let mut reverb = Self {
@@ -614,6 +712,7 @@ impl Reverb {
         reverb
     }
 
+    /// Allocates the lines for the current sample rate.
     fn allocate(&mut self) {
         let sr = self.sample_rate;
         self.input = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
@@ -622,18 +721,22 @@ impl Reverb {
             std::array::from_fn(|_| Line { delay: DelayLine::for_seconds(LINE_SECONDS, sr), ..Line::default() });
     }
 
+    /// The value of parameter `index`, 0.0 for an unknown one.
     fn value(&self, index: usize) -> f64 {
         self.values.get(index).copied().unwrap_or(0.0)
     }
 
+    /// Whether switch `index` is on.
     fn on(&self, index: usize) -> bool {
         self.value(index) >= 0.5
     }
 
+    /// Whether Freeze is on.
     fn frozen(&self) -> bool {
         self.on(param::FREEZE)
     }
 
+    /// Where each ramped value is heading, from the parameters.
     fn targets(&self) -> Ramps<f64> {
         let sr = self.sample_rate;
         let flag = |index| if self.on(index) { 1.0 } else { 0.0 };
@@ -667,6 +770,7 @@ impl Reverb {
         }
     }
 
+    /// The size factor `(size / 100)^(1/3)` for the Size setting.
     fn room_target(&self) -> f64 {
         (self.value(param::SIZE) / REFERENCE_SIZE).cbrt()
     }
@@ -709,6 +813,7 @@ impl Reverb {
         self.weights = input_weights(self.active);
     }
 
+    /// How many lines the Density setting runs.
     fn density_lines(&self) -> usize {
         DENSITY_LINES.get(self.value(param::DENSITY) as usize).copied().unwrap_or(8)
     }
@@ -820,10 +925,12 @@ impl Reverb {
 }
 
 impl Device for Reverb {
+    /// The reverb's [`INFO`].
     fn info(&self) -> &'static DeviceInfo {
         &INFO
     }
 
+    /// Allocates the lines for `sample_rate` and starts silent.
     fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
         self.sample_rate = check_sample_rate(sample_rate)?;
         self.allocate();
@@ -831,10 +938,12 @@ impl Device for Reverb {
         Ok(())
     }
 
+    /// Silences the reverb and settles every ramped value at its setting.
     fn reset(&mut self) {
         self.rebuild();
     }
 
+    /// Sets parameter `index`, clamped to its range; the ramped values move to it.
     fn set_param(&mut self, index: usize, value: f64) {
         let Some(info) = PARAMS.get(index) else { return };
         let Some(slot) = self.values.get_mut(index) else { return };
@@ -844,10 +953,12 @@ impl Device for Reverb {
         self.dirty = true;
     }
 
+    /// The value of parameter `index`, or `None` for an unknown one.
     fn param(&self, index: usize) -> Option<f64> {
         self.values.get(index).copied()
     }
 
+    /// Runs interleaved stereo `buffer` through the reverb in place.
     fn process(&mut self, _context: &ProcessContext, buffer: &mut [f32]) {
         let sr = self.sample_rate;
         let wanted = self.density_lines();
