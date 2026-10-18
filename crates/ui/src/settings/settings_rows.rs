@@ -178,7 +178,7 @@ pub(crate) static ROWS: &[Entry] = &[
         Page::Plugins,
         "Library",
         "Plug-in library",
-        "The folders plug-ins are looked for in, scanning them, and the plug-ins found",
+        "The folders plug-ins are looked for in, each on or off and for a format, scanning them, and the plug-in manager",
         &[],
         crate::settings::settings_view::plugin_library,
     ),

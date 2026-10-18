@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use suhina_plugins::scan::{Catalog, HANG_RETRY, Scanned, find_files, hung_message, scan_file, standard_folders};
+use suhina_plugins::scan::{
+    Catalog, FolderFormat, HANG_RETRY, Scanned, find_files, find_files_of, hung_message, scan_file, standard_folders,
+};
 
 /// The timeout of a scan that is not meant to hang. It returns as soon as the host exits, so
 /// this costs nothing; it is long so that a slow process start (on a busy Windows machine the
@@ -179,6 +181,53 @@ fn a_file_that_holds_no_plugins_is_settled_until_it_changes() {
 }
 
 #[test]
+fn a_folder_gives_only_its_formats_files() {
+    let dir = folder("formats");
+    write(&dir.join("clap/a.clap"), "x");
+    write(&dir.join("clap/b.vst3"), "x");
+    write(&dir.join("vst3/c.vst3"), "x");
+    write(&dir.join("vst2/d.dll"), "x");
+    let name = |found: Vec<PathBuf>| -> Vec<String> {
+        found.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    };
+    let folders = [
+        (dir.join("clap"), FolderFormat::Clap),
+        (dir.join("vst3"), FolderFormat::Vst3),
+        (dir.join("vst2"), FolderFormat::Vst2),
+    ];
+    assert_eq!(name(find_files_of(&folders)), ["a.clap", "c.vst3"]);
+    assert_eq!(name(find_files_of(&[(dir.join("clap"), FolderFormat::Any)])), ["a.clap", "b.vst3"]);
+}
+
+#[test]
+fn a_file_built_for_another_processor_is_settled_without_loading_it() {
+    use suhina_plugins::arch::Arch;
+    // A universal Mach-O header that lists only the processor this test does not run on.
+    let Some(here) = Arch::this_program().filter(|a| matches!(a, Arch::X86_64 | Arch::Arm64)) else { return };
+    let other: u32 = if here == Arch::Arm64 { 0x0100_0007 } else { 0x0100_000C };
+    let mut header = 0xCAFE_BABE_u32.to_be_bytes().to_vec();
+    header.extend(1_u32.to_be_bytes());
+    header.extend(other.to_be_bytes());
+    header.extend([0; 16]);
+    let dir = folder("foreign");
+    let file = dir.join("Old.clap");
+    std::fs::write(&file, &header).unwrap();
+    let mut catalog = Catalog::new();
+    let first = catalog.scan(&host(), std::slice::from_ref(&dir), PATIENT);
+    assert_eq!(first.incompatible.len(), 1, "{first:?}");
+    assert!(first.failed.is_empty() && first.retried.is_empty(), "not loaded, so not failed: {first:?}");
+    let (path, why) = &first.incompatible[0];
+    assert_eq!(path, &file);
+    assert!(why.contains(here.name()), "{why}");
+    assert_eq!(catalog.incompatible().count(), 1);
+    assert_eq!(catalog.failed().count(), 0);
+    // Settled: the next scan does not read it again while it is unchanged.
+    let second = catalog.scan(&host(), std::slice::from_ref(&dir), PATIENT);
+    assert_eq!((second.read.len(), second.unchanged), (0, 1));
+    assert_eq!(Catalog::from_json(&catalog.to_json()), catalog);
+}
+
+#[test]
 fn a_file_that_hung_is_tried_again_once_a_day() {
     let dir = folder("hung");
     let file = dir.join("slow.clap");
@@ -280,6 +329,7 @@ fn worker_processes_read_many_files_and_survive_crashes_and_hangs() {
             Scanned::Plugins(p) => p.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(","),
             Scanned::Failed(why) => format!("failed: {}", why.split(':').next().unwrap_or_default()),
             Scanned::NoPlugins => "no plug-ins".into(),
+            Scanned::Incompatible(why) => format!("incompatible: {why}"),
         })
         .collect();
     assert_eq!(names[0], "Suhina Test Gain");

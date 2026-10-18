@@ -5,6 +5,7 @@
 //! (`key = value` lines, so a person can read and fix it). The app decides where the file lives.
 
 pub mod keymap;
+pub mod plugin_manager;
 mod settings_rows;
 pub mod settings_view;
 pub mod themes;

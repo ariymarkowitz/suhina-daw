@@ -21,9 +21,10 @@ usage: suhina-cli render (<project.als> | --demo) -o <out.wav> [--cue <cue.wav>]
        suhina-cli commands [--markdown]
        suhina-cli mcp [--read-root <dir>] [--write-root <dir>] [--audio]
        suhina-cli audio devices
-       suhina-cli plugins (scan [--all] | list [--ignored] | folders | add-folder <dir>
-                             | remove-folder <dir> | check <project.als>
-                             | set-hosting <plug-in> (binary | vendor | instance))
+       suhina-cli plugins (scan [--all] | scan-file <file> | list [--ignored] | folders
+                             | add-folder <dir> [--format (any | vst3 | clap)] | remove-folder <dir>
+                             | (folder-on | folder-off) <dir> | (enable | disable) <plug-in>
+                             | check <project.als> | set-hosting <plug-in> (binary | vendor | instance))
        suhina-cli plugin run <plug-in> (<in-audio> | -) <out.wav> [--tail <seconds>] [--state <file>]
        suhina-cli plugin run-device <project.als> <device> (<in-audio> | -) <out.wav> [--tail <seconds>]
                                      [--from <bar>] [--seconds <seconds>]
@@ -43,9 +44,11 @@ commands:
   audio     audio devices: list the audio hosts (WASAPI, ASIO, ALSA...) and each one's output
             devices with their sample rates and buffer sizes
   plugins   find installed plug-ins: scan looks in the standard folders and the added ones
-            (new and changed files and failed ones again, or every file with --all), list shows
-            what was found and what failed (--ignored: also the files that hold no plug-ins),
-            folders shows where scans look, add-folder and remove-folder change that; check
+            (new and changed files and failed ones again, or every file with --all; scan-file
+            reads one file again), list shows what was found, what failed and what is built for
+            another processor (--ignored: also the files that hold no plug-ins), folders shows
+            where scans look, add-folder, remove-folder, folder-on and folder-off change that;
+            enable and disable switch a plug-in on or off (off: not offered, not loaded); check
             lists a project's plug-ins and the installed plug-in found for each, or none;
             set-hosting chooses whether a plug-in's instances share a process per file (the
             default), per vendor, or each run in one of their own
@@ -657,6 +660,16 @@ fn plugins(args: &[String]) -> Result<(), String> {
         ["list", "--ignored"] => ("plugins.list", serde_json::json!({ "ignored": true })),
         ["folders"] => ("plugins.folders", serde_json::json!({})),
         ["add-folder", folder] => ("plugins.addFolder", serde_json::json!({ "folder": folder })),
+        ["add-folder", folder, "--format", format] => {
+            ("plugins.addFolder", serde_json::json!({ "folder": folder, "format": format }))
+        }
+        ["folder-on", folder] => ("plugins.setFolderEnabled", serde_json::json!({ "folder": folder, "enabled": true })),
+        ["folder-off", folder] => {
+            ("plugins.setFolderEnabled", serde_json::json!({ "folder": folder, "enabled": false }))
+        }
+        ["enable", plugin] => ("plugins.setEnabled", serde_json::json!({ "plugin": plugin, "enabled": true })),
+        ["disable", plugin] => ("plugins.setEnabled", serde_json::json!({ "plugin": plugin, "enabled": false })),
+        ["scan-file", file] => ("plugins.scanFile", serde_json::json!({ "file": file })),
         ["remove-folder", folder] => ("plugins.removeFolder", serde_json::json!({ "folder": folder })),
         ["set-hosting", plugin, hosting] => {
             ("plugins.setHosting", serde_json::json!({ "plugin": plugin, "hosting": hosting }))
@@ -669,7 +682,7 @@ fn plugins(args: &[String]) -> Result<(), String> {
             ));
         }
     };
-    if id == "plugins.scan" {
+    if id == "plugins.scan" || id == "plugins.scanFile" {
         eprintln!("scanning for plug-ins; each new or changed file is loaded in a process of its own");
     }
     let result = projects.execute(id, &params).map_err(|e| e.0)?;
