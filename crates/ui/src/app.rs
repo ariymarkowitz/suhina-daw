@@ -3156,6 +3156,18 @@ impl App {
             // With clips selected in the Arrangement, the loop is exactly their span; with none,
             // Ctrl+L turns looping on or off as before.
             "transport.setLoopEnabled"
+                if self.shown == View::Arrangement
+                    && self.arrangement.selected_clips().is_empty()
+                    && self.arrangement.time_selection().is_some() =>
+            {
+                if let Some(s) = self.arrangement.time_selection() {
+                    actions.push(Action::new(
+                        "transport.setLoop",
+                        json!({ "start": s.start, "end": s.end, "enabled": true }),
+                    ));
+                }
+            }
+            "transport.setLoopEnabled"
                 if self.shown == View::Arrangement && !self.arrangement.selected_clips().is_empty() =>
             {
                 let timeline = self.timeline.as_ref().map(|(_, _, t)| t);

@@ -260,6 +260,13 @@ pub struct ArrangementViewState {
     /// takes the run of clips from it, and the other views work on it.
     selected: Vec<(TrackId, usize)>,
     anchor: Option<(TrackId, usize)>,
+    /// Where a drag over empty lanes started: the selection rectangle runs from there to the
+    /// pointer until the button is let go.
+    marquee: Option<Pos2>,
+    /// The span the last selection rectangle covered: its tracks and its beats.
+    time_selection: Option<TimeSelection>,
+    /// The beat an empty spot of a lane was right-clicked on, for its menu.
+    menu_beat: Option<f64>,
     clip_drag: Option<ClipDrag>,
     value_drag: Option<ValueDrag>,
     /// A clip gain being dragged, and its value so far.
@@ -329,6 +336,9 @@ impl Default for ArrangementViewState {
             heights: HashMap::new(),
             selected: Vec::new(),
             anchor: None,
+            marquee: None,
+            time_selection: None,
+            menu_beat: None,
             clip_drag: None,
             value_drag: None,
             gain_drag: None,
@@ -358,7 +368,20 @@ impl Default for ArrangementViewState {
     }
 }
 
+/// A span of beats over some tracks, the selection rectangle's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeSelection {
+    pub tracks: Vec<TrackId>,
+    pub start: f64,
+    pub end: f64,
+}
+
 impl ArrangementViewState {
+    /// The span the last selection rectangle covered, if one did.
+    pub fn time_selection(&self) -> Option<&TimeSelection> {
+        self.time_selection.as_ref()
+    }
+
     /// The clip the views work on: the one clicked last.
     pub fn selected_clip(&self) -> Option<(TrackId, usize)> {
         self.anchor
@@ -1137,6 +1160,8 @@ fn show_lanes(ui: &mut Ui, timeline: &Timeline, state: &mut ArrangementViewState
     let lanes_painter = painter.with_clip_rect(lanes_area);
     let mut track_number = 0;
     let mut ghost = None;
+    let mut rows_seen: Vec<(TrackId, Rect)> = Vec::new();
+    let mut clip_rects: Vec<((TrackId, usize), Rect)> = Vec::new();
     for shown in &drawn {
         let Some(lane) = timeline.lanes.get(shown.lane) else { continue };
         // A folded group's row draws the clips of the track it stands in for, and that track's
@@ -1154,11 +1179,28 @@ fn show_lanes(ui: &mut Ui, timeline: &Timeline, state: &mut ArrangementViewState
         // one-bar clip there in the grid cell under the pointer (Alt: where the pointer is) — MIDI
         // on a notes track, audio on one that plays audio. The clips are laid over it, so a
         // click or a double-click on one is the clip's.
-        let body =
-            ui.interact(row.clip.intersect(lanes_area), Id::new(("arrangement-lane", lane.track.0)), Sense::click());
+        let body = ui.interact(
+            row.clip.intersect(lanes_area),
+            Id::new(("arrangement-lane", lane.track.0)),
+            Sense::click_and_drag(),
+        );
+        rows_seen.push((lane.track, row.clip));
+        // A drag from an empty spot draws the selection rectangle (#649).
+        if body.drag_started_by(egui::PointerButton::Primary) {
+            state.marquee = ui.input(|i| i.pointer.press_origin());
+        }
+        if body.secondary_clicked()
+            && let Some(pointer) = body.interact_pointer_pos()
+        {
+            state.menu_beat = Some(f64::from((pointer.x - time.left() + state.scroll.x) / state.beat_width).max(0.0));
+        }
+        body.context_menu(|ui| {
+            empty_lane_menu(ui, lane.track, lane.notes, state, actions);
+        });
         body.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Lane {}", lane.name)));
         if body.clicked() {
             state.clear_selected_clip();
+            state.time_selection = None;
             // The click also moves the play start marker there, on the clip grid (Alt: free), as
             // a click on the ruler does; while playing, playback jumps there.
             if let Some(pointer) = body.interact_pointer_pos() {
@@ -1192,6 +1234,8 @@ fn show_lanes(ui: &mut Ui, timeline: &Timeline, state: &mut ArrangementViewState
             lanes_painter.rect_filled(edge, 0.0, theme::accent());
         }
         for clip in &clips_lane.clips {
+            let span = egui::Rangef::new(x_of(clip.start), x_of(clip.start + clip.length));
+            clip_rects.push(((clips_lane.track, clip.index), Rect::from_x_y_ranges(span, row.clip.y_range())));
             if clip.start + clip.length >= first_beat && clip.start <= last_beat {
                 let found = clip_box(
                     ui,
@@ -1243,6 +1287,44 @@ fn show_lanes(ui: &mut Ui, timeline: &Timeline, state: &mut ArrangementViewState
     }
     if state.automation.selected_points().is_some() {
         state.clear_selected_clip();
+    }
+    // The time selection, lit over its tracks' lanes.
+    if let Some(selection) = &state.time_selection {
+        let span = egui::Rangef::new(x_of(selection.start), x_of(selection.end));
+        for (track, row) in rows_seen.iter().filter(|(t, _)| selection.tracks.contains(t)) {
+            let _ = track;
+            lanes_painter.rect_filled(
+                Rect::from_x_y_ranges(span, row.y_range()),
+                0.0,
+                theme::accent().gamma_multiply(0.1),
+            );
+        }
+    }
+    // The selection rectangle: the clips it touches are selected when the button goes up, and
+    // the span it covers becomes the time selection.
+    if let Some(origin) = state.marquee
+        && let Some(now) = ui.ctx().pointer_latest_pos()
+    {
+        let rect = Rect::from_two_pos(origin, now).intersect(lanes_area);
+        lanes_painter.rect_filled(rect, 0.0, theme::accent().gamma_multiply(0.12));
+        lanes_painter.rect_stroke(rect, 0.0, theme::hairline(theme::accent()), egui::StrokeKind::Inside);
+        if ui.input(|i| !i.pointer.primary_down()) {
+            state.marquee = None;
+            let picked: Vec<(TrackId, usize)> =
+                clip_rects.iter().filter(|(_, r)| r.intersects(rect)).map(|(key, _)| *key).collect();
+            let beat_of = |x: f32| f64::from((x - time.left() + state.scroll.x) / state.beat_width).max(0.0);
+            let tracks: Vec<TrackId> =
+                rows_seen.iter().filter(|(_, r)| r.y_range().intersects(rect.y_range())).map(|(t, _)| *t).collect();
+            let (start, end) = (beat_of(rect.left()), beat_of(rect.right()));
+            state.time_selection =
+                (end - start > 1e-6 && !tracks.is_empty()).then_some(TimeSelection { tracks, start, end });
+            if picked.is_empty() {
+                state.selected.clear();
+                state.anchor = None;
+            } else {
+                state.select_clips(picked);
+            }
+        }
     }
 
     // A track header let go over a lane moves the track (and a group's tracks) there, into the
@@ -3157,5 +3239,42 @@ mod tests {
         assert_eq!(ruler_beat(2.1337, sixteenths, true), 2.134);
         assert_eq!(ruler_beat(-3.0, bars, true), 0.0);
         assert_eq!(ruler_beat(f64::NAN, bars, false), 0.0);
+    }
+}
+
+/// The menu of an empty spot of a lane: a new empty MIDI clip where it was right-clicked (on a
+/// notes track), and, with a time selection, looping it and consolidating it on this track.
+fn empty_lane_menu(ui: &mut Ui, track: TrackId, notes: bool, state: &ArrangementViewState, actions: &mut Vec<Action>) {
+    ui.set_min_width(180.0);
+    let beat = state.menu_beat.unwrap_or(0.0);
+    if ui.add_enabled(notes, egui::Button::new("Insert empty MIDI clip")).clicked() {
+        let stack = state.stack_midi;
+        actions.push(Action::new("clip.create", json!({ "track": track.0, "start": beat, "stack": stack })));
+        ui.close();
+    }
+    let selection = state.time_selection.as_ref();
+    ui.separator();
+    if ui
+        .add_enabled(
+            selection.is_some(),
+            egui::Button::new("Loop selection").shortcut_text(crate::settings::keymap::shown("Ctrl+L")),
+        )
+        .clicked()
+        && let Some(s) = selection
+    {
+        actions.push(Action::new("transport.setLoop", json!({ "start": s.start, "end": s.end, "enabled": true })));
+        ui.close();
+    }
+    let here = selection.filter(|s| s.tracks.contains(&track));
+    if ui
+        .add_enabled(
+            here.is_some(),
+            egui::Button::new("Consolidate selection").shortcut_text(crate::settings::keymap::shown("Ctrl+J")),
+        )
+        .clicked()
+        && let Some(s) = here
+    {
+        actions.push(Action::new("clip.consolidate", json!({ "track": track.0, "start": s.start, "end": s.end })));
+        ui.close();
     }
 }
