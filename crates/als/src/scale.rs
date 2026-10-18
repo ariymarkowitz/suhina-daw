@@ -80,18 +80,23 @@ pub(crate) fn clip_scale(clip: Node) -> Result<Option<Scale>, String> {
 mod tests {
     use super::*;
 
+    /// The scale `clip_scale` reads from a `MidiClip` element holding `inner`.
     fn scale_of(inner: &str) -> Result<Option<Scale>, String> {
         let xml = format!("<MidiClip>{inner}</MidiClip>");
         let doc = roxmltree::Document::parse(&xml).unwrap();
         clip_scale(doc.root_element())
     }
 
+    /// A clip's scale as Live stores it: whether scale mode is on, the root key and the scale name's
+    /// number.
     fn stored(in_key: &str, root: &str, name: &str) -> String {
         format!(
             r#"<IsInKey Value="{in_key}"/><ScaleInformation><Root Value="{root}"/><Name Value="{name}"/></ScaleInformation>"#
         )
     }
 
+    /// Each scale name maps to the mode with the notes that name means, and every Suhina mode has
+    /// exactly one name.
     #[test]
     fn every_listed_mode_holds_the_notes_of_its_name() {
         let expected: [(&str, &[u8]); 9] = [
@@ -115,6 +120,8 @@ mod tests {
         }
     }
 
+    /// A stored root and scale number become the same scale in Suhina, from the first name to the
+    /// last.
     #[test]
     fn reads_root_and_name() {
         assert_eq!(scale_of(&stored("true", "0", "0")), Ok(Scale::new(0, ScaleMode::Major)));
@@ -123,6 +130,7 @@ mod tests {
         assert_eq!(scale_of(&stored("true", "2", "17")), Ok(Scale::new(2, ScaleMode::MelodicMinor)));
     }
 
+    /// A clip with scale mode off, a missing scale or a flag that is not `true` has no scale.
     #[test]
     fn scale_mode_off_or_missing_is_no_scale() {
         assert_eq!(scale_of(&stored("false", "2", "2")), Ok(None));
@@ -130,6 +138,8 @@ mod tests {
         assert_eq!(scale_of(&stored("yes", "2", "2")), Ok(None));
     }
 
+    /// Roots and scale numbers out of range, fractional, not finite or too large are refused with a
+    /// reason, never a panic.
     #[test]
     fn hostile_values_are_refused_with_a_reason() {
         for (root, name) in [

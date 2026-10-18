@@ -535,6 +535,8 @@ fn a_drivers_stamps_are_placed_on_the_live_clock() {
     assert!(crate::live_now() >= 1);
 }
 
+/// Notes from a MIDI controller pass through the pitch effect before the instrument, sound as
+/// the transposed key played straight in, and end when the key is let go.
 #[test]
 fn live_notes_go_through_the_midi_effects_before_the_instrument_and_end() {
     // A key through the pitch effect sounds as the transposed key played straight in.

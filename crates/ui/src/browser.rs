@@ -466,6 +466,8 @@ impl BrowserState {
         rows
     }
 
+    /// Adds the heading `name` for the built-in devices of `role` and, when it is open, a row per
+    /// device under it.
     fn device_rows(&self, node: &str, name: &str, role: Role, rows: &mut Vec<Row>) {
         let open = self.open.contains(node);
         rows.push(Row { item: heading(node, name), depth: 0, opens: true, open, context: None, columns: None });

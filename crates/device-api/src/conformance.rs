@@ -468,6 +468,9 @@ fn released(mut events: Vec<(usize, NoteEvent)>) -> Vec<(usize, NoteEvent)> {
     events
 }
 
+/// Runs the MIDI-effect checks on the device `make` builds: the test events, then hostile ones,
+/// all-notes-off and too little output room, each in several block sizes; adds a failure per
+/// fault it finds.
 fn check_events(make: &dyn Fn() -> Box<dyn Device>, failures: &mut Vec<String>) {
     let mut events = test_events();
     events.retain(|(_, event)| !matches!(event, NoteEvent::AllNotesOff));
@@ -606,22 +609,30 @@ mod tests {
     }
 
     impl Device for Sticky {
+        /// The broken MIDI effect's description.
         fn info(&self) -> &'static DeviceInfo {
             &MIDI
         }
+        /// Accepts any sample rate the checks accept.
         fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
             crate::check_sample_rate(sample_rate).map(|_| ())
         }
+        /// Holds nothing to reset: the fault is in how it ends notes.
         fn reset(&mut self) {}
+        /// Sets the transposition, in octaves.
         fn set_param(&mut self, index: usize, value: f64) {
             if index == 0 {
                 self.gain = PARAMS[0].clamp(value);
             }
         }
+        /// The transposition, in octaves.
         fn param(&self, index: usize) -> Option<f64> {
             (index == 0).then_some(self.gain)
         }
+        /// Leaves the sound as it is.
         fn process(&mut self, _: &ProcessContext, _: &mut [f32]) {}
+        /// Transposes note-ons and note-offs alike by the current setting, so a note-off after a change
+        /// misses the key its note-on sent.
         fn process_events(
             &mut self,
             _: &ProcessContext,
@@ -647,6 +658,8 @@ mod tests {
         }
     }
 
+    /// The checks catch a MIDI effect whose note-off goes to a different key than its note-on after a
+    /// parameter change.
     #[test]
     fn catches_a_midi_effect_that_leaves_notes_hanging() {
         let failures = check(&|| Box::new(Sticky { gain: 1.0 }));
@@ -657,20 +670,27 @@ mod tests {
     struct Through;
 
     impl Device for Through {
+        /// The pass-through MIDI effect's description.
         fn info(&self) -> &'static DeviceInfo {
             &MIDI
         }
+        /// Accepts any sample rate the checks accept.
         fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
             crate::check_sample_rate(sample_rate).map(|_| ())
         }
+        /// Holds nothing to reset.
         fn reset(&mut self) {}
+        /// Ignores its one parameter.
         fn set_param(&mut self, _: usize, _: f64) {}
+        /// Its one parameter, always 1.
         fn param(&self, index: usize) -> Option<f64> {
             (index == 0).then_some(1.0)
         }
+        /// Leaves the sound as it is.
         fn process(&mut self, _: &ProcessContext, _: &mut [f32]) {}
     }
 
+    /// A MIDI effect that keeps the default `process_events` fails none of the event checks.
     #[test]
     fn a_midi_effect_that_passes_events_through_passes() {
         let failures = check(&|| Box::new(Through));
@@ -686,18 +706,26 @@ mod tests {
     }
 
     impl Device for Doubler {
+        /// The doubling MIDI effect's description.
         fn info(&self) -> &'static DeviceInfo {
             &MIDI
         }
+        /// Accepts any sample rate the checks accept.
         fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
             crate::check_sample_rate(sample_rate).map(|_| ())
         }
+        /// Holds nothing to reset.
         fn reset(&mut self) {}
+        /// Ignores its one parameter.
         fn set_param(&mut self, _: usize, _: f64) {}
+        /// Its one parameter, always 1.
         fn param(&self, index: usize) -> Option<f64> {
             (index == 0).then_some(1.0)
         }
+        /// Leaves the sound as it is.
         fn process(&mut self, _: &ProcessContext, _: &mut [f32]) {}
+        /// Doubles each note an octave up until the output is full, or with `swallow` drops
+        /// all-notes-off and passes the rest.
         fn process_events(
             &mut self,
             _: &ProcessContext,
@@ -730,6 +758,8 @@ mod tests {
         }
     }
 
+    /// The checks catch a MIDI effect that fills its output with note-ons and leaves no room for the
+    /// note-offs, without blaming it for the hostile events.
     #[test]
     fn catches_a_midi_effect_that_spends_the_room_note_offs_need() {
         let failures = check(&|| Box::new(Doubler { swallow: false }));
@@ -737,6 +767,7 @@ mod tests {
         assert!(!failures.iter().any(|f| f.starts_with("hostile events: ")), "{failures:#?}");
     }
 
+    /// The checks catch a MIDI effect that swallows all-notes-off.
     #[test]
     fn catches_a_midi_effect_that_drops_all_notes_off() {
         let failures = check(&|| Box::new(Doubler { swallow: true }));

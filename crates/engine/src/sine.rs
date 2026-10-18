@@ -34,10 +34,12 @@ pub(crate) struct SineTones {
 }
 
 impl SineTones {
+    /// Silent tones at `sample_rate`, at least 1 Hz.
     pub(crate) fn new(sample_rate: u32) -> Self {
         Self { sample_rate: f64::from(sample_rate.max(1)), tones: [Tone::default(); MAX_VOICES] }
     }
 
+    /// Starts a tone at `key` with a gain from `velocity`, in a free voice or in place of the oldest.
     fn start(&mut self, key: u8, velocity: f32) {
         // A free tone, or the oldest one when every tone sounds.
         let Some(tone) = self
@@ -72,26 +74,32 @@ impl SineTones {
 }
 
 impl Device for SineTones {
+    /// The sine tones' description: an instrument with no parameters.
     fn info(&self) -> &'static DeviceInfo {
         &INFO
     }
 
+    /// Takes the sample rate and silences every tone.
     fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
         self.sample_rate = check_sample_rate(sample_rate)?;
         self.reset();
         Ok(())
     }
 
+    /// Silences every tone at once.
     fn reset(&mut self) {
         self.tones = [Tone::default(); MAX_VOICES];
     }
 
+    /// Has no parameters to set.
     fn set_param(&mut self, _: usize, _: f64) {}
 
+    /// Has no parameters.
     fn param(&self, _: usize) -> Option<f64> {
         None
     }
 
+    /// Writes the sum of the sounding tones, each with its attack and release, to both channels.
     fn process(&mut self, _: &ProcessContext, buffer: &mut [f32]) {
         let attack = (ATTACK_SECONDS * self.sample_rate).max(1.0);
         let release = (RELEASE_SECONDS * self.sample_rate).max(1.0);
@@ -117,6 +125,8 @@ impl Device for SineTones {
         }
     }
 
+    /// Starts a tone on a note-on, lets go of it on a note-off (or a note-on at velocity 0), and of
+    /// every tone on all-notes-off.
     fn event(&mut self, event: NoteEvent) {
         match event {
             NoteEvent::On { key, velocity } if key <= 127 && velocity > 0.0 => self.start(key, velocity),
@@ -136,6 +146,7 @@ impl Device for SineTones {
 mod tests {
     use super::*;
 
+    /// The sine tones pass every check an instrument must.
     #[test]
     fn passes_the_contract_tests() {
         let failures = suhina_device_api::conformance::check(&|| Box::new(SineTones::new(48_000)));

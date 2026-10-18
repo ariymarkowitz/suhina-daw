@@ -12,15 +12,19 @@ use crate::{LaunchCommand, render_launches, render_offline};
 
 const SYNTH: &str = "fm-synth";
 
+/// `p` with its first clip content in `scale`, or without one.
 fn with_scale(mut p: Project, scale: Option<Scale>) -> Project {
     p.contents[0].scale = scale;
     p
 }
 
+/// `p` rendered offline in blocks of 512 frames.
 fn render(p: &Project) -> Vec<f32> {
     render_offline(p, SR, 512).unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// The instrument after the pitch effect sounds as if the transposed keys had been written in
+/// the clip, in any block size.
 #[test]
 fn pitch_before_an_instrument_transposes_the_notes_it_plays() {
     let notes = vec![note(0.0, 1.0, 60), note(1.0, 1.0, 64), note(1.5, 0.5, 120)];
@@ -37,6 +41,8 @@ fn pitch_before_an_instrument_transposes_the_notes_it_plays() {
     }
 }
 
+/// On a track with a MIDI effect and no instrument, the changed notes play as the track's sine
+/// tones, ahead of its audio effects.
 #[test]
 fn without_an_instrument_the_changed_notes_play_as_the_tracks_sine_tones() {
     let notes = vec![note(0.0, 1.0, 60), note(0.5, 1.0, 64), note(1.5, 0.5, 120)];
@@ -76,6 +82,7 @@ fn placeholders_around_a_midi_effect_pass_the_notes_on() {
     assert!(max_diff(&render(&unbuilt), &tones) < 1e-6);
 }
 
+/// A note outside the pitch effect's window in Block mode makes no sound.
 #[test]
 fn notes_the_window_blocks_are_never_played() {
     let notes = vec![note(0.0, 1.0, 40), note(1.0, 1.0, 60)];
@@ -85,6 +92,8 @@ fn notes_the_window_blocks_are_never_played() {
     assert!(max_diff(&out, &only) < 1e-6, "{}", max_diff(&out, &only));
 }
 
+/// Scale degrees step along the scale of the clip that plays, and count semitones when the clip
+/// has none.
 #[test]
 fn pitch_follows_the_scale_of_the_clip_playing() {
     let notes = vec![note(0.0, 1.0, 60), note(1.0, 1.0, 64), note(2.0, 1.0, 71)];
@@ -107,6 +116,8 @@ fn pitch_follows_the_scale_of_the_clip_playing() {
     assert!(max_diff(&out, &semitones) < 1e-6, "{}", max_diff(&out, &semitones));
 }
 
+/// A clip launched from a slot reaches the pitch effect with its scale, as an arrangement clip
+/// does.
 #[test]
 fn launched_clips_go_through_pitch_with_their_scale() {
     let commands = [
@@ -125,6 +136,8 @@ fn launched_clips_go_through_pitch_with_their_scale() {
     assert!(max_diff(&out, &reference) < 1e-6, "{}", max_diff(&out, &reference));
 }
 
+/// A note held while an automation lane moves the transposition still ends: its note-off reaches
+/// the key its note-on sent.
 #[test]
 fn a_held_note_ends_at_its_key_when_pitch_moves_under_it() {
     let lane = AutomationLane {

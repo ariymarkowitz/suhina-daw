@@ -692,6 +692,8 @@ fn a_device_dragged_onto_a_track_header_joins_its_chain_and_becomes_recent() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
+/// The browser lists MIDI effects under a heading of their own, and an instrument dragged onto a
+/// track lands after the MIDI effect dragged there first.
 #[test]
 fn midi_effects_have_their_own_heading_and_go_before_the_instrument() {
     let (settings, folder) = (temp("midi-effect-settings"), temp("midi-effect"));

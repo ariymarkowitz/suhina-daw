@@ -216,6 +216,8 @@ mod tests {
         assert!(params.iter().all(|p| p.value.is_finite()));
     }
 
+    /// The parameters and warnings `builtin` maps from a `MidiPitcher` element holding `inner`,
+    /// checked to land on Suhina's pitch effect.
     fn pitch_from(inner: &str) -> (Vec<DeviceParam>, Vec<String>) {
         let xml = format!("<MidiPitcher>{inner}</MidiPitcher>");
         let doc = roxmltree::Document::parse(&xml).unwrap_or_else(|e| panic!("{e}"));
@@ -226,6 +228,8 @@ mod tests {
         (params, warnings)
     }
 
+    /// Every value Live stores for its pitch effect lands on a pitch parameter, without warnings,
+    /// and the step widths, which have no parameter, are left out.
     #[test]
     fn pitch_takes_every_stored_value() {
         let xml = [
@@ -257,6 +261,8 @@ mod tests {
         assert!(params.iter().all(|p| ids.contains(&p.id.as_str())), "{params:?}");
     }
 
+    /// The three range modes map one to one; an unknown mode falls back to the first with a warning,
+    /// and values that are not numbers are left out.
     #[test]
     fn pitch_modes_and_bad_values() {
         for (stored, ours) in [("0", 0.0), ("2", 2.0)] {

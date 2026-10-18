@@ -109,6 +109,8 @@ fn hide_detail_area(harness: &mut Harness<'static, App>) {
     assert!(harness.query_by_label("Show Clip").is_none() && !piano(harness), "the detail area is hidden");
 }
 
+/// The device chain in the detail area shows a MIDI effect first, then the instrument, then the
+/// audio effects.
 #[test]
 fn a_midi_effect_shows_before_the_instrument_in_the_chain() {
     let mut project = project();

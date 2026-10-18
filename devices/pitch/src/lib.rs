@@ -66,12 +66,14 @@ pub struct Pitch {
 }
 
 impl Default for Pitch {
+    /// A pitch effect at its default settings, as [`Pitch::new`].
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Pitch {
+    /// A pitch effect at its default settings: no transposition, the whole keyboard, no scale.
     pub fn new() -> Self {
         Self { values: PARAMS.map(|p| p.default), scale: None, sounding: [SILENT; 128] }
     }
@@ -112,27 +114,32 @@ impl Pitch {
 }
 
 impl Device for Pitch {
+    /// The pitch effect's description and parameters.
     fn info(&self) -> &'static DeviceInfo {
         &INFO
     }
 
+    /// Checks the sample rate and forgets the scale and the sounding notes.
     fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
         check_sample_rate(sample_rate)?;
         self.reset();
         Ok(())
     }
 
+    /// Forgets the scale and the notes that sound, without sending note-offs.
     fn reset(&mut self) {
         self.scale = None;
         self.sounding = [SILENT; 128];
     }
 
+    /// Sets parameter `index` to `value`, limited to its range and steps.
     fn set_param(&mut self, index: usize, value: f64) {
         if let (Some(info), Some(slot)) = (PARAMS.get(index), self.values.get_mut(index)) {
             *slot = info.clamp(value);
         }
     }
 
+    /// The value of parameter `index`.
     fn param(&self, index: usize) -> Option<f64> {
         self.values.get(index).copied()
     }
@@ -140,6 +147,8 @@ impl Device for Pitch {
     /// Notes are the device's whole business; the sound passes untouched.
     fn process(&mut self, _context: &ProcessContext, _buffer: &mut [f32]) {}
 
+    /// Moves each note-on to the key [`Pitch::transform`] gives and ends each note at the key it
+    /// started, keeping room for every note-off; other events pass unchanged.
     fn process_events(
         &mut self,
         _context: &ProcessContext,

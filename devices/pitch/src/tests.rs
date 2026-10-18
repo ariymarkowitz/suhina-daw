@@ -6,6 +6,7 @@
 use super::*;
 use suhina_device_api::conformance;
 
+/// A pitch effect with the given parameter values, the rest at their defaults.
 fn pitch(settings: &[(usize, f64)]) -> Pitch {
     let mut device = Pitch::new();
     for &(index, value) in settings {
@@ -19,6 +20,7 @@ fn map(device: &Pitch) -> Vec<Option<u8>> {
     (0..=127).map(|key| device.transform(key)).collect()
 }
 
+/// `device` after a scale event for `root` and `intervals`.
 fn with_scale(mut device: Pitch, root: u8, intervals: &[u8]) -> Pitch {
     let scale = MusicalScale::new(root, intervals);
     run(&mut device, &[(0, NoteEvent::Scale(scale))]);
@@ -29,6 +31,7 @@ const MAJOR: [u8; 7] = [0, 2, 4, 5, 7, 9, 11];
 const DORIAN: [u8; 7] = [0, 2, 3, 5, 7, 9, 10];
 const MINOR_PENTATONIC: [u8; 5] = [0, 3, 5, 7, 10];
 
+/// The events `device` sends for `input` in one block, with room for twice as many.
 fn run(device: &mut Pitch, input: &[(usize, NoteEvent)]) -> Vec<(usize, NoteEvent)> {
     let mut output = vec![(0, NoteEvent::AllNotesOff); input.len() * 2];
     let written = device.process_events(&ProcessContext::default(), 1_024, input, &mut output);
@@ -36,17 +39,21 @@ fn run(device: &mut Pitch, input: &[(usize, NoteEvent)]) -> Vec<(usize, NoteEven
     output
 }
 
+/// The pitch effect passes every check a MIDI effect must.
 #[test]
 fn passes_the_contract_tests() {
     let failures = conformance::check(&|| Box::new(Pitch::new()));
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+/// At its defaults, the effect leaves every key where it is.
 #[test]
 fn at_its_defaults_every_key_passes_unchanged() {
     assert_eq!(map(&Pitch::new()), (0..=127).map(Some).collect::<Vec<_>>());
 }
 
+/// Pitch transposes by semitones, and keys pushed past either end of the keyboard stay at that
+/// end.
 #[test]
 fn transposes_and_limits_to_the_keyboard() {
     let up = map(&pitch(&[(param::PITCH, 12.0)]));
@@ -62,6 +69,7 @@ fn transposes_and_limits_to_the_keyboard() {
     assert_eq!(pitch(&[(param::PITCH, 1.0)]).transform(60), Some(61));
 }
 
+/// Block drops the keys played outside the window, then transposes the rest.
 #[test]
 fn block_tests_the_played_key_then_transposes() {
     let device = pitch(&[(param::LOWEST, 60.0), (param::RANGE, 12.0), (param::PITCH, 24.0)]);
@@ -73,6 +81,7 @@ fn block_tests_the_played_key_then_transposes() {
     assert_eq!(map(&one).iter().flatten().copied().collect::<Vec<_>>(), [60]);
 }
 
+/// Fold wraps the transposed key into the window, with a period of the window's size plus one.
 #[test]
 fn fold_wraps_into_the_window() {
     let fold = |range: f64, pitch_by: f64| {
@@ -104,6 +113,7 @@ fn fold_wraps_into_the_window() {
     assert_eq!(fold(11.0, 12.0), eleven);
 }
 
+/// Limit moves a transposed key outside the window to its nearest edge.
 #[test]
 fn limit_moves_keys_to_the_nearest_edge_after_the_transposition() {
     let limit = |range: f64, pitch_by: f64| {
@@ -126,6 +136,7 @@ fn limit_moves_keys_to_the_nearest_edge_after_the_transposition() {
     assert!(limit(0.0, 0.0).iter().all(|&k| k == Some(60)));
 }
 
+/// A window reaching past key 127 still gives keys on the keyboard, in every mode.
 #[test]
 fn a_window_past_the_top_key_still_gives_keys() {
     for mode in [mode::BLOCK, mode::FOLD, mode::LIMIT] {
@@ -135,6 +146,8 @@ fn a_window_past_the_top_key_still_gives_keys() {
     }
 }
 
+/// With the scale followed, the transposition counts the scale's degrees, snaps keys outside it,
+/// and the semitone setting is not used.
 #[test]
 fn scale_degrees_step_along_the_clips_scale() {
     let degrees = |amount: f64, intervals: &[u8], root: u8| {
@@ -161,6 +174,7 @@ fn scale_degrees_step_along_the_clips_scale() {
     assert_eq!(off.transform(61), Some(66));
 }
 
+/// Following the scale with no scale, or after the scale is cleared, counts degrees as semitones.
 #[test]
 fn without_a_scale_degrees_count_semitones() {
     let device = pitch(&[(param::FOLLOW_SCALE, 1.0), (param::PITCH_DEGREES, 3.0)]);
@@ -169,6 +183,7 @@ fn without_a_scale_degrees_count_semitones() {
     assert_eq!(cleared.transform(61), Some(64));
 }
 
+/// Block tests the key as played, before it is snapped to the scale.
 #[test]
 fn block_with_the_scale_tests_the_key_as_played() {
     let device =
@@ -178,6 +193,7 @@ fn block_with_the_scale_tests_the_key_as_played() {
     assert_eq!(device.transform(63), Some(62));
 }
 
+/// A note-off ends the key its note-on sent even after the setting changes, and only once.
 #[test]
 fn a_note_off_ends_the_key_its_note_started() {
     let mut device = pitch(&[(param::PITCH, 12.0)]);
@@ -190,6 +206,7 @@ fn a_note_off_ends_the_key_its_note_started() {
     assert!(run(&mut device, &[(10, NoteEvent::Off { key: 60, velocity: 0.25 })]).is_empty());
 }
 
+/// A note Block drops sends nothing, neither its note-on nor its note-off.
 #[test]
 fn a_blocked_note_sends_neither_on_nor_off() {
     let mut device = pitch(&[(param::LOWEST, 60.0), (param::RANGE, 0.0)]);
@@ -200,6 +217,7 @@ fn a_blocked_note_sends_neither_on_nor_off() {
     assert!(out.is_empty(), "{out:?}");
 }
 
+/// Two keys moved to the same key each send their own note-on and note-off.
 #[test]
 fn several_keys_can_sound_the_same_key_and_each_ends_its_own() {
     let mut device = pitch(&[(param::MODE, mode::LIMIT), (param::LOWEST, 60.0), (param::RANGE, 0.0)]);
@@ -223,6 +241,7 @@ fn several_keys_can_sound_the_same_key_and_each_ends_its_own() {
     );
 }
 
+/// A key played again while its note sounds ends that note before the new one starts.
 #[test]
 fn a_key_played_again_while_held_ends_its_first_note() {
     let mut device = pitch(&[(param::PITCH, 2.0)]);
@@ -235,6 +254,7 @@ fn a_key_played_again_while_held_ends_its_first_note() {
     );
 }
 
+/// With too little room in the output, note-ons are left out so every note-off fits.
 #[test]
 fn short_of_room_note_ons_are_left_out_before_note_offs() {
     let mut device = pitch(&[(param::PITCH, 2.0)]);
@@ -268,6 +288,8 @@ fn short_of_room_note_ons_are_left_out_before_note_offs() {
     );
 }
 
+/// Controllers, pitch bend, pressure, scale and all-notes-off pass unchanged, and a note keeps
+/// its velocity and frame.
 #[test]
 fn other_events_velocities_and_frames_pass_unchanged() {
     let mut device = pitch(&[(param::PITCH, -3.0)]);
@@ -287,6 +309,7 @@ fn other_events_velocities_and_frames_pass_unchanged() {
     assert!(run(&mut device, &[(0, NoteEvent::Off { key: 70, velocity: 0.5 })]).is_empty());
 }
 
+/// The audio passes through unchanged and with no latency.
 #[test]
 fn the_sound_passes_untouched() {
     let mut device = pitch(&[(param::PITCH, 7.0)]);

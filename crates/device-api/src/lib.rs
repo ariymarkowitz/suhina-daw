@@ -460,6 +460,8 @@ mod tests {
         assert_eq!(empty.from_normalized(0.5), 0.0);
     }
 
+    /// A scale knows its keys in every octave, snaps a key outside it to the nearest one (a tie going
+    /// down) and steps by degrees, whatever its root.
     #[test]
     fn a_scale_snaps_and_steps_along_its_keys() {
         let major = MusicalScale::new(0, &[0, 2, 4, 5, 7, 9, 11]).unwrap();
