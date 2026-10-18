@@ -94,7 +94,7 @@ crates/
   midi     L3 MIDI controllers: lists the input ports and opens them (midir); their notes play the armed
            tracks' instruments (ADR 0017)
   ui       L3 the main window, the browser and the views (egui, ADR 0009); every change is a command
-  dsp      L0 signal-processing blocks for built-in effects and instruments: smoothing, filters, crossovers, LFOs, shapers, oversampling (ADR 0004)
+  dsp      L0 signal-processing blocks for built-in effects and instruments: smoothing, filters, crossovers, LFOs, shapers, oversampling, delay lines (ADR 0004)
   device-api L0 the Device trait, parameter descriptions, contract tests every device runs
   device-sdk L0 builds and validates data-only `.sd` effect graphs, compiles DSP primitives and delayed feedback for real-time execution; shared node contracts and embedded custom UI canvases/images for authors and agents
   device-registry L1 every built-in effect or instrument by its stable id: makes and lists them (ADR 0004)
@@ -111,6 +111,8 @@ devices/
   compressor stereo-linked, soft knee, side-chain high-pass, attack/release, dry/wet
   fm-synth six operators, 32 algorithms, DX7 voice files; the engine is a port of MSFA (Apache-2.0)
   limiter  brickwall peak limiter with 1.5 ms lookahead; never over the ceiling
+  delay    stereo delay: synced or free times, band-pass in the loop, LFO, Repitch/Fade/Jump, ping-pong, freeze
+  reverb   algorithmic reverb: input band, early reflections, damped feedback delay network, chorus, freeze
 apps/
   suhina-cli   headless CLI: render, play, mcp, commands, audio, plugins, plugin, fm-synth
   suhina       the desktop app (eframe): opens a project and shows it in the ui

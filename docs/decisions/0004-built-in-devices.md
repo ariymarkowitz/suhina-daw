@@ -42,7 +42,7 @@ decision 9.
 
 1. **Three kinds of crate.** `crates/dsp` (`suhina-dsp`) holds building blocks: gain
    conversions, parameter smoothing, filters, crossovers, LFOs, shapers, DC filtering and
-   oversampling; later oscillators, envelopes and delay lines. `crates/device-api` (`suhina-device-api`) holds the interface. Each
+   oversampling, first-order filters, delay lines and allpasses; later oscillators and envelopes. `crates/device-api` (`suhina-device-api`) holds the interface. Each
    device is its own crate under `devices/` (`suhina-device-<name>`), depending on those two
    only. None of them depends on the model, the engine or each other, so a device can be tested
    alone and later built as a CLAP plug-in or moved to its own repository.
