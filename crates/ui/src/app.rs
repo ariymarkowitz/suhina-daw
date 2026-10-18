@@ -1660,6 +1660,10 @@ impl App {
             self.next_ram = Some(ui.ctx().time() + 1.0);
         }
         let ram = self.ram;
+        // Space pressed in a plug-in's editor window: play or stop, as Space here does.
+        for _ in 0..suhina_plugins::take_transport_keys() {
+            self.do_action("transport.toggle", &mut actions);
+        }
 
         egui::Panel::top("menu-bar")
             .exact_size(theme::MENU_BAR)

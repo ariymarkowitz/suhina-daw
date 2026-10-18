@@ -26,6 +26,24 @@
 
 use std::cell::Cell;
 
+thread_local! {
+    /// Space presses caught in the editor windows since the host last sent them on.
+    static TRANSPORT_KEYS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// How many times Space was pressed in an editor window since the last call. The key is kept
+/// from the plug-in: Space plays and stops the engine in every DAW, from its plug-in windows too.
+pub(crate) fn take_transport_keys() -> u32 {
+    TRANSPORT_KEYS.with(|k| k.replace(0))
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn caught_space(repeat: bool) {
+    if !repeat {
+        TRANSPORT_KEYS.with(|k| k.set(k.get().saturating_add(1)));
+    }
+}
+
 pub(crate) use suhina_plugins::Placement;
 
 thread_local! {
@@ -438,6 +456,17 @@ mod imp {
         let mut message: MSG = unsafe { std::mem::zeroed() };
         // SAFETY: the message is filled by the call; null asks for any window of this thread.
         while unsafe { PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+            // Space goes to the engine, not the plug-in: its press (bit 30 of lParam is set on
+            // an auto-repeat) and its release are kept from the window.
+            const WM_KEYDOWN: u32 = 0x0100;
+            const WM_KEYUP: u32 = 0x0101;
+            const VK_SPACE: usize = 0x20;
+            if (message.message == WM_KEYDOWN || message.message == WM_KEYUP) && message.wParam == VK_SPACE {
+                if message.message == WM_KEYDOWN {
+                    super::caught_space(message.lParam & (1 << 30) != 0);
+                }
+                continue;
+            }
             // SAFETY: a message just taken from the queue.
             unsafe { TranslateMessage(&message) };
             // SAFETY: as above.
@@ -794,8 +823,8 @@ mod imp {
     use objc2::MainThreadOnly;
     use objc2::rc::Retained;
     use objc2_app_kit::{
-        NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEventMask, NSView, NSWindow,
-        NSWindowStyleMask,
+        NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEventMask, NSEventModifierFlags,
+        NSEventType, NSFloatingWindowLevel, NSNormalWindowLevel, NSView, NSWindow, NSWindowStyleMask, NSWorkspace,
     };
     use objc2_foundation::{MainThreadMarker, NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 
@@ -970,11 +999,58 @@ mod imp {
                     NSDefaultRunLoopMode,
                     true,
                 ) {
+                    // Space (key code 49) without ⌘, ⌃ or ⌥ goes to the engine, not the plug-in.
+                    let kind = event.r#type();
+                    if (kind == NSEventType::KeyDown || kind == NSEventType::KeyUp)
+                        && event.keyCode() == 49
+                        && !event.modifierFlags().intersects(
+                            NSEventModifierFlags::Command
+                                | NSEventModifierFlags::Control
+                                | NSEventModifierFlags::Option,
+                        )
+                    {
+                        if kind == NSEventType::KeyDown {
+                            super::caught_space(event.isARepeat());
+                        }
+                        continue;
+                    }
                     app.sendEvent(&event);
                 }
             }
         }
         PUMPING.with(|p| p.set(false));
+        float_while_ours();
+    }
+
+    thread_local! {
+        static LEVEL_CHECKED: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+    }
+
+    /// The editors float above other windows while Suhina or this host is the active app, so a
+    /// click in Suhina does not hide them behind it, and sink back to normal windows while
+    /// another app is: macOS has no window ownership across processes, which is how Windows and
+    /// X11 keep them over Suhina. Checked ten times a second.
+    fn float_while_ours() {
+        let due =
+            LEVEL_CHECKED.with(|c| c.get().is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(100)));
+        if !due || !any_open() {
+            return;
+        }
+        LEVEL_CHECKED.with(|c| c.set(Some(std::time::Instant::now())));
+        let front = NSWorkspace::sharedWorkspace().frontmostApplication().map(|a| a.processIdentifier());
+        let ours = |pid: i32| {
+            u32::try_from(pid).is_ok_and(|pid| pid == std::process::id() || pid == std::os::unix::process::parent_id())
+        };
+        let level = if front.is_some_and(ours) { NSFloatingWindowLevel } else { NSNormalWindowLevel };
+        OPEN.with(|open| {
+            if let Ok(open) = open.try_borrow() {
+                for s in open.iter() {
+                    if s.window.level() != level {
+                        s.window.setLevel(level);
+                    }
+                }
+            }
+        });
     }
 
     pub(crate) fn any_open() -> bool {

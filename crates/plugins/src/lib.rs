@@ -436,6 +436,9 @@ impl Group {
                     self.latencies.push((*instance, *latency));
                 }
             }
+            Message::TransportKey => {
+                TRANSPORT_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             Message::Memory { bytes } => {
                 // Only a process that is still there reports; the host sends it once a second,
                 // so the latest is what the control bar adds.
@@ -1007,6 +1010,23 @@ pub fn parse_address(address: &str) -> Result<(String, Name<'static>), PluginErr
         return Err(PluginError::Protocol(format!("bad control address {address:?}")));
     };
     Ok((address.to_string(), name))
+}
+
+/// Space presses the hosts' editor windows sent and the window has not taken yet.
+static TRANSPORT_KEYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many times Space was pressed in a plug-in's editor window since the last call: the window
+/// plays or stops that many times, as Space in its own window does. Takes in what the hosts sent
+/// without waiting for any of them.
+pub fn take_transport_keys() -> u32 {
+    let groups = lock(&GROUPS);
+    for group in groups.values().filter_map(Weak::upgrade) {
+        if let Some(mut group) = try_lock(&group) {
+            group.drain();
+        }
+    }
+    drop(groups);
+    TRANSPORT_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The resident memory, in bytes, of every host process that has reported it and still runs,

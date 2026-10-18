@@ -426,6 +426,10 @@ fn run(address: &str) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         // Between messages: the plug-ins' main-thread callbacks and their editors' windows.
         window::pump();
+        // Space in an editor window plays or stops the engine, as it does in Suhina's own.
+        for _ in 0..window::take_transport_keys() {
+            send(&mut writer, &Message::TransportKey)?;
+        }
         // The engine's control bar adds this process's RAM to the program's; report it without
         // being asked, off the control thread, once a second.
         if last_memory.elapsed() >= MEMORY_EVERY {

@@ -22,7 +22,7 @@
 use serde_json::{Value, json};
 
 /// Bumped whenever a message changes; both sides refuse a different version.
-pub const VERSION: u64 = 9;
+pub const VERSION: u64 = 10;
 /// Longest line either side accepts; state blobs are hex, so this bounds them at 32 MiB.
 pub const MAX_LINE: usize = 64 * 1024 * 1024;
 
@@ -220,6 +220,9 @@ pub enum Message {
     Memory {
         bytes: u64,
     },
+    /// Space was pressed in one of the host's editor windows (unasked): the engine plays or
+    /// stops as Space does in its own window, since the key never reaches it there.
+    TransportKey,
     CloseEditor {
         instance: u32,
     },
@@ -257,7 +260,12 @@ impl Message {
             | Self::CloseEditor { instance }
             | Self::EditorClosed { instance } => Some(*instance),
             Self::Error { instance, .. } => *instance,
-            Self::Hello { .. } | Self::Ping { .. } | Self::Pong { .. } | Self::Memory { .. } | Self::Quit => None,
+            Self::Hello { .. }
+            | Self::Ping { .. }
+            | Self::Pong { .. }
+            | Self::Memory { .. }
+            | Self::TransportKey
+            | Self::Quit => None,
         }
     }
 
@@ -305,6 +313,7 @@ impl Message {
                 json!({ "op": "latency_changed", "instance": instance, "latency": latency })
             }
             Self::Memory { bytes } => json!({ "op": "memory", "bytes": bytes }),
+            Self::TransportKey => json!({ "op": "transport_key" }),
             Self::CloseEditor { instance } => json!({ "op": "close_editor", "instance": instance }),
             Self::EditorClosed { instance } => json!({ "op": "editor_closed", "instance": instance }),
             Self::Quit => json!({ "op": "quit" }),
@@ -394,6 +403,7 @@ impl Message {
             }
             "latency_changed" => Self::LatencyChanged { instance: instance()?, latency: small("latency")? },
             "memory" => Self::Memory { bytes: number("bytes")? },
+            "transport_key" => Self::TransportKey,
             "close_editor" => Self::CloseEditor { instance: instance()? },
             "editor_closed" => Self::EditorClosed { instance: instance()? },
             "quit" => Self::Quit,
@@ -438,9 +448,10 @@ mod tests {
 
     #[test]
     fn every_message_round_trips() {
-        assert_eq!(VERSION, 9);
+        assert_eq!(VERSION, 10);
         let messages = [
             Message::Hello { version: VERSION },
+            Message::TransportKey,
             Message::Load { instance: 3, plugin: "test:gain".into(), link: "/dev/shm/x".into(), sample_rate: 44_100.0 },
             Message::Loaded { instance: u32::MAX, latency: 64 },
             Message::Unload { instance: 0 },
