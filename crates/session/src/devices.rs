@@ -46,6 +46,26 @@ fn midi_prefix(devices: &[Device]) -> usize {
     devices.iter().take_while(|device| chain_role(device) == Some(Role::MidiEffect)).count()
 }
 
+/// The first position an audio effect may take: after the MIDI effects that lead the chain and
+/// the instrument right after them, whether or not there is one.
+fn first_effect_position(devices: &[Device]) -> usize {
+    let prefix = midi_prefix(devices);
+    prefix + usize::from(devices.get(prefix).and_then(chain_role) == Some(Role::Instrument))
+}
+
+/// Refuses an audio effect at `position` before the track's MIDI effects or its instrument.
+fn check_effect_position(devices: &[Device], position: usize) -> Result<(), CommandError> {
+    let first = first_effect_position(devices);
+    if position < first {
+        return Err(format!(
+            "an effect goes after the track's MIDI effects and instrument (position {first} to {})",
+            devices.len()
+        )
+        .into());
+    }
+    Ok(())
+}
+
 pub(crate) fn sd_graph(device: &Device) -> Result<suhina_device_sdk::DeviceGraph, CommandError> {
     let bytes = device.state.as_deref().ok_or("the .sd graph is missing")?;
     let text = std::str::from_utf8(bytes).map_err(|_| "the .sd graph is invalid UTF-8")?;
@@ -327,8 +347,8 @@ pub(crate) fn add(session: &mut Session, params: &Value) -> Result<Value, Comman
         )
         .into());
     }
-    if has_instrument && !instrument && !midi_effect && position <= midi_prefix {
-        return Err("position 0 is the track's instrument; effects go after it".into());
+    if !instrument && !midi_effect {
+        check_effect_position(&channel.devices, position)?;
     }
     let device = Device {
         name: info.name.to_string(),
@@ -378,6 +398,16 @@ pub(crate) fn add_sd(session: &mut Session, params: &Value) -> Result<Value, Com
             .filter(|&n| n <= max_position)
             .ok_or_else(|| format!("position must be from 0 to {max_position}"))?,
     };
+    match graph.role {
+        suhina_device_sdk::DeviceRole::Instrument if position != midi_prefix => {
+            return Err(format!(
+                "an instrument goes after the track's {midi_prefix} MIDI effects (position {midi_prefix})"
+            )
+            .into());
+        }
+        suhina_device_sdk::DeviceRole::Effect => check_effect_position(&channel.devices, position)?,
+        _ => {}
+    }
     let values: Vec<DeviceParam> =
         graph.parameters.iter().map(|parameter| DeviceParam::new(parameter.id.clone(), parameter.default)).collect();
     let state = graph.to_sd().map_err(|e| e.to_string())?.into_bytes();
@@ -711,6 +741,9 @@ pub(crate) fn add_plugin(session: &mut Session, params: &Value) -> Result<Value,
             "an instrument goes after the track's {midi_prefix} MIDI effects (position {midi_prefix})"
         )
         .into());
+    }
+    if !instrument {
+        check_effect_position(&channel.devices, position)?;
     }
     let device = Device {
         name: plugin.name.clone(),

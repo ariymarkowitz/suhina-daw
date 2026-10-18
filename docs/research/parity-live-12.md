@@ -365,8 +365,8 @@ Two observations the numbers make plain:
    biggest block of the manual and Suhina covers the smallest share of them. Nothing else moves the
    headline number as much.
 2. **Whole features, not thin features, dominate the rest.** Racks and comping are each absent,
-   not partial, and MIDI effects have only begun (the pitch effect, one of eight). They are also the areas where a DAW is judged by people
-   coming from Live, because a missing channel is felt at once.
+   not partial, and MIDI effects have only begun, with the pitch effect. They are also the areas
+   where a DAW is judged by people coming from Live, because a missing channel is felt at once.
 
 ## 8. What the roadmap covers, and what nothing covers
 
