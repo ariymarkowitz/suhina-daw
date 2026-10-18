@@ -1383,7 +1383,8 @@ fn audio_overlaps_follow_stacking_and_undo() {
     for c in clips.as_array().unwrap() {
         assert_eq!(c["track"], 1);
         let index = c["index"].as_u64().unwrap() as usize;
-        assert!(session.project().arrangement.lanes[0].clips.get(index).is_some());
+        let clip = &session.project().arrangement.lanes[0].clips[index];
+        assert_eq!(c["id"], json!(clip.id.0), "the id clip.move takes");
     }
 
     // The track filter, by name and by id.

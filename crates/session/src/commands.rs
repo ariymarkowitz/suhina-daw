@@ -2149,14 +2149,15 @@ fn audio_overlaps(session: &mut Session, params: &Value) -> Result<Value, Comman
     };
     let track_name = |id: TrackId| p.tracks.iter().find(|t| t.id == id).map(|t| t.name.as_str()).unwrap_or_default();
     let clip = |place: suhina_model::OverlapClip| {
-        let name = p
-            .arrangement
-            .lanes
-            .get(place.lane)
-            .and_then(|l| l.clips.get(place.index))
-            .and_then(|c| p.content(c.content))
-            .map(|c| c.name.as_str());
-        json!({ "track": place.track.0, "track_name": track_name(place.track), "index": place.index, "name": name })
+        let found = p.arrangement.lanes.get(place.lane).and_then(|l| l.clips.get(place.index));
+        let name = found.and_then(|c| p.content(c.content)).map(|c| c.name.as_str());
+        json!({
+            "id": found.map(|c| c.id.0),
+            "track": place.track.0,
+            "track_name": track_name(place.track),
+            "index": place.index,
+            "name": name,
+        })
     };
     let found = p.audio_overlaps();
     let overlaps: Vec<Value> = found
