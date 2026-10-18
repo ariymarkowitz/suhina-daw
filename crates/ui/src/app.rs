@@ -1506,6 +1506,10 @@ impl App {
             }
             return;
         }
+        // Playing stops a sample previewing in the browser: the two would play over each other.
+        if action.id == "transport.play" {
+            browser_view::stop_preview(&mut self.browser, &mut self.projects);
+        }
         // A critical operation is backed up first, when the settings say so.
         self.projects.back_up_before(action.id);
         let Ok(session) = self.projects.session_mut(None) else { return };
@@ -3684,6 +3688,10 @@ impl App {
         }
         if out.pick_folder {
             self.ask_pick(PickField::BrowserFolder);
+        }
+        if out.toggle_autoplay {
+            self.settings.preview_autoplay = !self.settings.preview_autoplay;
+            self.settings_changed = true;
         }
         if let Some(path) = out.open_project {
             self.request_open(path);
