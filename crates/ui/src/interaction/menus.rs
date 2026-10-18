@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn audio_input_picks_offer_monos_and_pairs() {
         let picks = audio_input_picks(&AudioInput::default(), 0);
-        let labels: Vec<&str> = picks.iter().map(|(l, _)| *l).collect();
+        let labels: Vec<&str> = picks.iter().map(|(l, _)| l.as_str()).collect();
         assert!(labels.contains(&"In 1"), "{labels:?}");
         assert!(labels.contains(&"In 8"), "{labels:?}");
         assert!(labels.contains(&"In 1/2"), "{labels:?}");

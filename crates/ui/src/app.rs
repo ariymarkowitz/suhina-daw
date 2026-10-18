@@ -308,6 +308,9 @@ pub struct App {
     /// The device selected in the detail area (its panel's click): the track and the device's
     /// index, for the Delete key to take off the track. Window state.
     selected_device: Option<(TrackId, usize)>,
+    /// A device panel was the last thing clicked (a click in the view clears it): Delete and the
+    /// mute key act on the selected device then, even while a clip is selected too.
+    device_focus: bool,
     /// A device removal awaiting its undo or redo: the track, the index it left, how long the
     /// chain was, and where the selection pointed before it followed the removal. Window state.
     pending_device_remove: Option<(TrackId, usize, usize, usize)>,
@@ -438,6 +441,7 @@ impl App {
             keymap_changed: false,
             detail_showing: detail_view::Showing::Clip,
             selected_device: None,
+            device_focus: false,
             pending_device_remove: None,
             detail_open: true,
             detail_height: DETAIL_HEIGHT,
@@ -2067,6 +2071,9 @@ impl App {
             )
         };
 
+        if ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| view.contains(p))) {
+            self.device_focus = false;
+        }
         // The splitter: dragged to make the detail area bigger or smaller; under the
         // Arrangement view, past the view's least height the piano roll goes to the top, and a
         // double-click takes it there and back.
@@ -2193,6 +2200,7 @@ impl App {
         }
         self.detail_cap = picked.inner.content_height.map(|h| h as f32);
         if picked.inner.clicked.is_some() {
+            self.device_focus = true;
             self.selected_device = picked.inner.clicked;
             // A fresh pick says where the user is now: a removal's undo or redo no longer
             // moves the selection for them.
@@ -3184,7 +3192,7 @@ impl App {
                 // A device selected in the detail area (its panel's click) is deleted before any
                 // clip, while the detail shows the chain.
                 if action == "selection.delete"
-                    && self.detail_shows_devices()
+                    && (self.detail_shows_devices() || self.device_focus)
                     && let Some((track, index)) = self.selected_device
                     && self.session().is_some_and(|s| {
                         let p = s.project();
@@ -3262,6 +3270,22 @@ impl App {
                 }
             }
             "selection.mute" => {
+                // A device panel clicked last: the key turns that device off or on again, as its
+                // header's square does.
+                if (self.detail_shows_devices() || self.device_focus)
+                    && let Some((track, index)) = self.selected_device
+                    && let Some(enabled) = self.session().and_then(|s| {
+                        let p = s.project();
+                        let channel = p.tracks.iter().find(|t| t.id == track).and_then(|t| t.channel)?;
+                        p.channels.iter().find(|c| c.id == channel)?.devices.get(index).map(|d| d.enabled)
+                    })
+                {
+                    actions.push(Action::new(
+                        "device.setEnabled",
+                        json!({ "track": track.0, "device": index, "enabled": !enabled }),
+                    ));
+                    return;
+                }
                 let clips = self.selected_clip_list();
                 if clips.is_empty() {
                     return;

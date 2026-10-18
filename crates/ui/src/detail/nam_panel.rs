@@ -371,6 +371,26 @@ fn toggle(
     response
 }
 
+/// The amp's big on/off: lit while the device runs; a click turns the whole device off or on
+/// again, as the header's square and the 0 key do.
+fn power(ui: &Ui, rect: Rect, track: TrackId, device: &DeviceBox, prefix: &str, actions: &mut Vec<Action>) {
+    let id = egui::Id::new(("nam-power", track.0, device.index));
+    let response = ui.interact(rect, id, Sense::click());
+    let (fill, text) = widgets::toggle_colors(ui, &response, device.enabled);
+    ui.painter().rect_filled(rect, 3.0, fill);
+    let word = if device.enabled { "On" } else { "Off" };
+    widgets::text_in(ui.painter(), rect, Align2::CENTER_CENTER, word, theme::ui_font(theme::TEXT_SMALL), text);
+    if response.clicked() {
+        actions.push(Action::new(
+            "device.setEnabled",
+            serde_json::json!({ "track": track.0, "device": device.index, "enabled": !device.enabled }),
+        ));
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{prefix}: device {}", word.to_lowercase()))
+    });
+}
+
 /// A file's dropdown pill in `rect`, its shown text and the files under it. Returns the row's
 /// response; `picked` set when the panel asks for a switch.
 #[allow(clippy::too_many_arguments)]
@@ -563,8 +583,10 @@ fn rows_and_picks(
     );
     let file_down =
         Rect::from_min_size(egui::pos2(left + wide - STEP - 4.0, bottom - ROW_HEIGHT), egui::vec2(STEP, ROW_HEIGHT));
+    // The file's name without its folder or extension ("Testi amp"), whichever separator the
+    // path uses.
     let file_shown =
-        if current.is_empty() { String::new() } else { current.rsplit('/').next().unwrap_or(current).to_owned() };
+        std::path::Path::new(current).file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
     let (_, file_pick) = file_row(
         ui,
         file_rect,
@@ -616,15 +638,14 @@ pub(crate) fn show_amp(
         ));
     }
     let controls = controls_rect(rect, top, bottom);
-    // The Bypass button at the controls' top left, over everything else.
-    toggle(
+    // The device's own on/off, bigger, at the controls' top left: the same switch as the
+    // header's square (`device.setEnabled`), both always showing the same state.
+    power(
         ui,
         Rect::from_min_max(controls.left_top(), egui::pos2(controls.left() + 48.0, controls.top() + ROW_HEIGHT)),
         track,
-        device.index,
+        device,
         &prefix,
-        amp_parameter("bypass"),
-        on_of(device, amp_parameter("bypass")),
         actions,
     );
     // The Gain and Volume columns at the sides; the middle holds the trio, the Mid Freq's
@@ -792,8 +813,8 @@ pub(crate) fn show_cab(
     // The Ø and HP buttons.
     let toggles =
         Rect::from_min_max(middle_rect.left_top(), egui::pos2(middle_rect.right(), middle_rect.top() + ROW_HEIGHT));
-    let cells = split(toggles, 3);
-    for (cell, id) in cells.iter().zip(["bypass", "phase", "hpOn"]) {
+    let cells = split(toggles, 2);
+    for (cell, id) in cells.iter().zip(["phase", "hpOn"]) {
         let parameter = cab_parameter(id);
         toggle(
             ui,
