@@ -607,7 +607,6 @@ fn chain_row(
         if rect.left() > area.right() {
             break;
         }
-        name_for_readers(ui, rect.intersect(area), device);
         let clicked = device_panel(
             ui,
             &painter.with_clip_rect(area),
@@ -737,7 +736,6 @@ fn chain_stack(
         if rect.top() > area.bottom() {
             break;
         }
-        name_for_readers(ui, rect.intersect(area), device);
         let clicked = device_panel(
             ui,
             &painter.with_clip_rect(area),
