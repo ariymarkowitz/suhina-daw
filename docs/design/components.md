@@ -198,7 +198,9 @@ moves it, a double-click gives 166 px back.
 again below it. Top to bottom, the strip at its tallest: name, device list, sends row, pan row,
 volume readout, fader with the meter, toggles. Between the name and the device list: the output.
 On an audio track, the input's block (Audio From and the monitor's In / Auto / Off) sits above
-the toggles from 236 px ([spec](../spec/ui-session-view.md) › I/O section).
+the toggles from 236 px ([spec](../spec/ui-session-view.md) › I/O section). While any strip shows
+that block, every strip keeps its room (empty where a track has no input), so the sends, pan,
+fader and toggles stay in line across the mixer.
 
 | Mixer height | Adds | Size |
 |---|---|---|
@@ -209,7 +211,7 @@ the toggles from 236 px ([spec](../spec/ui-session-view.md) › I/O section).
 | 166 px (default) | Name row, at the top | 16 px and 2 px under it |
 | 192 px | Output row, under the name | 16 px and 4 px under it |
 | 236 px | On an audio track, the input's block above the toggles: the "Audio From" caption and the source's dropdown, then the monitor's In / Auto / Off buttons | caption 12 px, dropdown 16 px, buttons 18 px, 3 px between the parts; the fader loses their height first |
-| 260 px | Device list, under the output | at least four 16 px rows and 4 px under it; the fader takes the height up to 140 px, the list the rest |
+| 260 px | Device list, under the output | at least four 16 px rows and 4 px under it; the fader takes the height up to 140 px, the list the rest. A divider under the lists (6 px hit area, a 2 px `accent` line hovered or dragged) sets the fader's height for every strip at once: dragged down, the lists grow and the controls get lower, down to a 48 px fader; up, until one device row is left. A double-click makes the split automatic again. Settings keeps it (`session_strip_fader`, 0 is automatic) |
 
 | Part | Spec |
 |---|---|

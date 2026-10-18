@@ -81,6 +81,12 @@ pub struct SessionViewState {
     /// top edge sets it when it ends; [`SessionViewState::mixer_dragged`] is the height meanwhile.
     pub mixer_height: f32,
     mixer_dragged: Option<f32>,
+    /// The fader's height the divider under the strips' device lists sets (Settings keeps it; 0
+    /// is automatic), and the height while it is dragged.
+    pub strip_fader: f32,
+    pub(crate) strip_fader_dragged: Option<f32>,
+    /// Some strip holds an audio input's block, so every strip keeps its room.
+    pub(crate) reserve_input: bool,
     /// How far each strip's device list is scrolled.
     pub(crate) device_scroll: std::collections::BTreeMap<TrackId, f32>,
     /// The device row clicked last in a strip (track, device index): it stays lit.
@@ -96,6 +102,11 @@ pub struct SessionViewState {
 }
 
 impl SessionViewState {
+    /// The fader's height the strips use: the divider's while it is dragged, else the saved one.
+    pub(crate) fn strip_fader_shown(&self) -> f32 {
+        self.strip_fader_dragged.unwrap_or(self.strip_fader)
+    }
+
     /// The mixer's height being dragged to, and while no drag runs.
     pub fn mixer_dragged(&self) -> Option<f32> {
         self.mixer_dragged
@@ -230,6 +241,7 @@ pub fn show(
     let mut track_x = area.left() - state.scroll.x;
     let mut return_x = returns_x;
     let mut track_number = 0;
+    state.reserve_input = grid.columns.iter().any(|c| c.plays_audio);
     for (index, column) in grid.columns.iter().enumerate() {
         let width = column_width(column);
         let (x, clip) = if column.kind == ColumnKind::Return {

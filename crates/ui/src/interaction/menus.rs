@@ -50,8 +50,8 @@ pub fn audio_input_text(input: &AudioInput) -> String {
 /// neighbouring pair. A pick runs `track.setAudioInput`; with no device open, the first eight
 /// appear, so a project's choices are setable before an interface is there. The list is what
 /// the track's menu and the strip's dropdown both offer.
-pub fn audio_input_picks(input: &AudioInput, channels: u16) -> Vec<(&'static str, serde_json::Value)> {
-    let mut picks = vec![("No input", json!({ "input": "none" }))];
+pub fn audio_input_picks(input: &AudioInput, channels: u16) -> Vec<(String, serde_json::Value)> {
+    let mut picks = vec![("No input".to_string(), json!({ "input": "none" }))];
     let channels = if channels == 0 { 8 } else { channels };
     let chosen = match input.channels {
         InputChannels::None => 0,
@@ -60,11 +60,11 @@ pub fn audio_input_picks(input: &AudioInput, channels: u16) -> Vec<(&'static str
     };
     let shown = channels.max(chosen);
     for c in 1..=shown {
-        picks.push((Box::leak(format!("In {c}").into_boxed_str()), json!({ "input": c.to_string() })));
+        picks.push((format!("In {c}"), json!({ "input": c.to_string() })));
     }
     for c in (1..shown).step_by(2) {
         let pair = format!("{c}/{}", c + 1);
-        picks.push((Box::leak(format!("In {pair}").into_boxed_str()), json!({ "input": pair })));
+        picks.push((format!("In {pair}"), json!({ "input": pair })));
     }
     picks
 }
@@ -112,7 +112,7 @@ pub fn audio_input_choices(ui: &mut Ui, track: TrackId, input: &AudioInput, chan
         }
     };
     for (label, params) in audio_input_picks(input, channels) {
-        pick(ui, label, audio_is(input, &params), params);
+        pick(ui, &label, audio_is(input, &params), params);
     }
     if channels == 0 {
         ui.label(text("No input device: choose one in Settings › Audio"));

@@ -1725,6 +1725,7 @@ impl App {
                         // Both views fold the same groups: the Arrangement view keeps them.
                         self.view.folded = self.arrangement.folds.groups();
                         self.view.mixer_height = self.settings.view.mixer_height as f32;
+                        self.view.strip_fader = self.settings.view.strip_fader as f32;
                         self.view.double_click_does_nothing = !self.settings.view.double_click_clip;
                         session_view::show(ui, grid, &progress, &mut self.view, &mut actions);
                         self.arrangement.folds.set_groups(&self.view.folded);
@@ -1908,6 +1909,11 @@ impl App {
         let height = self.view.mixer_height.round() as u32;
         if height != self.settings.view.mixer_height {
             self.settings.view.mixer_height = height;
+            self.settings_changed = true;
+        }
+        let fader = self.view.strip_fader.round() as u32;
+        if fader != self.settings.view.strip_fader {
+            self.settings.view.strip_fader = fader;
             self.settings_changed = true;
         }
         if std::mem::take(&mut self.view.open_detail) {

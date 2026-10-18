@@ -462,8 +462,15 @@ mod tests {
 
     /// Kept in `settings.json` but changed outside the Settings window: the browser and the map
     /// window as they were left.
-    const NOT_IN_THE_WINDOW: [&str; 6] =
-        ["browser", "browser_width", "map_dot_size", "map_window", "map_window_rect", "session_mixer_height"];
+    const NOT_IN_THE_WINDOW: [&str; 6] = [
+        "browser",
+        "browser_width",
+        "map_dot_size",
+        "map_window",
+        "map_window_rect",
+        "session_mixer_height",
+        "session_strip_fader",
+    ];
 
     fn saved_keys() -> Vec<String> {
         let settings = Settings { midi_inputs_off: vec!["Keys".into()], ..Settings::default() };
