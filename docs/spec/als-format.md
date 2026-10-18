@@ -7,6 +7,7 @@ last_verified: 2026-10-15
 covers:
   - crates/als/src/lib.rs
   - crates/als/src/devices.rs
+  - crates/als/src/scale.rs
   - crates/als/src/vst2.rs
   - crates/als/tests/synthetic.rs
   - crates/als/tests/corpus.rs
@@ -175,9 +176,9 @@ velocity 100 in one clip and 98 in another.
 
 ### Scale
 
-A clip's scale, which MIDI effects with Use Current Scale on follow (see *MIDI effects* below),
-is stored in the clip. The same elements also sit at the top of `LiveSet`, for the set's own
-scale **(hypothesis: the one new clips take)**.
+A clip's scale, which MIDI effects with Use Current Scale on follow (see *MIDI effects* below,
+and Pitch in [`pitch.md`](pitch.md)), is stored in the clip. The same elements also sit at the top of
+`LiveSet`, for the set's own scale **(hypothesis: the one new clips take)**.
 
 | What | Where | Encoding |
 |---|---|---|
@@ -194,6 +195,18 @@ Pentatonic. **(Hypothesis:)** the rest of the Name list is the Scale device's li
 (`MidiScale`'s `InternalScale`) without its first entry, the user's own grid, so Name n is
 `InternalScale` n + 1. Not observed yet: whether a clip with Scale Mode off keeps its root and
 scale, and the scale of an audio clip (possible since Live 12.1).
+
+The importer reads a MIDI clip's scale into its content's scale
+([ADR 0001](../decisions/0001-daw-neutral-model.md) › Amendment: clip scales;
+`crates/als/src/scale.rs`), so MIDI effects that follow the scale, such as Pitch, follow it in
+Suhina too. Twelve of Live's scales have a Suhina mode: Name `0` Major, `1` Minor, `2` Dorian,
+`3` Mixolydian, `4` Lydian, `5` Phrygian, `6` Locrian, `10` Minor Blues (Suhina's Blues, the
+same six notes), `11` Minor Pentatonic, `12` Major Pentatonic, `13` Harmonic Minor and `17`
+Melodic Minor; those past `2` and `11` rest on the hypothesis above. A clip with Scale Mode off,
+or without `IsInKey` (sets from before Live 12), has no scale. A clip with Scale Mode on comes in
+without a scale, with a warning, when its scale has no Suhina mode (Whole Tone and the 22 others),
+or when Root or Name is missing, not a whole number, or out of range (Root past 11, Name past
+34). The set's own scale (`InKey`) is not read yet.
 
 ## Audio clips
 

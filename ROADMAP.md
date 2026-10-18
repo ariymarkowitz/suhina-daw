@@ -160,8 +160,9 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
 - device chains: VST2 and VST3 plug-ins with their id and state kept; the format's own devices:
   those Suhina has a counterpart for with their settings, the rest as placeholders
   ([device import](docs/spec/device-import.md))
-- the Pitch MIDI effect, with its settings ([pitch](docs/spec/pitch.md)); clip scales are not
-  read yet
+- the Pitch MIDI effect, with its settings ([pitch](docs/spec/pitch.md))
+- a MIDI clip's scale (root and mode), which Pitch follows; a scale Suhina has no mode for comes
+  in as none, with a warning
 - anything not understood yet is skipped with a warning; the project still opens
 
 ### M2 Playing

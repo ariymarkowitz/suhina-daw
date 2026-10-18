@@ -113,9 +113,11 @@ Live's Pitch is the element `MidiPitcher`; every value is `<Element>/Manual@Valu
 | `StepWidth`, `StepWidthScaleDegrees` | 1 … 48, 1 … 30 | not mapped yet (Decisions, 2) |
 | `…ScrollPos…` | view positions | not mapped: not part of the device |
 
-A mode outside the list is Block, with a warning. The scale of a Live clip is not imported yet,
-so an imported Pitch with Follow Scale on counts degrees as semitones until the clip is given a
-scale in Suhina.
+A mode outside the list is Block, with a warning. The importer also reads the scale of each Live
+MIDI clip ([`als-format.md`](als-format.md) › MIDI clips › Scale), so an imported Pitch with
+Follow Scale on moves notes along the clip's scale as in Live. A Live scale that Suhina has no
+mode for (Whole Tone, for one) comes in as no scale, with a warning, and there degrees count as
+semitones until the clip is given a scale in Suhina.
 
 ## Decisions
 
@@ -173,4 +175,6 @@ transposed notes without the device, in every block size; without an instrument 
 play the transposed notes, before the audio effects; blocked notes are silent; the clip's
 scale reaches the device from the arrangement and from launched clips; a Pitch lane that moves
 under a held note leaves no note hanging. `crates/session/tests/devices.rs` checks where
-`device.add` puts it, and `crates/als/src/devices.rs` the import.
+`device.add` puts it, and `crates/als/src/devices.rs` the import. `crates/als/tests/synthetic.rs`
+renders an imported Pitch with Follow Scale on over a clip imported in D Dorian, and checks that
+it moves the notes by degrees of that scale.
