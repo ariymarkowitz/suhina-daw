@@ -2127,33 +2127,55 @@ impl App {
         }
     }
 
-    /// Reads the plug-in library through its commands, for the Settings page.
+    /// Reads the plug-in library through its commands, for the Settings page and the plug-in
+    /// manager.
     fn read_plugins(&mut self) {
         self.plugins_read = true;
         let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
-        let list = |v: &serde_json::Value| v.as_array().map(|a| a.iter().map(text).collect()).unwrap_or_default();
+        let empty = Vec::new();
         match self.projects.execute("plugins.folders", &json!({})) {
             Ok(folders) => {
-                self.plugins.standard = list(&folders["standard"]);
-                self.plugins.added = list(&folders["added"]);
+                self.plugins.folders = folders["folders"]
+                    .as_array()
+                    .unwrap_or(&empty)
+                    .iter()
+                    .map(|f| settings_view::FolderRow {
+                        path: text(&f["folder"]),
+                        format: text(&f["format"]),
+                        enabled: f["enabled"].as_bool().unwrap_or(true),
+                        standard: f["standard"].as_bool().unwrap_or(false),
+                    })
+                    .collect();
             }
             Err(e) => self.status = Status::Error(e.0),
         }
         match self.projects.execute("plugins.list", &json!({})) {
             Ok(found) => {
-                let empty = Vec::new();
                 self.plugins.found = found["plugins"]
                     .as_array()
                     .unwrap_or(&empty)
                     .iter()
-                    .map(|p| [text(&p["name"]), text(&p["vendor"]), text(&p["format"]), text(&p["version"])])
+                    .map(|p| {
+                        let file = text(&p["file"]);
+                        let format = text(&p["format"]);
+                        let spec = format!("{format}:{file}#{}", text(&p["id"]));
+                        settings_view::PluginRow {
+                            name: text(&p["name"]),
+                            vendor: text(&p["vendor"]),
+                            kind: text(&p["type"]),
+                            format,
+                            version: text(&p["version"]),
+                            file,
+                            spec,
+                            enabled: p["enabled"].as_bool().unwrap_or(true),
+                        }
+                    })
                     .collect();
-                self.plugins.failed = found["failed"]
-                    .as_array()
-                    .unwrap_or(&empty)
-                    .iter()
-                    .map(|f| (text(&f["file"]), text(&f["reason"])))
-                    .collect();
+                let reasons = |list: &serde_json::Value| -> Vec<(String, String)> {
+                    list.as_array().unwrap_or(&empty).iter().map(|f| (text(&f["file"]), text(&f["reason"]))).collect()
+                };
+                self.plugins.failed = reasons(&found["failed"]);
+                self.plugins.incompatible = reasons(&found["incompatible"]);
             }
             Err(e) => self.status = Status::Error(e.0),
         }
@@ -2164,12 +2186,59 @@ impl App {
     /// on another thread, so the window keeps drawing, and the result replaces the library.
     fn plugin_request(&mut self, request: PluginRequest) {
         match request {
-            PluginRequest::AddFolder(folder) => {
-                match self.projects.execute("plugins.addFolder", &json!({ "folder": folder })) {
+            PluginRequest::AddFolder(folder, format) => {
+                let params = json!({ "folder": folder, "format": format.name() });
+                match self.projects.execute("plugins.addFolder", &params) {
                     Ok(_) => self.plugins.new_folder.clear(),
                     Err(e) => self.status = Status::Error(e.0),
                 }
                 self.plugins_read = false;
+            }
+            PluginRequest::SetFolderEnabled(folder, enabled) => {
+                let params = json!({ "folder": folder, "enabled": enabled });
+                if let Err(e) = self.projects.execute("plugins.setFolderEnabled", &params) {
+                    self.status = Status::Error(e.0);
+                } else {
+                    self.status = Status::Hint(format!(
+                        "{folder} is {}; the next scan {}",
+                        if enabled { "on" } else { "off" },
+                        if enabled { "looks in it" } else { "drops its plug-ins" }
+                    ));
+                }
+                self.plugins_read = false;
+            }
+            PluginRequest::SetEnabled(spec, enabled) => {
+                match self.projects.execute("plugins.setEnabled", &json!({ "plugin": spec, "enabled": enabled })) {
+                    Ok(result) => {
+                        let name = result["plugin"].as_str().unwrap_or_default().to_string();
+                        self.status = Status::Done(if enabled {
+                            format!("{name} is on")
+                        } else {
+                            format!("{name} is off: not offered, and not loaded")
+                        });
+                        // The browser lists what sessions see, so it is listed again.
+                        self.browser.relist();
+                    }
+                    Err(e) => self.status = Status::Error(e.0),
+                }
+                self.plugins_read = false;
+            }
+            PluginRequest::ScanFile(file) => {
+                let mut library = self.projects.library_mut().clone();
+                let (done, receive) = std::sync::mpsc::channel();
+                let started = std::thread::Builder::new().name("suhina-plugin-scan".into()).spawn(move || {
+                    let report =
+                        library.scan_file_again(std::path::Path::new(&file)).map(|r| (r.read.len(), r.failed.len()));
+                    let _unheard = done.send(ScanDone { library, report });
+                });
+                match started {
+                    Ok(_) => {
+                        self.scan = Some(receive);
+                        self.plugins.scanning = true;
+                        self.status = Status::Hint("Scanning the file again".into());
+                    }
+                    Err(e) => self.status = Status::Error(format!("could not start the scan: {e}")),
+                }
             }
             PluginRequest::RemoveFolder(folder) => {
                 if let Err(e) = self.projects.execute("plugins.removeFolder", &json!({ "folder": folder })) {
@@ -2345,7 +2414,25 @@ impl App {
                     SETTINGS_SIZE.y.min(window.height() - 2.0 * PAD),
                 );
                 let panel = Rect::from_center_size(window.center(), size);
-                ui.scope_builder(egui::UiBuilder::new().max_rect(panel), |ui| self.settings_page(ui));
+                if self.plugins.manager.open {
+                    // The plug-in manager takes the dialog's place until it is closed.
+                    if !self.plugins_read {
+                        self.read_plugins();
+                    }
+                    let out = ui
+                        .scope_builder(egui::UiBuilder::new().max_rect(panel), |ui| {
+                            crate::settings::plugin_manager::show(ui, panel, &mut self.plugins)
+                        })
+                        .inner;
+                    if out.close {
+                        self.plugins.manager.open = false;
+                    }
+                    if let Some(request) = out.request {
+                        self.plugin_request(request);
+                    }
+                } else {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(panel), |ui| self.settings_page(ui));
+                }
                 ui.painter().rect_stroke(panel, 0.0, theme::hairline(theme::border_strong()), egui::StrokeKind::Inside);
             },
         );

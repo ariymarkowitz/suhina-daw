@@ -68,8 +68,8 @@ Both play a sample as soon as the pointer is over it.
 
 ## Where the map is shown
 
-- **In the browser.** A **List | Map** switch above the results changes the results area into
-  the map. The sidebar, the category filters, search, tags and the preview strip stay as they
+- **In the browser.** The **Sample map** button at the end of the category row changes the
+  results area into the map; a category button shows the list again. The sidebar, the category filters, search, tags and the preview strip stay as they
   are. The browser can be widened to half the window.
 - **Large.** The **Large** button at the map's corner (and View › Sample map,
   **Ctrl+Shift+M**) shows the map in the main area in place of the Session or Arrangement view,

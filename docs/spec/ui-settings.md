@@ -38,7 +38,7 @@ is on exactly one page, under one heading.
 | Audio | Now | Output, Latency, Key to sound, Input now (read only), List devices again |
 | MIDI | MIDI inputs | Each MIDI input port, On or Off |
 | Plug-ins | Editors | Editors (Window, Device view) |
-| Plug-ins | Library | Folders, Scan and Rescan all, the plug-ins found |
+| Plug-ins | Library | Folders (each on or off, with its format; add with a format, remove), Scan and Rescan all with a count of what was found, Plug-in manager (opens the [plug-in manager](plugin-manager.md)) |
 | Arrangement | Clips | Allow sample stacking, Allow MIDI stacking |
 | Arrangement | Tracks | Track headers |
 | Session and mixer | Launching | Select on launch |

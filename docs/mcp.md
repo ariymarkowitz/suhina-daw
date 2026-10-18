@@ -350,7 +350,12 @@ suhina-cli mcp --read-root ./projects --write-root ./renders [--audio]
 
 - **Plug-ins.** `plugins.scan`, `plugins.list` and `plugins.folders` (through `command_run`)
   find and list installed plug-ins; a scan loads each new or changed plug-in file in a process
-  of its own ([ADR 0006](decisions/0006-plug-in-hosting.md)). `plugins.check` lists an open
+  of its own and tries files that failed again ([ADR 0006](decisions/0006-plug-in-hosting.md)).
+  `plugins.list` with `ignored: true` also lists the files that hold no plug-ins; it always lists
+  the files built for another processor (`incompatible`), and each plug-in's type and whether it
+  is switched on. `plugins.setEnabled` switches a plug-in off (not offered, not loaded) or on,
+  `plugins.scanFile` reads one listed file again, and `plugins.setFolderEnabled` switches a
+  plug-in folder off or on for scans. `plugins.check` lists an open
   project's plug-in devices with the installed plug-in found for each (also a VST3 version
   standing in for a VST2 one), how it was found and whether its settings carry over. `plugins.addFolder` and
   `plugins.removeFolder` are refused for agents, since a folder decides whose code a scan runs;
