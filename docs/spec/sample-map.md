@@ -84,7 +84,7 @@ Both play a sample as soon as the pointer is over it.
   a track, a slot or a device chain in the main window drops there (the map's window has the
   pointer while the button is down; the main window shows the drop label and takes the drop).
   The keymap's keys work in that window too. **Dock**, Ctrl+Alt+M, closing the window, the
-  browser's Map switch or the large view put the map back. Whether the window is open, and where
+  browser's **Sample map** button or the large view put the map back. Whether the window is open, and where
   it is and how big (`map_window`, `map_window_rect` in `settings.txt`: left, top, width and
   height in points on the whole desktop, so a second screen counts), are kept for the next
   start; a place no screen could show is not used.

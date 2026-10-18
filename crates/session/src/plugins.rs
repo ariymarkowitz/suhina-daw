@@ -315,7 +315,9 @@ fn check(projects: &mut Projects, params: &Value) -> Result<Value, CommandError>
         .iter()
         .flat_map(|c| c.devices.iter().map(|d| (c.name.clone(), d.clone())))
         .collect();
-    let catalog = projects.library_mut().catalog();
+    // What sessions load: a plug-in switched off is missing to a project that uses it.
+    let enabled = projects.library_mut().enabled_catalog();
+    let catalog = &enabled;
     let mut missing = 0;
     let list: Vec<Value> = devices
         .iter()

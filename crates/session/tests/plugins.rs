@@ -211,6 +211,13 @@ fn a_projects_plugins_are_matched_to_the_installed_ones() {
     assert!(devices[2].get("found").is_none());
     assert_eq!(run(&mut p, "plugins.check", json!({})).unwrap(), checked);
     assert!(run(&mut p, "plugins.check", json!({ "project": 99 })).is_err());
+
+    // Switched off, the plug-in is missing to the project, as sessions load it.
+    run(&mut p, "plugins.setEnabled", json!({ "plugin": "Gain 3", "enabled": false })).unwrap();
+    let off = run(&mut p, "plugins.check", json!({})).unwrap();
+    assert_eq!((off["plugins"].clone(), off["missing"].clone()), (json!(3), json!(3)));
+    run(&mut p, "plugins.setEnabled", json!({ "plugin": "Gain 3", "enabled": true })).unwrap();
+    assert_eq!(run(&mut p, "plugins.check", json!({})).unwrap(), checked);
 }
 
 #[test]

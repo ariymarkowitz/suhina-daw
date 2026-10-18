@@ -63,9 +63,9 @@ protocol (`crates/plugins/src/protocol.rs`).
   ([#63](https://github.com/suhina-daw/suhina-daw/issues/63)); the arrangement draws them in
   sub-rows (`crates/ui/src/arrangement/timeline.rs`, `sub_rows`, which treats clips that end
   within 1e-9 beats of the next start as touching).
-- **Identity.** Clips are still addressed by their position on a lane;
-  [ADR 0025](0025-object-identity.md) and [#568](https://github.com/suhina-daw/suhina-daw/issues/568)
-  give clips, lanes and scenes ids. ARA's persistent ids must not be positions.
+- **Identity.** Clips, lanes and scenes have ids ([ADR 0025](0025-object-identity.md),
+  [#568](https://github.com/suhina-daw/suhina-daw/issues/568)), and the clip commands take them.
+  ARA's persistent ids build on those, never on positions.
 
 ## Decision
 
@@ -184,9 +184,8 @@ protocol (`crates/plugins/src/protocol.rs`).
 
 - New protocol messages and a new region kind in `crates/ipc`; Rust bindings to the ARA C API live
   in `crates/plugin-host` only, under ADR 0006 decision 6's `unsafe` rules.
-- Persistence needs stable ids: the archive and bindings stage is blocked by
-  [#568](https://github.com/suhina-daw/suhina-daw/issues/568). The ADR, the overlap detection,
-  scanning, the host-side document and the audio regions are not.
+- Persistence needs stable ids, which [#568](https://github.com/suhina-daw/suhina-daw/issues/568)
+  gave clips, lanes and scenes, so no stage waits for them any more.
 - A track whose ARA clips overlap other audio clips behaves differently from one without ARA: the
   error and the suspension say why, and stacking stays the ordinary behaviour elsewhere.
 - Shared memory per source costs the decoded audio's size once more while an ARA plug-in uses it.
@@ -202,7 +201,7 @@ The sub-issues of [#587](https://github.com/suhina-daw/suhina-daw/issues/587), i
 2. Scanning marks the VST3 plug-ins that support ARA; *own process per instance* is refused for them.
 3. The document controller in the host, the protocol's edit batches, `test:ara`.
 4. Audio through shared memory.
-5. The project keeps the archive: save, reopen, crashes, missing plug-in or file (blocked by #568).
+5. The project keeps the archive: save, reopen, crashes, missing plug-in or file.
 6. Clip edits reach the plug-in; the overlap guard and suspension.
 7. The UI: open a clip in its ARA editor, show conflicts and their fixes, render to audio.
 8. The SDK's example plug-ins and real plug-ins on each system; this ADR records the results.

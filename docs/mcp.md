@@ -429,6 +429,11 @@ suhina-cli mcp --attach
   `midi.setInput`, `plugins.setHosting`, `library.setPluginsView`, `library.pin`, `library.unpin`,
   `library.tag`, `library.setTag`, `library.removeTag`, `soundmap.setKind`, and
   `project.autosave` with `interval` or `clean_up`. Transport commands play on the window's output.
+- **Plug-ins.** `plugins.setEnabled` and `plugins.setFolderEnabled` change the person's plug-in
+  library and are refused. So are `plugins.scan` and `plugins.scanFile`: a scan would run on the
+  window's thread while plug-ins load; the person scans from the plug-in manager. `project_render`
+  takes its snapshot with the window's projects and renders on a thread of its own, so the window
+  keeps drawing.
 - **Errors.** With no app of the build running, or with agents not let in, `--attach` says which
   and exits.
 

@@ -1137,7 +1137,12 @@ impl App {
                 None => {}
             }
         }
-        let other_dialog = other_dialog || self.unsaved_prompt.is_some() || !self.recovery.is_empty();
+        // The agent prompt waits for every other dialog, About and Settings among them.
+        let other_dialog = other_dialog
+            || self.unsaved_prompt.is_some()
+            || !self.recovery.is_empty()
+            || self.about_open
+            || self.settings_open;
         if !other_dialog && let Some((connection, client)) = self.agent_asks.first().cloned() {
             match project_dialog::show_agent(ui, window, &client) {
                 Some(AgentChoice::Allow) => {
@@ -2244,6 +2249,13 @@ impl App {
     /// commands; a scan runs `Library::scan` (what `plugins.scan` runs) on a copy of the library
     /// on another thread, so the window keeps drawing, and the result replaces the library.
     fn plugin_request(&mut self, request: PluginRequest) {
+        // A scan's result replaces the library, so a switch changed meanwhile would be lost.
+        if self.plugins.scanning
+            && matches!(request, PluginRequest::SetFolderEnabled(..) | PluginRequest::SetEnabled(..))
+        {
+            self.status = Status::Error("Wait for the scan to finish before switching plug-ins on or off".into());
+            return;
+        }
         match request {
             PluginRequest::AddFolder(folder, format) => {
                 let params = json!({ "folder": folder, "format": format.name() });
@@ -2787,7 +2799,10 @@ impl App {
     /// keyboard (`docs/spec/ui-session-view.md` › Launch keys). A key held when that ends, or
     /// when the window loses focus, is released.
     fn launch_keys(&mut self, ui: &Ui, actions: &mut Vec<Action>) {
-        let dialog = self.project_dialog.is_some() || self.save_prompt.is_some() || self.unsaved_prompt.is_some();
+        let dialog = self.project_dialog.is_some()
+            || self.save_prompt.is_some()
+            || self.unsaved_prompt.is_some()
+            || !self.agent_asks.is_empty();
         let session_view = self.shown == View::Session && !self.sample_map.view.large;
         // A clicked slot or button keeps the focus; only a text field takes the keys away.
         let focused = session_view && !dialog && !self.settings_open && !ui.ctx().text_edit_focused();
@@ -2846,7 +2861,8 @@ impl App {
         let dialog = self.project_dialog.is_some()
             || self.save_prompt.is_some()
             || self.unsaved_prompt.is_some()
-            || self.about_open;
+            || self.about_open
+            || !self.agent_asks.is_empty();
         if ui.ctx().egui_wants_keyboard_input() || dialog || (self.settings_open && self.page.capture.is_some()) {
             return;
         }

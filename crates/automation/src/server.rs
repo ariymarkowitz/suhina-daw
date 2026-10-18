@@ -454,52 +454,65 @@ impl SuhinaMcp {
         });
         let seconds = p.seconds;
         let project_id = p.project;
-        let result = self
+        // Only the snapshot is taken with the projects: attached to the app that runs on the
+        // window's thread, so the render itself runs on a blocking thread of its own.
+        let prepared = self
             .with_projects(move |projects| {
                 let path = files.workspace(projects, project_id.map(ProjectId)).writable(&output, overwrite)?;
                 let env = projects.plugin_env();
                 let session = projects.session_mut(project_id.map(ProjectId)).map_err(|e| e.0)?;
-                if let Some(steps) = launches {
-                    if scene.is_some() {
-                        return Err("give either scene or launches, not both".into());
+                if launches.is_some() && scene.is_some() {
+                    return Err("give either scene or launches, not both".into());
+                }
+                if launches.is_some() && seconds.is_none() {
+                    return Err("launches needs seconds, the length of the render".into());
+                }
+                if launches.is_none() && seconds.is_some() {
+                    return Err("seconds applies only to launches".into());
+                }
+                let scene = scene.map(|n| n.checked_sub(1).ok_or("scenes are numbered from 1")).transpose()?;
+                // The running plug-ins' state as it is now, so the render plays what is heard.
+                let heard = session.project_as_heard();
+                let project = match (scene, &launches) {
+                    (Some(index), None) => scene_as_arrangement(&heard, index)?,
+                    _ => heard,
+                };
+                let (audio, warnings) = project_audio(session, &project);
+                Ok((path, env, project, audio, warnings, launches))
+            })
+            .await;
+        let result = match prepared {
+            Err(e) => Err(e),
+            Ok((path, env, project, audio, warnings, launches)) => {
+                tokio::task::spawn_blocking(move || -> Result<Value, String> {
+                    if let Some(steps) = launches {
+                        let seconds = seconds.ok_or("launches needs seconds, the length of the render")?;
+                        let (summary, steps) =
+                            render_launch_script(&project, &audio, &path, sample_rate, &steps, seconds, Some(&env))?;
+                        return Ok(json!({
+                            "output": display_path(&path),
+                            "warnings": warnings,
+                            "plugins": summary.plugins,
+                            "seconds": summary.seconds,
+                            "sample_rate": summary.sample_rate,
+                            "peak": summary.peak,
+                            "steps": steps,
+                        }));
                     }
-                    let seconds = seconds.ok_or("launches needs seconds, the length of the render")?;
-                    let project = session.project_as_heard();
-                    let (audio, warnings) = project_audio(session, &project);
-                    let (summary, steps) =
-                        render_launch_script(&project, &audio, &path, sample_rate, &steps, seconds, Some(&env))?;
-                    return Ok(json!({
+                    let summary = render_wav(&project, &audio, &path, sample_rate, Some(&env))?;
+                    Ok(json!({
                         "output": display_path(&path),
                         "warnings": warnings,
                         "plugins": summary.plugins,
                         "seconds": summary.seconds,
                         "sample_rate": summary.sample_rate,
                         "peak": summary.peak,
-                        "steps": steps,
-                    }));
-                }
-                if seconds.is_some() {
-                    return Err("seconds applies only to launches".into());
-                }
-                let scene = scene.map(|n| n.checked_sub(1).ok_or("scenes are numbered from 1")).transpose()?;
-                // The running plug-ins' state as it is now, so the render plays what is heard.
-                let heard = session.project_as_heard();
-                let project = match scene {
-                    Some(index) => scene_as_arrangement(&heard, index)?,
-                    None => heard,
-                };
-                let (audio, warnings) = project_audio(session, &project);
-                let summary = render_wav(&project, &audio, &path, sample_rate, Some(&env))?;
-                Ok(json!({
-                    "output": display_path(&path),
-                    "warnings": warnings,
-                    "plugins": summary.plugins,
-                    "seconds": summary.seconds,
-                    "sample_rate": summary.sample_rate,
-                    "peak": summary.peak,
-                }))
-            })
-            .await;
+                    }))
+                })
+                .await
+                .unwrap_or_else(|e| Err(format!("task failed: {e}")))
+            }
+        };
         Ok(result.map_or_else(fail, |v| ok_json(&v)))
     }
 }
@@ -716,14 +729,19 @@ const NOT_FOR_AGENTS: [&str; 4] =
 
 /// Commands an agent attached to the app may not run (ADR 0028): closing a tab loses its unsaved
 /// changes and its undo history, and the rest change the app's settings or the person's library
-/// rather than a project.
-const NOT_FOR_ATTACHED: [&str; 13] = [
+/// rather than a project. A scan would also run on the window's thread for as long as plug-ins
+/// take to load; the person scans from the plug-in manager.
+const NOT_FOR_ATTACHED: [&str; 17] = [
     "projects.close",
     "audio.setOutput",
     "output.setCuePair",
     "output.setCueVolume",
     "midi.setInput",
     "plugins.setHosting",
+    "plugins.setEnabled",
+    "plugins.setFolderEnabled",
+    "plugins.scan",
+    "plugins.scanFile",
     "library.setPluginsView",
     "library.pin",
     "library.unpin",
@@ -869,15 +887,28 @@ mod refused_tests {
         for attached in [false, true] {
             assert!(refused("plugins.addFolder", None, attached).is_some());
             assert!(refused("plugins.removeFolder", None, attached).is_some());
-            for id in ["plugins.scan", "plugins.list", "plugins.folders", "plugins.check", "track.setPan"] {
+            for id in ["plugins.list", "plugins.folders", "plugins.check", "track.setPan"] {
                 assert!(refused(id, None, attached).is_none(), "{id}");
             }
+        }
+        for id in ["plugins.scan", "plugins.scanFile"] {
+            assert!(refused(id, None, false).is_none(), "{id}");
         }
     }
 
     #[test]
     fn attached_agents_never_close_a_tab_nor_change_the_apps_settings() {
-        for id in ["projects.close", "audio.setOutput", "midi.setInput", "plugins.setHosting", "library.pin"] {
+        for id in [
+            "projects.close",
+            "audio.setOutput",
+            "midi.setInput",
+            "plugins.setHosting",
+            "plugins.setEnabled",
+            "plugins.setFolderEnabled",
+            "plugins.scan",
+            "plugins.scanFile",
+            "library.pin",
+        ] {
             assert!(refused(id, None, true).is_some(), "{id}");
             assert!(refused(id, None, false).is_none(), "{id} stays open to suhina-cli mcp");
         }

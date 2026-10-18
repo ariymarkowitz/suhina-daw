@@ -22,12 +22,13 @@ changes goes through the `plugins.*` commands, so an agent and `suhina-cli plugi
 
 ## The table
 
-One row per plug-in found, then one per file that gave none, in one table:
+One row per plug-in found, then one per file that failed or is built for another processor, in
+one table (a file that loads and holds no plug-ins is not in it):
 
 | Column | What it shows |
 |---|---|
-| **On** | A checkbox for a plug-in: on (the default) or switched off. Files have none. |
-| **Name** | The plug-in's name; a file's name for a file that gave none. |
+| **On** | A checkbox for a plug-in: on (the default) or switched off; greyed out while a scan runs, since the scan's result replaces the list. Files have none. |
+| **Name** | The plug-in's name; for a file's row, the file's name. |
 | **Vendor**, **Type**, **Version** | From the scan; the type is `instrument` or `effect`. |
 | **Format** | `vst3` or `clap` (`vst2` once hosted); for a file, its extension. |
 | **Status** | `on`, `switched off`, `failed` (in red) or `other processor`. |

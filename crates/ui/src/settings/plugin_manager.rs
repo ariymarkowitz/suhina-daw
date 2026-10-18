@@ -252,6 +252,7 @@ pub fn show(ui: &mut Ui, area: Rect, plugins: &mut PluginsView) -> ManagerOut {
         return out;
     }
     let mut toggled: Option<(String, bool)> = None;
+    let scanning = plugins.scanning;
     let mut again: Option<String> = None;
     ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, ROW, lines.len(), |ui, range| {
@@ -287,7 +288,10 @@ pub fn show(ui: &mut Ui, area: Rect, plugins: &mut PluginsView) -> ManagerOut {
                             Pos2::new((on_left + on_right) / 2.0, rect.center().y),
                             Vec2::splat(16.0),
                         );
-                        let response = ui.put(check, egui::Checkbox::without_text(&mut enabled));
+                        // Off while a scan runs: its result replaces the library, switches too.
+                        let response = ui.put(check, |ui: &mut egui::Ui| {
+                            ui.add_enabled(!scanning, egui::Checkbox::without_text(&mut enabled))
+                        });
                         let label = format!("Use {}", plugin.name);
                         response.widget_info(|| {
                             egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, plugin.enabled, &label)

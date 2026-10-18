@@ -37,7 +37,6 @@ mod window;
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
@@ -127,7 +126,7 @@ fn main() {
 /// loading takes this process with it, and the scanner in the engine notices.
 ///
 /// For tests, `test:clap` describes the built-in test plug-in, `test:crash` exits without an
-/// answer, `test:hang` never answers and `test:flaky:<file>` fails the first time (while
+/// answer, `test:hang` never answers and, in debug builds, `test:flaky:<file>` fails the first time (while
 /// `<file>` does not exist; it then makes it) and describes the test plug-in after that.
 fn scan(file: &str) -> ! {
     use suhina_plugins::scan::{SCAN_MARKER, scan_error_json, scan_json};
@@ -150,20 +149,24 @@ fn describe(file: &str) -> Result<Vec<suhina_plugins::scan::PluginInfo>, String>
         },
         "test:clap" | "test:clap-delay" | "test:clap-ports" => clap::describe(file),
         "test:vst3" => vst3::describe(file),
+        #[cfg(debug_assertions)]
         _ if file.starts_with(FLAKY) => flaky(file),
         _ if file.to_ascii_lowercase().ends_with(".vst3") => vst3::describe(&format!("vst3:{file}")),
         _ => clap::describe(&format!("clap:{file}")),
     }
 }
 
-/// The `test:` name of a file that fails to load once ([`flaky`]).
+/// The `test:` name of a file that fails to load once ([`flaky`]). Debug builds only: it writes
+/// the file it is given, which a release host has no use for.
+#[cfg(debug_assertions)]
 const FLAKY: &str = "test:flaky:";
 
 /// `test:flaky:<file>`: a plug-in whose first load fails as a passing failure does (no factory)
 /// and whose later ones work. Whether it was loaded before is `<file>`'s existence, so it holds
 /// across scan processes.
+#[cfg(debug_assertions)]
 fn flaky(file: &str) -> Result<Vec<suhina_plugins::scan::PluginInfo>, String> {
-    let marker = Path::new(file.strip_prefix(FLAKY).unwrap_or_default());
+    let marker = std::path::Path::new(file.strip_prefix(FLAKY).unwrap_or_default());
     if marker.exists() {
         return clap::describe("test:clap");
     }

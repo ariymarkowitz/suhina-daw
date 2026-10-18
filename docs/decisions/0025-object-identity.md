@@ -142,7 +142,7 @@ The same reasoning applies to the release of `.locr` (its own decision, not this
      [ADR 0026](0026-project-folder-and-package.md)'s decision**, not this one.
 
    **As implemented** (one pull request, [#568](https://github.com/suhina-daw/suhina-daw/issues/568),
-   all four steps): ids live in `crates/model/src/ids.rs`; `Project::assign_ids` gives every object
+   steps A to C; of step D, the reading side, while the version bump waits for ADR 0026): ids live in `crates/model/src/ids.rs`; `Project::assign_ids` gives every object
    without one the next ids in document order (each arrangement lane and then its clips, then the
    scenes, then the slots' clips column by column), which is how a file without ids, the `.als`
    reader and a session opening any project get them, and how a command that adds an object

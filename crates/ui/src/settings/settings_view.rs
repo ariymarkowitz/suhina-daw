@@ -1080,7 +1080,10 @@ fn plugin_section(
         let r = line(y, 18.0);
         let check = Rect::from_min_size(Pos2::new(r.left(), r.top() + 1.0), Vec2::splat(16.0));
         let mut enabled = folder.enabled;
-        let response = ui.put(check, egui::Checkbox::without_text(&mut enabled));
+        // Off while a scan runs: its result replaces the library, switches too.
+        let response = ui.put(check, |ui: &mut egui::Ui| {
+            ui.add_enabled(!plugins.scanning, egui::Checkbox::without_text(&mut enabled))
+        });
         let label = format!("Scan {}", folder.path);
         response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, folder.enabled, &label));
         if response.changed() {
