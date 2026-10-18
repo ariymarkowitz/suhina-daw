@@ -1159,6 +1159,13 @@ fn show_lanes(ui: &mut Ui, timeline: &Timeline, state: &mut ArrangementViewState
         body.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Lane {}", lane.name)));
         if body.clicked() {
             state.clear_selected_clip();
+            // The click also moves the play start marker there, on the clip grid (Alt: free), as
+            // a click on the ruler does; while playing, playback jumps there.
+            if let Some(pointer) = body.interact_pointer_pos() {
+                let free = ui.input(|i| i.modifiers.alt);
+                let raw = f64::from((pointer.x - time.left() + state.scroll.x) / state.beat_width);
+                actions.push(Action::new("transport.setPosition", json!({ "beats": ruler_beat(raw, grid, free) })));
+            }
         }
         if (lane.notes || lane.plays_audio)
             && !state.double_click_does_nothing
