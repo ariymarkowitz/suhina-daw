@@ -22,6 +22,7 @@ pub(crate) fn builtin(
 ) -> Option<(&'static str, &'static str, Vec<DeviceParam>)> {
     match node.tag_name().name() {
         "StereoGain" => Some(("utility", "Utility", utility(node, warn))),
+        "MidiPitcher" => Some(("pitch", "Pitch", pitch(node, warn))),
         _ => None,
     }
 }
@@ -92,6 +93,32 @@ fn utility(node: Node, warn: &mut dyn FnMut(String)) -> Vec<DeviceParam> {
     set("channel", channel);
     set("dcFilter", manual_flag(node, "DcFilter").map(toggle));
     set("mute", manual_flag(node, "Mute").map(toggle));
+    params
+}
+
+/// Live's Pitch (`MidiPitcher`) as Suhina's `pitch`. Every value is stored in the unit ours
+/// takes (semitones, scale degrees, MIDI keys); the step widths have no counterpart yet.
+fn pitch(node: Node, warn: &mut dyn FnMut(String)) -> Vec<DeviceParam> {
+    let mut params = Vec::new();
+    let mut set = |id: &str, value: Option<f64>| {
+        if let Some(value) = value {
+            params.push(DeviceParam::new(id, value));
+        }
+    };
+    set("pitch", manual(node, "Pitch"));
+    set("pitchDegrees", manual(node, "PitchScaleDegrees"));
+    set("followScale", manual_flag(node, "UseCurrentScale").map(toggle));
+    set("lowest", manual(node, "Lowest"));
+    set("range", manual(node, "Range"));
+    // 0 Block, 1 Fold, 2 Limit, the same order as ours.
+    let mode = manual(node, "RangeMode").map(|mode| match mode as i64 {
+        mode @ 0..=2 => mode as f64,
+        other => {
+            warn(format!("Pitch mode {other} is not understood; using Block"));
+            0.0
+        }
+    });
+    set("mode", mode);
     params
 }
 
@@ -187,6 +214,58 @@ mod tests {
         let (params, _) = utility_from(&(manual_xml("Gain", "lots") + &manual_xml("Mono", "maybe")));
         assert!(params.iter().all(|p| p.id != "gain" && p.id != "mono"), "{params:?}");
         assert!(params.iter().all(|p| p.value.is_finite()));
+    }
+
+    fn pitch_from(inner: &str) -> (Vec<DeviceParam>, Vec<String>) {
+        let xml = format!("<MidiPitcher>{inner}</MidiPitcher>");
+        let doc = roxmltree::Document::parse(&xml).unwrap_or_else(|e| panic!("{e}"));
+        let mut warnings = Vec::new();
+        let (id, name, params) =
+            builtin(doc.root_element(), &mut |w| warnings.push(w)).unwrap_or_else(|| panic!("not mapped"));
+        assert_eq!((id, name), ("pitch", "Pitch"));
+        (params, warnings)
+    }
+
+    #[test]
+    fn pitch_takes_every_stored_value() {
+        let xml = [
+            manual_xml("Pitch", "-24"),
+            manual_xml("PitchScaleDegrees", "3"),
+            manual_xml("Lowest", "48"),
+            manual_xml("Range", "11"),
+            manual_xml("RangeMode", "1"),
+            manual_xml("UseCurrentScale", "true"),
+            manual_xml("StepWidth", "12"),
+            manual_xml("StepWidthScaleDegrees", "7"),
+        ]
+        .concat();
+        let (params, warnings) = pitch_from(&xml);
+        let expected = [
+            ("pitch", -24.0),
+            ("pitchDegrees", 3.0),
+            ("lowest", 48.0),
+            ("range", 11.0),
+            ("mode", 1.0),
+            ("followScale", 1.0),
+        ];
+        for (id, value) in expected {
+            assert_eq!(param(&params, id), value, "{id}");
+        }
+        assert_eq!(params.len(), expected.len(), "the step widths have nowhere to go: {params:?}");
+        assert!(warnings.is_empty());
+        let ids: Vec<&str> = suhina_device_pitch::INFO.params.iter().map(|p| p.id).collect();
+        assert!(params.iter().all(|p| ids.contains(&p.id.as_str())), "{params:?}");
+    }
+
+    #[test]
+    fn pitch_modes_and_bad_values() {
+        for (stored, ours) in [("0", 0.0), ("2", 2.0)] {
+            assert_eq!(param(&pitch_from(&manual_xml("RangeMode", stored)).0, "mode"), ours);
+        }
+        let (params, warnings) = pitch_from(&manual_xml("RangeMode", "5"));
+        assert_eq!((param(&params, "mode"), warnings.len()), (0.0, 1));
+        let (params, _) = pitch_from(&(manual_xml("Pitch", "up") + &manual_xml("UseCurrentScale", "maybe")));
+        assert!(params.is_empty(), "{params:?}");
     }
 
     #[test]

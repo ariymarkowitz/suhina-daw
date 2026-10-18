@@ -41,6 +41,8 @@ mod meters;
 #[cfg(test)]
 mod meters_tests;
 mod metronome;
+#[cfg(test)]
+mod midi_effect_tests;
 mod plugin;
 mod plugin_params;
 #[cfg(test)]
@@ -96,7 +98,7 @@ pub use preview::{PreviewMonitor, PreviewNote, PreviewNotes, preview_notes};
 pub use record::{RECORD_CHUNK, RECORD_CHUNKS, RECORD_NOTES, RecordReceiver, RecordedAudio, RecordedNote};
 use stretch::StretchVoice;
 pub use suhina_device_api::NoteEvent as DeviceEvent;
-use suhina_device_api::ProcessContext;
+use suhina_device_api::{MusicalScale, ProcessContext};
 pub use suhina_model as model;
 use suhina_model::{ChannelId, ChannelRole, Clip, ContentLane, LaneData, Project, TempoMap, TrackId};
 pub use track_render::render_track;
@@ -188,6 +190,13 @@ struct NoteEvent {
     bus: u32,
     /// The track's meter slot.
     meter: u32,
+    /// The scale of the note's clip, for the MIDI effects that follow it.
+    scale: Option<MusicalScale>,
+}
+
+/// A clip's scale as the devices get it.
+pub(crate) fn musical_scale(scale: Option<suhina_model::Scale>) -> Option<MusicalScale> {
+    scale.and_then(|scale| MusicalScale::new(scale.root(), scale.mode.semitones()))
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -689,6 +698,7 @@ impl Renderer {
                         column: event.column,
                         bus: event.bus,
                         meter: event.meter,
+                        scale: event.scale,
                     };
                     let Self { voices, graph, position, sample_rate, .. } = self;
                     start_note(voices, &mut graph.chains, frame, *position, *sample_rate, end, start);
@@ -885,6 +895,8 @@ pub(crate) struct NoteStart {
     pub(crate) column: u32,
     pub(crate) bus: u32,
     pub(crate) meter: u32,
+    /// The scale of the note's clip.
+    pub(crate) scale: Option<MusicalScale>,
 }
 
 /// The chain behind `bus`, or `None` for the output.
@@ -906,6 +918,7 @@ pub(crate) fn start_note(
     note: NoteStart,
 ) {
     if let Some(chain) = bus_chain(chains, note.bus).filter(|c| c.instrument) {
+        chain.set_scale(frame, note.scale);
         chain.note_on(frame, position, note.key, note.velocity, end);
         return;
     }
@@ -999,6 +1012,7 @@ impl Graph {
                             content_lane,
                             &tempo,
                             (track, gain_left, gain_right, column, bus, meter),
+                            musical_scale(content.scale),
                             &mut events,
                         ),
                         LaneData::Audio(region) => {
@@ -1309,6 +1323,7 @@ fn collect_notes(
     lane: &ContentLane,
     map: &TempoMap,
     (track, gain_left, gain_right, column, bus, meter): (TrackId, f32, f32, u32, u32, u32),
+    scale: Option<MusicalScale>,
     events: &mut Vec<NoteEvent>,
 ) {
     let LaneData::Notes(notes) = &lane.data else { return };
@@ -1346,6 +1361,7 @@ fn collect_notes(
                 column,
                 bus,
                 meter,
+                scale,
             });
         }
     };

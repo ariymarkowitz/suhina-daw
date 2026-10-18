@@ -85,6 +85,7 @@ exists in `devices/`, passes its tests and runs in track chains.
 | compressor: stereo-linked, soft knee, side-chain high-pass, dry/wet | own | done |
 | bus compressor | own, Airwindows (MIT) for reference | planned |
 | limiter: brickwall, 1.5 ms lookahead | own | done |
+| pitch, a MIDI effect: transposes by semitones or scale degrees, Block, Fold or Limit to a key window | own | done; step buttons planned |
 | multiband dynamics, upward and downward | own crossovers and detectors | planned |
 | delays | own delay lines | planned |
 | algorithmic and convolution reverb | Dragonfly Reverb (GPL-3.0), own convolution | planned |
@@ -159,6 +160,8 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
 - device chains: VST2 and VST3 plug-ins with their id and state kept; the format's own devices:
   those Suhina has a counterpart for with their settings, the rest as placeholders
   ([device import](docs/spec/device-import.md))
+- the Pitch MIDI effect, with its settings ([pitch](docs/spec/pitch.md)); clip scales are not
+  read yet
 - anything not understood yet is skipped with a warning; the project still opens
 
 ### M2 Playing
@@ -170,6 +173,12 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
   master volume and mute apply. A group with devices is a bus: its devices run over the sum of
   its tracks, with latency compensation on every path. `--fm` on `play` and `render` puts the FM synth on every MIDI
   track, with a voice from a DX7 file; `suhina-cli fm-synth voices` lists a file's voices.
+- MIDI effects run before a track's instrument: the pitch effect transposes the notes by
+  semitones or by steps along the playing clip's scale and keeps them inside a window of keys
+  (Block, Fold, Limit); a note-off always ends the key its note started
+  ([spec](docs/spec/pitch.md)). It is in the browser under **MIDI Effects** and is set through
+  `device.setParam` or an automation lane; the device panel shows no controls for built-in
+  devices yet.
 - Sends and return tracks play: each track sends to each return before or after its fader; a
   return runs its devices over what it is sent and plays into the main channel or a group, with
   latency compensation on every send; loops are refused (`track.setSend`, `track.setSendMode`,

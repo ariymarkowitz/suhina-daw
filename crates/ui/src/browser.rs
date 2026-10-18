@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
+use suhina_device_api::Role;
 use suhina_engine::AudioData;
 use suhina_library::{FileKind, Group, Item, Listing};
 use suhina_media::info::{Tempo, TempoSource};
@@ -311,6 +312,7 @@ fn item_kind(found: &Found) -> ItemKind {
         "instrument" => ItemKind::Instrument,
         "effect" => ItemKind::Effect,
         "audio_effect" => ItemKind::AudioEffect,
+        "midi_effect" => ItemKind::MidiEffect,
         _ => ItemKind::Heading,
     }
 }
@@ -434,10 +436,11 @@ impl BrowserState {
             _ => {
                 let devices = matches!(category, Category::All | Category::Instruments | Category::Effects);
                 if devices && category != Category::Effects {
-                    self.device_rows("group:instruments", "Instruments", true, &mut rows);
+                    self.device_rows("group:instruments", "Instruments", Role::Instrument, &mut rows);
                 }
                 if devices && category != Category::Instruments {
-                    self.device_rows("group:effects", "Effects", false, &mut rows);
+                    self.device_rows("group:effects", "Effects", Role::Effect, &mut rows);
+                    self.device_rows("group:midi-effects", "MIDI Effects", Role::MidiEffect, &mut rows);
                 }
                 if matches!(category, Category::All | Category::Instruments | Category::Effects | Category::Plugins) {
                     self.plugin_rows(projects, &mut rows);
@@ -463,18 +466,18 @@ impl BrowserState {
         rows
     }
 
-    fn device_rows(&self, node: &str, name: &str, instruments: bool, rows: &mut Vec<Row>) {
+    fn device_rows(&self, node: &str, name: &str, role: Role, rows: &mut Vec<Row>) {
         let open = self.open.contains(node);
         rows.push(Row { item: heading(node, name), depth: 0, opens: true, open, context: None, columns: None });
         if !open {
             return;
         }
-        for info in suhina_device_registry::DEVICES {
-            let is_instrument = info.role == suhina_device_api::Role::Instrument;
-            if is_instrument != instruments {
-                continue;
-            }
-            let kind = if is_instrument { ItemKind::Instrument } else { ItemKind::Effect };
+        for info in suhina_device_registry::DEVICES.iter().filter(|info| info.role == role) {
+            let kind = match role {
+                Role::Instrument => ItemKind::Instrument,
+                Role::Effect => ItemKind::Effect,
+                Role::MidiEffect => ItemKind::MidiEffect,
+            };
             let item = BrowserItem { key: format!("device:{}", info.id), name: info.name.into(), kind, plugin: false };
             rows.push(Row { item, depth: 1, opens: false, open: false, context: None, columns: None });
         }

@@ -345,7 +345,7 @@ fn describe(projects: &mut Projects, item: Item) -> Option<Found> {
         }
         Item::Device(id) => {
             let info = suhina_device_registry::info(id)?;
-            let kind = if info.role == Role::Instrument { "instrument" } else { "effect" };
+            let kind = device_kind(info.role);
             Some(Found { name: info.name.to_string(), kind, detail: None, plugin: false, folder: None, item })
         }
         Item::Plugin(spec) => {
@@ -358,6 +358,15 @@ fn describe(projects: &mut Projects, item: Item) -> Option<Found> {
     }
 }
 
+/// What a built-in device is, as a found item's kind says it.
+fn device_kind(role: Role) -> &'static str {
+    match role {
+        Role::Instrument => "instrument",
+        Role::Effect => "effect",
+        Role::MidiEffect => "midi_effect",
+    }
+}
+
 fn fits(found: &Found, category: Category) -> bool {
     match category {
         Category::All => true,
@@ -365,7 +374,7 @@ fn fits(found: &Found, category: Category) -> bool {
         Category::Midi => found.kind == "midi",
         Category::Presets => found.kind == "preset",
         Category::Instruments => found.kind == "instrument",
-        Category::Effects => matches!(found.kind, "effect" | "audio_effect"),
+        Category::Effects => matches!(found.kind, "effect" | "audio_effect" | "midi_effect"),
         Category::Plugins => found.plugin,
     }
 }
@@ -418,7 +427,7 @@ pub fn search_items(
     // Built-in effects and instruments, and plug-ins, unless a folder is the place.
     if within.is_none() {
         for info in suhina_device_registry::DEVICES {
-            let kind = if info.role == Role::Instrument { "instrument" } else { "effect" };
+            let kind = device_kind(info.role);
             let found = Found {
                 item: Item::Device(info.id.to_string()),
                 name: info.name.to_string(),
@@ -524,7 +533,7 @@ fn info(projects: &mut Projects, params: &Value) -> Result<Value, CommandError> 
         Item::Device(id) => {
             let info =
                 suhina_device_registry::info(id).ok_or_else(|| format!("no built-in effect or instrument {id:?}"))?;
-            json!({ "kind": if info.role == Role::Instrument { "instrument" } else { "effect" }, "name": info.name })
+            json!({ "kind": device_kind(info.role), "name": info.name })
         }
         Item::Plugin(spec) => {
             let env = projects.plugin_env();

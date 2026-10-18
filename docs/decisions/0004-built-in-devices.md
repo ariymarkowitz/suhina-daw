@@ -160,6 +160,26 @@ decision 9.
     only supported node data; the engine prepares them off-thread and runs them in the same
     real-time-safe chain. Their parameter declarations generate UI controls.
 
+13. **Built-in MIDI effects change the events before the instrument** (added 2026-10-18, with
+    the first one, [the pitch effect](../spec/pitch.md)). `DeviceInfo::role` has a third value,
+    `MidiEffect`. The host never asks such a device to process a buffer; it calls
+    `Device::process_events` with the events of a span (at frames from the span's start) and an
+    output with room for twice as many, and the device writes what it sends on, in frame order.
+    The chain splits the span where one of the device's parameters follows a lane, a change
+    coming before the events at its frame, as for instruments; what one MIDI effect sends is what
+    the next device gets, so they run in order before the instrument. Notes are paired by key:
+    a MIDI effect that changes a note-on's key remembers it, so the note-off ends the same key
+    whatever its settings are by then. A clip's scale reaches the devices as an event,
+    `NoteEvent::Scale(Option<MusicalScale>)`, which the chain sends before the first note of a
+    clip whose scale differs from the last one sent; instruments and plug-ins ignore it.
+    `MusicalScale` is the root and the set of pitch classes, with the steps along it a
+    scale-aware device needs. Three units come with it: semitones, scale degrees and a MIDI key.
+    The contract tests add, for MIDI effects, the same events in spans of every size at every
+    parameter's ends, `reset` while notes are held, hostile events, too little room to write, and
+    that no key still sounds after every key played is released. `device.add` places a MIDI
+    effect among the MIDI effects that lead the chain, only on a MIDI track; an instrument goes
+    right after them (built-in, `.sd` or plug-in).
+
 ## Not decided yet
 
 - **A chain on the master channel:** how it runs after every other chain, and how latency

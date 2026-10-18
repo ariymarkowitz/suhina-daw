@@ -282,6 +282,47 @@ fn sd_midi_effects_and_instruments_insert_on_midi_tracks_in_chain_order() {
     let _ = std::fs::remove_file(instrument_path);
 }
 
+#[test]
+fn the_pitch_midi_effect_goes_before_the_instrument_on_midi_tracks() {
+    let mut session = Session::new(project());
+    let list = run(&mut session, "devices.list", json!({})).unwrap();
+    let pitch = list.as_array().unwrap().iter().find(|d| d["id"] == "pitch").unwrap();
+    assert_eq!(pitch["role"], "midi_effect");
+    let unit = |id: &str| pitch["params"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap()["unit"].clone();
+    assert_eq!(
+        (unit("pitch"), unit("pitchDegrees"), unit("lowest")),
+        (json!("semitones"), json!("scale degrees"), json!("key"))
+    );
+
+    assert_eq!(run(&mut session, "device.add", json!({ "track": 1, "id": "utility" })).unwrap()["device"], 0);
+    // A MIDI effect goes before the audio effects, the instrument after the MIDI effects.
+    assert_eq!(run(&mut session, "device.add", json!({ "track": 1, "id": "pitch" })).unwrap()["device"], 0);
+    assert_eq!(run(&mut session, "device.add", json!({ "track": 1, "id": "fm-synth" })).unwrap()["device"], 1);
+    assert_eq!(run(&mut session, "device.add", json!({ "track": 1, "id": "pitch" })).unwrap()["device"], 1);
+    let devices = run(&mut session, "track.devices", json!({ "track": 1 })).unwrap();
+    let order: Vec<(&str, &str)> =
+        devices.as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), d["role"].as_str().unwrap())).collect();
+    assert_eq!(
+        order,
+        [("pitch", "midi_effect"), ("pitch", "midi_effect"), ("fm-synth", "instrument"), ("utility", "effect")]
+    );
+    let error = run(&mut session, "device.add", json!({ "track": 1, "id": "pitch", "position": 3 })).unwrap_err();
+    assert!(error.contains("before the instrument"), "{error}");
+    let set = run(&mut session, "device.setParam", json!({ "track": 1, "device": 0, "param": "pitch", "value": 200 }))
+        .unwrap();
+    assert_eq!(set["value"], 128.0, "limited to the range");
+
+    // Not on an audio track; a new track for it is a MIDI track.
+    run(&mut session, "track.add", json!({ "kind": "audio", "name": "Drums" })).unwrap();
+    let error = run(&mut session, "device.add", json!({ "track": "Drums", "id": "pitch" })).unwrap_err();
+    assert!(error.contains("MIDI track"), "{error}");
+    let error = run(&mut session, "track.add", json!({ "kind": "audio", "device": "pitch" })).unwrap_err();
+    assert!(error.contains("MIDI track"), "{error}");
+    let added = run(&mut session, "track.add", json!({ "device": "pitch" })).unwrap();
+    let track = session.project().tracks.iter().find(|t| t.name == "Pitch").unwrap();
+    assert!(track.content.notes, "{added}");
+}
+
 /// A catalog with one installed effect and one instrument, as a scan would have found them.
 fn plugin_env() -> std::sync::Arc<suhina_session::PluginEnv> {
     use suhina_plugins::scan::{Catalog, PluginInfo};

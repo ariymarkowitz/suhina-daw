@@ -4,9 +4,11 @@
 //! Checks every device must pass, whatever it does. Each device crate calls [`check`] from a
 //! test; the checks cover the [`Device`] contract, not the device's sound. Instruments also go
 //! through note checks: a fixed performance played in blocks of every size, `reset` while notes
-//! sound, hostile events and every sample rate.
+//! sound, hostile events and every sample rate. MIDI effects go through event checks: the same
+//! events in spans of every size, at every parameter's ends, `reset`, hostile events and too
+//! little room to write, and every note they start is ended.
 
-use crate::{Device, NoteEvent, ParamKind, ProcessContext, Role, controller};
+use crate::{Device, MusicalScale, NoteEvent, ParamKind, ProcessContext, Role, controller};
 
 /// Frames of test signal per check.
 const FRAMES: usize = 8_192;
@@ -22,8 +24,10 @@ pub fn check(make: &dyn Fn() -> Box<dyn Device>) -> Vec<String> {
     check_block_sizes(make, &mut failures);
     check_reset(make, &mut failures);
     check_sample_rates(make, &mut failures);
-    if make().info().role == Role::Instrument {
-        check_notes(make, &mut failures);
+    match make().info().role {
+        Role::Instrument => check_notes(make, &mut failures),
+        Role::MidiEffect => check_events(make, &mut failures),
+        Role::Effect => {}
     }
     failures
 }
@@ -338,6 +342,190 @@ fn check_notes(make: &dyn Fn() -> Box<dyn Device>, failures: &mut Vec<String>) {
     }
 }
 
+/// The test notes with scale changes among them, for MIDI effects: notes that start under one
+/// scale and end under another, and a clip without a scale.
+pub fn test_events() -> Vec<(usize, NoteEvent)> {
+    let major = MusicalScale::new(0, &[0, 2, 4, 5, 7, 9, 11]);
+    let pentatonic = MusicalScale::new(9, &[0, 3, 5, 7, 10]);
+    let mut events = test_notes();
+    events.extend([
+        (50, NoteEvent::Scale(major)),
+        (1_200, NoteEvent::On { key: 61, velocity: 0.4 }),
+        (2_400, NoteEvent::Scale(pentatonic)),
+        (2_401, NoteEvent::On { key: 0, velocity: 0.7 }),
+        (2_402, NoteEvent::On { key: 127, velocity: 0.7 }),
+        (2_900, NoteEvent::Off { key: 61, velocity: 0.1 }),
+        (3_300, NoteEvent::Scale(None)),
+        (3_301, NoteEvent::Off { key: 0, velocity: 0.3 }),
+        (3_302, NoteEvent::Off { key: 127, velocity: 0.3 }),
+        (5_500, NoteEvent::On { key: 70, velocity: 0.0 }),
+        (6_500, NoteEvent::On { key: 72, velocity: 0.6 }),
+        (7_000, NoteEvent::Off { key: 72, velocity: 0.6 }),
+    ]);
+    events.sort_by_key(|(at, _)| *at);
+    events
+}
+
+/// Runs `events` through a MIDI effect over `frames` frames, in spans of `sizes` (repeated),
+/// setting the parameters to their ends every 1024 frames as [`render`] does, with the span split
+/// there. Returns what it sent on, at frames from the start.
+fn run_events(
+    device: &mut dyn Device,
+    events: &[(usize, NoteEvent)],
+    sizes: &[usize],
+    frames: usize,
+) -> Vec<(usize, NoteEvent)> {
+    let mut out = Vec::new();
+    let mut frame = 0usize;
+    let mut next = 0usize;
+    let mut input = Vec::new();
+    for &size in sizes.iter().cycle() {
+        if frame >= frames || size == 0 {
+            break;
+        }
+        let size = size.min(frames - frame).min(1_024 - frame % 1_024);
+        if frame.is_multiple_of(1_024) {
+            extreme_settings(device, frame / 1_024);
+        }
+        input.clear();
+        while let Some(&(at, event)) = events.get(next)
+            && at < frame + size
+        {
+            input.push((at.saturating_sub(frame), event));
+            next += 1;
+        }
+        let mut output = vec![(0, NoteEvent::AllNotesOff); input.len() * 2];
+        let written = device.process_events(&ProcessContext::default(), size, &input, &mut output);
+        out.extend(output.iter().take(written).map(|&(at, event)| (at + frame, event)));
+        frame += size;
+    }
+    out
+}
+
+/// What is wrong with a MIDI effect's output `out` over `frames` frames: frames out of order or
+/// range, values out of range, and notes started and never ended.
+fn event_faults(out: &[(usize, NoteEvent)], frames: usize) -> Vec<String> {
+    let mut faults = Vec::new();
+    // Whether each key sounds; a key started again while it sounds is still one note to end.
+    let mut sounding = [false; 128];
+    let mut last = 0usize;
+    for &(at, event) in out {
+        if at < last || at >= frames {
+            faults.push(format!("{event:?} at frame {at} is out of order or past the end"));
+        }
+        last = at;
+        let fine = |v: f32| (0.0..=1.0).contains(&v);
+        match event {
+            NoteEvent::On { key, velocity } | NoteEvent::Off { key, velocity } if key > 127 || !fine(velocity) => {
+                faults.push(format!("{event:?} at frame {at} is out of range"));
+            }
+            NoteEvent::On { key, velocity } => {
+                if let Some(slot) = sounding.get_mut(usize::from(key)) {
+                    *slot = velocity > 0.0;
+                }
+            }
+            NoteEvent::Off { key, .. } => {
+                if let Some(slot) = sounding.get_mut(usize::from(key)) {
+                    *slot = false;
+                }
+            }
+            NoteEvent::AllNotesOff => sounding = [false; 128],
+            _ => {}
+        }
+    }
+    for (key, _) in sounding.iter().enumerate().filter(|(_, sounds)| **sounds) {
+        faults.push(format!("key {key} still sounds after every key is released"));
+    }
+    faults
+}
+
+/// `events` with every key still held at the end released one by one at the last frame, so a
+/// note the effect leaves hanging shows (an all-notes-off would hide it).
+fn released(mut events: Vec<(usize, NoteEvent)>) -> Vec<(usize, NoteEvent)> {
+    let mut held = [false; 128];
+    for &(_, event) in &events {
+        match event {
+            NoteEvent::On { key, velocity } if velocity > 0.0 => {
+                if let Some(slot) = held.get_mut(usize::from(key)) {
+                    *slot = true;
+                }
+            }
+            NoteEvent::On { key, .. } | NoteEvent::Off { key, .. } => {
+                if let Some(slot) = held.get_mut(usize::from(key)) {
+                    *slot = false;
+                }
+            }
+            NoteEvent::AllNotesOff => held = [false; 128],
+            _ => {}
+        }
+    }
+    for key in (0..=127u8).filter(|&key| held.get(usize::from(key)) == Some(&true)) {
+        events.push((FRAMES - 1, NoteEvent::Off { key, velocity: 0.5 }));
+    }
+    events
+}
+
+fn check_events(make: &dyn Fn() -> Box<dyn Device>, failures: &mut Vec<String>) {
+    let mut events = test_events();
+    events.retain(|(_, event)| !matches!(event, NoteEvent::AllNotesOff));
+    let events = released(events);
+    let reference = run_events(make().as_mut(), &events, &[512], FRAMES);
+    for fault in event_faults(&reference, FRAMES) {
+        failures.push(format!("the test events: {fault}"));
+    }
+    if !reference.iter().any(|(_, event)| matches!(event, NoteEvent::On { .. })) {
+        failures.push("the test events send no note on".into());
+    }
+    for sizes in [&[1][..], &[7, 64, 333], &[1_024], &[3, 1, 250, 900]] {
+        let other = run_events(make().as_mut(), &events, sizes, FRAMES);
+        if other != reference {
+            failures.push(format!("events in spans of {sizes:?} differ from spans of 512"));
+        }
+    }
+
+    // Reset while notes are held, then the same events again.
+    let mut device = make();
+    let held = [(0, NoteEvent::On { key: 30, velocity: 1.0 }), (10, NoteEvent::On { key: 90, velocity: 1.0 })];
+    run_events(device.as_mut(), &held, &[256], 1_024);
+    device.reset();
+    if run_events(device.as_mut(), &events, &[512], FRAMES) != reference {
+        failures.push("after reset with notes held the events differ from a fresh device's".into());
+    }
+
+    // Hostile events, and an output with no room to spare.
+    let mut hostile = Vec::new();
+    for (i, value) in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0, 5.0, 1e30, 0.5].into_iter().enumerate() {
+        hostile.push((i, NoteEvent::On { key: 200, velocity: value }));
+        hostile.push((i, NoteEvent::On { key: 61, velocity: value }));
+        hostile.push((i, NoteEvent::Off { key: 255, velocity: value }));
+        hostile.push((i, NoteEvent::PitchBend(value)));
+        hostile.push((i, NoteEvent::Controller { number: 255, value }));
+    }
+    for round in 0..3 {
+        for key in 0..=127u8 {
+            hostile.push((10 + round * 200 + usize::from(key), NoteEvent::On { key, velocity: 1.0 }));
+        }
+    }
+    let hostile = released(hostile);
+    let out = run_events(make().as_mut(), &hostile, &[512], FRAMES);
+    // Values out of range may pass on as they came (whatever gets them accepts any value);
+    // the order of the events and the ends of the notes are what count.
+    for fault in event_faults(&out, FRAMES).into_iter().filter(|fault| !fault.contains("out of range")) {
+        failures.push(format!("hostile events: {fault}"));
+    }
+    let mut device = make();
+    for (input, room) in [(&hostile[..], 0), (&hostile[..], 1), (&events[..], 3)] {
+        let mut output = vec![(0, NoteEvent::AllNotesOff); room];
+        if device.process_events(&ProcessContext::default(), FRAMES, input, &mut output) > room {
+            failures.push(format!("{room} events of room reported more written"));
+        }
+    }
+    let mut output = [(0, NoteEvent::AllNotesOff); 4];
+    if device.process_events(&ProcessContext::default(), 0, &[], &mut output) != 0 {
+        failures.push("no events in sends events out".into());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +572,86 @@ mod tests {
         let failures = check(&|| Box::new(Broken { gain: 1.0, applied: 1.0, counter: 0.0 }));
         assert!(failures.iter().any(|f| f.contains("blocks of")), "{failures:#?}");
         assert!(failures.iter().any(|f| f.contains("after reset")), "{failures:#?}");
+    }
+
+    const MIDI: DeviceInfo = DeviceInfo { id: "sticky", name: "Sticky", role: Role::MidiEffect, params: &PARAMS };
+
+    /// A MIDI effect that transposes by its gain in octaves and ends a note at the key the
+    /// current gain gives, so a change while a note is held leaves it hanging.
+    struct Sticky {
+        gain: f64,
+    }
+
+    impl Device for Sticky {
+        fn info(&self) -> &'static DeviceInfo {
+            &MIDI
+        }
+        fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
+            crate::check_sample_rate(sample_rate).map(|_| ())
+        }
+        fn reset(&mut self) {}
+        fn set_param(&mut self, index: usize, value: f64) {
+            if index == 0 {
+                self.gain = PARAMS[0].clamp(value);
+            }
+        }
+        fn param(&self, index: usize) -> Option<f64> {
+            (index == 0).then_some(self.gain)
+        }
+        fn process(&mut self, _: &ProcessContext, _: &mut [f32]) {}
+        fn process_events(
+            &mut self,
+            _: &ProcessContext,
+            _: usize,
+            input: &[(usize, NoteEvent)],
+            output: &mut [(usize, NoteEvent)],
+        ) -> usize {
+            let shift = (self.gain * 12.0) as u8;
+            let mut written = 0;
+            for (&(at, event), slot) in input.iter().zip(output.iter_mut()) {
+                *slot = match event {
+                    NoteEvent::On { key, velocity } => {
+                        (at, NoteEvent::On { key: key.saturating_add(shift).min(127), velocity })
+                    }
+                    NoteEvent::Off { key, velocity } => {
+                        (at, NoteEvent::Off { key: key.saturating_add(shift).min(127), velocity })
+                    }
+                    other => (at, other),
+                };
+                written += 1;
+            }
+            written
+        }
+    }
+
+    #[test]
+    fn catches_a_midi_effect_that_leaves_notes_hanging() {
+        let failures = check(&|| Box::new(Sticky { gain: 1.0 }));
+        assert!(failures.iter().any(|f| f.contains("still sounds")), "{failures:#?}");
+    }
+
+    /// The default `process_events` passes every event on, which the checks accept.
+    struct Through;
+
+    impl Device for Through {
+        fn info(&self) -> &'static DeviceInfo {
+            &MIDI
+        }
+        fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
+            crate::check_sample_rate(sample_rate).map(|_| ())
+        }
+        fn reset(&mut self) {}
+        fn set_param(&mut self, _: usize, _: f64) {}
+        fn param(&self, index: usize) -> Option<f64> {
+            (index == 0).then_some(1.0)
+        }
+        fn process(&mut self, _: &ProcessContext, _: &mut [f32]) {}
+    }
+
+    #[test]
+    fn a_midi_effect_that_passes_events_through_passes() {
+        let failures = check(&|| Box::new(Through));
+        let events: Vec<&String> = failures.iter().filter(|f| !f.contains("parameter")).collect();
+        assert!(events.is_empty(), "{events:#?}");
     }
 }

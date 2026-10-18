@@ -13,6 +13,7 @@ corpus = []
 [dependencies]
 suhina-model.workspace = true
 flate2.workspace = true
+suhina-device-pitch.workspace = true
 roxmltree.workspace = true
 
 [lints]
@@ -20,3 +21,4 @@ workspace = true
 
 [dev-dependencies]
 flate2.workspace = true
+suhina-device-pitch.workspace = true

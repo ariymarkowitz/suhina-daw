@@ -15,6 +15,7 @@ suhina-device-overdrive.workspace = true
 suhina-device-fm-synth.workspace = true
 suhina-device-compressor.workspace = true
 suhina-device-limiter.workspace = true
+suhina-device-pitch.workspace = true
 
 [lints]
 workspace = true

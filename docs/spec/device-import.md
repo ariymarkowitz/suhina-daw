@@ -70,6 +70,7 @@ comes in as it (otherwise as a placeholder):
 | Imports from Live | Suhina device | DSP from | Status |
 |---|---|---|---|
 | Utility, Auto Pan | utility, auto-pan | own | DSP done; import done for Utility, planned for Auto Pan |
+| Pitch (MIDI effect) | pitch ([spec](pitch.md)) | own | done; import done (the step widths wait for the step buttons) |
 | EQ Three | three-band DJ EQ with kills | own crossovers (Linkwitz-Riley) | DSP done; import planned |
 | Vinyl Distortion | vinyl distortion | own, oversampled | DSP done; import planned |
 | Overdrive | overdrive | own, oversampled | DSP done; import planned |

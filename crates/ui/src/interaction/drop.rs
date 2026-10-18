@@ -26,6 +26,8 @@ pub enum ItemKind {
     Instrument,
     Effect,
     AudioEffect,
+    /// A built-in MIDI effect: it goes before a MIDI track's instrument.
+    MidiEffect,
     /// A heading in the tree (Instruments, Plug-ins, a vendor).
     Heading,
 }
@@ -38,7 +40,7 @@ impl ItemKind {
 
     /// Whether it becomes a device on a track.
     pub fn is_device(self) -> bool {
-        matches!(self, Self::Instrument | Self::Effect | Self::AudioEffect | Self::Preset)
+        matches!(self, Self::Instrument | Self::Effect | Self::AudioEffect | Self::MidiEffect | Self::Preset)
     }
 }
 
