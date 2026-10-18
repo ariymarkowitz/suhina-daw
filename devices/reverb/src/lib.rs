@@ -106,8 +106,8 @@ const LINES: [f64; 16] = [
     33.25, 72.60, 47.93, 103.32, 40.67, 85.46, 57.08, 127.18, 37.20, 78.39, 54.62, 115.08, 43.33, 93.96, 66.02, 140.45,
 ];
 const DENSITY_LINES: [usize; 4] = [4, 8, 12, 16];
-/// Level of the tail for each Density against Low (dB), so the four sound equally loud, as Live's
-/// do.
+/// Level of the tail for each Density against Low (dB), so the four sound equally loud, as
+/// measured (docs/spec/reverb.md).
 const DENSITY_TRIM_DB: [f64; 4] = [-4.0, 0.0, 0.0, 1.0];
 /// Rooms larger than the reference one keep their tail's level: the network's input rises with
 /// the size factor to this power (a larger network spreads the same energy over longer lines).
@@ -141,9 +141,9 @@ const AIR_DECAY: f64 = 3.46;
 const DECAY_RATIO: f64 = 0.9;
 /// Low Cut: a first-order shelf this deep (linear), half way at the band's lower edge.
 const LOW_CUT_DEPTH: f64 = 0.2;
-/// The input always passes a first-order high-pass at this frequency: Live's reverb, reflections
-/// and tail alike, holds 3 to 8 dB less at 63 Hz and 2 to 3 dB less at 125 Hz than a flat input
-/// gives, whatever Lo Cut does.
+/// The input always passes a first-order high-pass at this frequency: the reverb, reflections and
+/// tail alike, holds 3 to 8 dB less at 63 Hz and 2 to 3 dB less at 125 Hz than a flat input gives,
+/// whatever Low Cut does (docs/spec/reverb.md).
 const RUMBLE_FREQUENCY: f64 = 90.0;
 /// High Cut is left out above this frequency.
 const HIGH_CUT_LIMIT: f64 = 20_000.0;
