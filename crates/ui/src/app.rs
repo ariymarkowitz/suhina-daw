@@ -1523,6 +1523,21 @@ impl App {
                         (None, None) => self.view.selected = Some(track),
                     }
                 }
+                // Duplicated clips: the copies are selected, so the next Ctrl+D copies them on.
+                if action.id == "clip.duplicate"
+                    && let Some(made) = result["clips"].as_array()
+                {
+                    let copies: Vec<(TrackId, usize)> = made
+                        .iter()
+                        .filter_map(|c| {
+                            let track = u32::try_from(c["track"].as_u64()?).ok()?;
+                            Some((TrackId(track), usize::try_from(c["index"].as_u64()?).ok()?))
+                        })
+                        .collect();
+                    if !copies.is_empty() {
+                        self.arrangement.select_clips(copies);
+                    }
+                }
                 let changes_project = suhina_session::commands()
                     .iter()
                     .find(|c| c.id == action.id)
@@ -3133,6 +3148,34 @@ impl App {
             "help.about" => self.about_open = !self.about_open,
             "file.new" if self.start_panel_open() => {}
             "file.new" => self.open_project_dialog(false),
+            // With clips selected in the Arrangement, the loop is exactly their span; with none,
+            // Ctrl+L turns looping on or off as before.
+            "transport.setLoopEnabled"
+                if self.shown == View::Arrangement && !self.arrangement.selected_clips().is_empty() =>
+            {
+                let timeline = self.timeline.as_ref().map(|(_, _, t)| t);
+                let span = self
+                    .arrangement
+                    .selected_clips()
+                    .iter()
+                    .filter_map(|(track, index)| {
+                        timeline?
+                            .lanes
+                            .iter()
+                            .find(|l| l.track == *track)?
+                            .clips
+                            .iter()
+                            .find(|c| c.index == *index)
+                            .map(|c| (c.start, c.start + c.length))
+                    })
+                    .fold(None, |span: Option<(f64, f64)>, (start, end)| {
+                        Some(span.map_or((start, end), |(s, e)| (s.min(start), e.max(end))))
+                    });
+                if let Some((start, end)) = span.filter(|(s, e)| e > s) {
+                    actions
+                        .push(Action::new("transport.setLoop", json!({ "start": start, "end": end, "enabled": true })));
+                }
+            }
             "file.open" => self.open_project_dialog(true),
             "view.browser" if self.keymap.keys("view.browser").is_empty() => {
                 // A keymap preset (Draw-first) may leave the browser with no key: the window's own
