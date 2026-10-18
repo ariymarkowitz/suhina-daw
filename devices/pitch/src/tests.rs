@@ -236,6 +236,39 @@ fn a_key_played_again_while_held_ends_its_first_note() {
 }
 
 #[test]
+fn short_of_room_note_ons_are_left_out_before_note_offs() {
+    let mut device = pitch(&[(param::PITCH, 2.0)]);
+    run(&mut device, &[(0, NoteEvent::On { key: 60, velocity: 1.0 })]);
+    // Room for one: the held note ends and the new one is left out, so nothing sounds.
+    let again = [(5, NoteEvent::On { key: 60, velocity: 0.5 })];
+    let mut output = [(0, NoteEvent::AllNotesOff); 1];
+    assert_eq!(device.process_events(&ProcessContext::default(), 64, &again, &mut output), 1);
+    assert_eq!(output, [(5, NoteEvent::Off { key: 62, velocity: RELEASE })]);
+    assert!(run(&mut device, &[(9, NoteEvent::Off { key: 60, velocity: 0.5 })]).is_empty());
+    // Room for one with a note-off to come: the note-on gives its place to the note-off.
+    run(&mut device, &[(0, NoteEvent::On { key: 61, velocity: 1.0 })]);
+    let crowded = [(1, NoteEvent::On { key: 70, velocity: 1.0 }), (2, NoteEvent::Off { key: 61, velocity: 0.5 })];
+    let mut output = [(0, NoteEvent::AllNotesOff); 1];
+    assert_eq!(device.process_events(&ProcessContext::default(), 64, &crowded, &mut output), 1);
+    assert_eq!(output, [(2, NoteEvent::Off { key: 63, velocity: 0.5 })]);
+    // No room at all: the held note goes on, and its key's note-off still ends it.
+    run(&mut device, &[(0, NoteEvent::On { key: 50, velocity: 1.0 })]);
+    assert_eq!(
+        device.process_events(
+            &ProcessContext::default(),
+            64,
+            &[(3, NoteEvent::On { key: 50, velocity: 1.0 })],
+            &mut []
+        ),
+        0
+    );
+    assert_eq!(
+        run(&mut device, &[(4, NoteEvent::Off { key: 50, velocity: 0.5 })]),
+        [(4, NoteEvent::Off { key: 52, velocity: 0.5 })]
+    );
+}
+
+#[test]
 fn other_events_velocities_and_frames_pass_unchanged() {
     let mut device = pitch(&[(param::PITCH, -3.0)]);
     let input = [

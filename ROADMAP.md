@@ -176,7 +176,8 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
 - MIDI effects run before a track's instrument: the pitch effect transposes the notes by
   semitones or by steps along the playing clip's scale and keeps them inside a window of keys
   (Block, Fold, Limit); a note-off always ends the key its note started
-  ([spec](docs/spec/pitch.md)). It is in the browser under **MIDI Effects** and is set through
+  ([spec](docs/spec/pitch.md)). On a track with no instrument the changed notes play as the
+  track's sine tones. It is in the browser under **MIDI Effects** and is set through
   `device.setParam` or an automation lane; the device panel shows no controls for built-in
   devices yet.
 - Sends and return tracks play: each track sends to each return before or after its fader; a

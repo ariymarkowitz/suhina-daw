@@ -149,11 +149,15 @@ impl Device for Pitch {
     ) -> usize {
         let last = frames.saturating_sub(1);
         let mut written = 0;
+        // The releases still to come keep their room: a note-on never takes the place a
+        // note-off needs, so a note this sends always ends (ADR 0004 › 13).
+        let mut releases = input.iter().filter(|(_, event)| is_release(*event)).count();
         for &(frame, event) in input {
-            // A note-on may need room for two: the end of the note its key still holds.
-            if output.len().saturating_sub(written) < 2 {
-                break;
+            if is_release(event) {
+                releases = releases.saturating_sub(1);
             }
+            // What this event may take once the releases after it have their room.
+            let spare = output.len().saturating_sub(written).saturating_sub(releases);
             let frame = frame.min(last);
             let mut send = |event: NoteEvent| {
                 if let Some(slot) = output.get_mut(written) {
@@ -164,10 +168,18 @@ impl Device for Pitch {
             match event {
                 NoteEvent::On { key, velocity } if key > 127 || !velocity.is_finite() => {}
                 NoteEvent::On { key, velocity } if velocity > 0.0 => {
-                    if let Some(sent) = self.release(key) {
+                    let held = self.sounding.get(usize::from(key)).is_some_and(|&sent| sent != SILENT);
+                    let placed = self.transform(key);
+                    let needs = usize::from(held) + usize::from(placed.is_some());
+                    // Without room for both, the note that sounds is ended and the new one left
+                    // out; without room for either, the old note goes on until its key's note-off.
+                    if held
+                        && spare >= 1
+                        && let Some(sent) = self.release(key)
+                    {
                         send(NoteEvent::Off { key: sent, velocity: RELEASE });
                     }
-                    if let Some(sent) = self.transform(key) {
+                    if let Some(sent) = placed.filter(|_| spare >= needs) {
                         send(NoteEvent::On { key: sent, velocity: velocity.min(1.0) });
                         if let Some(slot) = self.sounding.get_mut(usize::from(key)) {
                             *slot = sent;
@@ -192,12 +204,27 @@ impl Device for Pitch {
                 }
                 NoteEvent::Scale(scale) => {
                     self.scale = scale;
-                    send(event);
+                    if spare >= 1 {
+                        send(event);
+                    }
                 }
-                NoteEvent::Controller { .. } | NoteEvent::PitchBend(_) | NoteEvent::Pressure(_) => send(event),
+                NoteEvent::Controller { .. } | NoteEvent::PitchBend(_) | NoteEvent::Pressure(_) => {
+                    if spare >= 1 {
+                        send(event);
+                    }
+                }
             }
         }
         written
+    }
+}
+
+/// Whether `event` ends notes: a note-off, a note-on of velocity 0 or less, or all-notes-off.
+fn is_release(event: NoteEvent) -> bool {
+    match event {
+        NoteEvent::Off { .. } | NoteEvent::AllNotesOff => true,
+        NoteEvent::On { velocity, .. } => velocity.is_finite() && velocity <= 0.0,
+        _ => false,
     }
 }
 

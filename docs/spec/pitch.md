@@ -91,7 +91,10 @@ the events the next device gets, so MIDI effects run in the order they sit befor
 A span is split where one of the effect's parameters follows a lane, with the change before the
 events at its frame. `device.add` puts a MIDI effect after the track's other MIDI effects, before
 its instrument and audio effects, and only on a MIDI track; an instrument goes after the MIDI
-effects. The browser lists the built-in ones under **MIDI Effects**.
+effects. On a track with no instrument the changed notes play as the track's sine tones, as its
+notes would without the effect. When a block is so crowded that the room for events runs short,
+the device leaves out note-ons before note-offs, so a note it sent always ends. Offline renders
+and playback run the same chain. The browser lists the built-in ones under **MIDI Effects**.
 
 ## Import
 
@@ -162,10 +165,12 @@ unchanged, no latency.
 keyboard's ends, Block before the transposition, Fold's period and Limit after it, a window past
 the top key, scale degrees in major, Dorian and a pentatonic scale with keys outside the scale,
 degrees without a scale, Block with the scale; note-offs after a change, blocked notes, several
-keys on one, a key played again, and everything else passing unchanged.
+keys on one, a key played again, note-ons left out before note-offs when room runs short, and
+everything else passing unchanged.
 
 `crates/engine/src/midi_effect_tests.rs`: offline renders through the FM synth equal those of the
-transposed notes without the device, in every block size; blocked notes are silent; the clip's
+transposed notes without the device, in every block size; without an instrument the sine tones
+play the transposed notes, before the audio effects; blocked notes are silent; the clip's
 scale reaches the device from the arrangement and from launched clips; a Pitch lane that moves
 under a held note leaves no note hanging. `crates/session/tests/devices.rs` checks where
 `device.add` puts it, and `crates/als/src/devices.rs` the import.

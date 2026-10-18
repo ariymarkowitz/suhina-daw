@@ -382,8 +382,11 @@ pub trait Device: Send {
     /// A MIDI effect's work on a span of `frames` frames: `input` holds the events that reach
     /// it, in frame order, at frames counted from the span's start; the device writes the events
     /// it sends on into `output`, in frame order and before `frames`, and returns how many it
-    /// wrote. It writes no more than `output.len()`, which the host makes at least twice
-    /// `input.len()`. The host splits a span where a parameter changes, so a change lands
+    /// wrote. It writes no more than `output.len()`: at least `input.len()`, and twice that
+    /// while the block has space. With more to send than fits, it leaves out note-ons (and
+    /// then their note-offs) before any note-off of a note it sent, keeping room for the
+    /// note-offs and all-notes-off still in `input`, so no note it started is left sounding.
+    /// The host splits a span where a parameter changes, so a change lands
     /// between the events either side of it; the result must not depend on how the stream is
     /// divided otherwise. [`reset`](Self::reset) forgets the notes it holds. Effects and
     /// instruments are never asked; by default the events pass unchanged.

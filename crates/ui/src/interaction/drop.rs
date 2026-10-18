@@ -361,6 +361,15 @@ mod tests {
             plan(&[synth], DropTarget::NewTracks { beat: Some(0.0), scene: None }, false, "rhythmic", false, &name)
                 .unwrap();
         assert_eq!(new.commands, vec![("track.add", json!({ "device": "fm-synth" }))]);
+        // A MIDI effect is a device like the others: the session puts it before the instrument.
+        let pitch = item("device:pitch", ItemKind::MidiEffect);
+        let on_track =
+            plan(std::slice::from_ref(&pitch), DropTarget::Track(TrackId(2)), false, "rhythmic", false, &name).unwrap();
+        assert_eq!(on_track.commands, vec![("device.add", json!({ "id": "pitch", "track": 2 }))]);
+        let new =
+            plan(&[pitch], DropTarget::NewTracks { beat: Some(0.0), scene: None }, false, "rhythmic", false, &name)
+                .unwrap();
+        assert_eq!(new.commands, vec![("track.add", json!({ "device": "pitch" }))]);
         assert!(
             plan(&[item("/s/dir", ItemKind::Folder)], DropTarget::Track(TrackId(1)), false, "rhythmic", false, &name)
                 .is_none()

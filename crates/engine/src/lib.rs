@@ -58,6 +58,7 @@ mod record_tests;
 mod sends;
 #[cfg(test)]
 mod sends_tests;
+mod sine;
 mod stretch;
 mod swap;
 mod tempo;

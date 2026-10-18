@@ -183,7 +183,8 @@ gesture id grouping both XY axes into one undo step. See [ADR 0021](decisions/00
    per-track gains (group and master chain included) and a device chain for each track whose
    channel holds built-in effects and instruments, made through `device-registry` and prepared (ADR 0004;
    built-in MIDI effects change the chain's note events before its instrument, and each note
-   carries its clip's scale for them, ADR 0004 › 13); a
+   carries its clip's scale for them; MIDI effects without an instrument after them get the
+   engine's sine tones as one, `sine.rs`, ADR 0004 › 13); a
    group with devices is a bus that sums the chains of its tracks before its own run (ADR 0004
    › 10, `buses.rs`), a return track a chain that sums the sends into it (ADR 0004 › 11,
    `sends.rs`), with

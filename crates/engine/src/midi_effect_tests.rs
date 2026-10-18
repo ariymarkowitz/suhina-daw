@@ -38,6 +38,24 @@ fn pitch_before_an_instrument_transposes_the_notes_it_plays() {
 }
 
 #[test]
+fn without_an_instrument_the_changed_notes_play_as_the_tracks_sine_tones() {
+    let notes = vec![note(0.0, 1.0, 60), note(0.5, 1.0, 64), note(1.5, 0.5, 120)];
+    let moved = vec![note(0.0, 1.0, 72), note(0.5, 1.0, 76), note(1.5, 0.5, 127)];
+    let reference = render(&project(moved.clone(), 2.0, vec![]));
+    assert!(peak(&reference) > 0.05);
+    for size in [1, 64, 333, 4_096] {
+        let pitched = project(notes.clone(), 2.0, vec![device("pitch", &[("pitch", 12.0)])]);
+        let out = render_offline(&pitched, SR, size).unwrap_or_else(|e| panic!("{e}"));
+        assert!(max_diff(&out, &reference) < 1e-5, "block {size}: {}", max_diff(&out, &reference));
+    }
+    // The tones come before the audio effects, as an instrument would.
+    let gain = || device("utility", &[("gain", -6.0)]);
+    let out = render(&project(notes, 2.0, vec![device("pitch", &[("pitch", 12.0)]), gain()]));
+    let reference = render(&project(moved, 2.0, vec![gain()]));
+    assert!(max_diff(&out, &reference) < 1e-5, "{}", max_diff(&out, &reference));
+}
+
+#[test]
 fn notes_the_window_blocks_are_never_played() {
     let notes = vec![note(0.0, 1.0, 40), note(1.0, 1.0, 60)];
     let window = [("lowest", 60.0), ("range", 0.0)];

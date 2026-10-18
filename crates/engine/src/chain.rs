@@ -39,6 +39,7 @@ use crate::plugin::{
 };
 use crate::plugin_params::SlotParams;
 use crate::sends::SendOut;
+use crate::sine::{self, SineTones};
 
 /// The most frames one block of a chain holds; the renderer splits longer blocks.
 pub(crate) const MAX_BLOCK: usize = 1024;
@@ -256,12 +257,24 @@ impl Chain {
             ids.push(id.clone());
             params.push(values);
         }
-        let instrument = slots.iter().any(|slot| match slot {
+        let mut instrument = slots.iter().any(|slot| match slot {
             Slot::Device(device) => device.info().role == Role::Instrument,
             Slot::Plugin(slot) => slot.instrument,
             Slot::InstrumentSd(_) => true,
             Slot::MidiDevice(_) | Slot::Sd(_) | Slot::MidiSd(_) => false,
         });
+        // MIDI effects with no instrument after them play the notes they change as the sine
+        // tones the track would play without them (ADR 0004 › 13).
+        let is_midi = |slot: &Slot| matches!(slot, Slot::MidiDevice(_) | Slot::MidiSd(_));
+        if !instrument && slots.iter().any(is_midi) {
+            let at = slots.iter().take_while(|slot| is_midi(slot)).count();
+            device_lanes.insert_slot(at);
+            slots.insert(at, Slot::Device(Box::new(SineTones::new(sample_rate))));
+            positions.insert(at, usize::MAX);
+            ids.insert(at, sine::INFO.id.to_string());
+            params.insert(at, Vec::new());
+            instrument = true;
+        }
         (!slots.is_empty()).then(|| Self {
             track,
             column,
@@ -1255,8 +1268,9 @@ fn run_sd_midi(
 /// Runs a built-in MIDI effect (slot `slot` of its chain) over the block's frames `from..to`:
 /// `events` (at block frames) go in, what it sends on goes to `output` (at block frames), split
 /// where a parameter that follows a lane changes, a change at a frame coming before the events
-/// at that frame. `input` is scratch for each span's events. Never allocates: what would not fit
-/// in `output`'s capacity is left out.
+/// at that frame. `input` is scratch for each span's events. Never allocates: the device gets
+/// the room `output`'s capacity has left, at least as many events as it is handed (the block's
+/// events never outnumber that capacity), and leaves out what does not fit, note-ons first.
 fn run_midi_device(
     device: &mut Box<dyn Device>,
     slot: usize,
@@ -1304,7 +1318,10 @@ fn midi_span(
         *next += 1;
     }
     let written = output.len();
-    output.resize(output.capacity(), (0, NoteEvent::AllNotesOff));
+    // The events of the block's later spans keep their room, so every span has room for at
+    // least as many events as it hands over (ADR 0004 › 13).
+    let later = events.len().saturating_sub(*next);
+    output.resize(output.capacity().saturating_sub(later).max(written), (0, NoteEvent::AllNotesOff));
     let sent = match output.get_mut(written..) {
         Some(room) => device.process_events(context, frames, input, room),
         None => 0,

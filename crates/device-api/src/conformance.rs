@@ -5,8 +5,9 @@
 //! test; the checks cover the [`Device`] contract, not the device's sound. Instruments also go
 //! through note checks: a fixed performance played in blocks of every size, `reset` while notes
 //! sound, hostile events and every sample rate. MIDI effects go through event checks: the same
-//! events in spans of every size, at every parameter's ends, `reset`, hostile events and too
-//! little room to write, and every note they start is ended.
+//! events in spans of every size, at every parameter's ends, `reset`, hostile events,
+//! all-notes-off and too little room to write, and every note they start is ended, also with
+//! room for no more events than they get.
 
 use crate::{Device, MusicalScale, NoteEvent, ParamKind, ProcessContext, Role, controller};
 
@@ -366,14 +367,21 @@ pub fn test_events() -> Vec<(usize, NoteEvent)> {
     events
 }
 
+/// The room [`run_events`] gives a span of `n` events: twice as many, as a chain gives when its
+/// block has space, or only as many, the least a chain gives (ADR 0004 › 13).
+const TWICE: fn(usize) -> usize = |n| n * 2;
+const ONCE: fn(usize) -> usize = |n| n;
+
 /// Runs `events` through a MIDI effect over `frames` frames, in spans of `sizes` (repeated),
 /// setting the parameters to their ends every 1024 frames as [`render`] does, with the span split
-/// there. Returns what it sent on, at frames from the start.
+/// there, with `room(n)` events of room for a span of `n` events. Returns what it sent on, at
+/// frames from the start.
 fn run_events(
     device: &mut dyn Device,
     events: &[(usize, NoteEvent)],
     sizes: &[usize],
     frames: usize,
+    room: fn(usize) -> usize,
 ) -> Vec<(usize, NoteEvent)> {
     let mut out = Vec::new();
     let mut frame = 0usize;
@@ -394,7 +402,7 @@ fn run_events(
             input.push((at.saturating_sub(frame), event));
             next += 1;
         }
-        let mut output = vec![(0, NoteEvent::AllNotesOff); input.len() * 2];
+        let mut output = vec![(0, NoteEvent::AllNotesOff); room(input.len())];
         let written = device.process_events(&ProcessContext::default(), size, &input, &mut output);
         out.extend(output.iter().take(written).map(|&(at, event)| (at + frame, event)));
         frame += size;
@@ -464,7 +472,7 @@ fn check_events(make: &dyn Fn() -> Box<dyn Device>, failures: &mut Vec<String>) 
     let mut events = test_events();
     events.retain(|(_, event)| !matches!(event, NoteEvent::AllNotesOff));
     let events = released(events);
-    let reference = run_events(make().as_mut(), &events, &[512], FRAMES);
+    let reference = run_events(make().as_mut(), &events, &[512], FRAMES, TWICE);
     for fault in event_faults(&reference, FRAMES) {
         failures.push(format!("the test events: {fault}"));
     }
@@ -472,7 +480,7 @@ fn check_events(make: &dyn Fn() -> Box<dyn Device>, failures: &mut Vec<String>) 
         failures.push("the test events send no note on".into());
     }
     for sizes in [&[1][..], &[7, 64, 333], &[1_024], &[3, 1, 250, 900]] {
-        let other = run_events(make().as_mut(), &events, sizes, FRAMES);
+        let other = run_events(make().as_mut(), &events, sizes, FRAMES, TWICE);
         if other != reference {
             failures.push(format!("events in spans of {sizes:?} differ from spans of 512"));
         }
@@ -481,9 +489,9 @@ fn check_events(make: &dyn Fn() -> Box<dyn Device>, failures: &mut Vec<String>) 
     // Reset while notes are held, then the same events again.
     let mut device = make();
     let held = [(0, NoteEvent::On { key: 30, velocity: 1.0 }), (10, NoteEvent::On { key: 90, velocity: 1.0 })];
-    run_events(device.as_mut(), &held, &[256], 1_024);
+    run_events(device.as_mut(), &held, &[256], 1_024, TWICE);
     device.reset();
-    if run_events(device.as_mut(), &events, &[512], FRAMES) != reference {
+    if run_events(device.as_mut(), &events, &[512], FRAMES, TWICE) != reference {
         failures.push("after reset with notes held the events differ from a fresh device's".into());
     }
 
@@ -502,11 +510,31 @@ fn check_events(make: &dyn Fn() -> Box<dyn Device>, failures: &mut Vec<String>) 
         }
     }
     let hostile = released(hostile);
-    let out = run_events(make().as_mut(), &hostile, &[512], FRAMES);
     // Values out of range may pass on as they came (whatever gets them accepts any value);
-    // the order of the events and the ends of the notes are what count.
-    for fault in event_faults(&out, FRAMES).into_iter().filter(|fault| !fault.contains("out of range")) {
-        failures.push(format!("hostile events: {fault}"));
+    // the order of the events and the ends of the notes are what count. With room for no more
+    // than it gets, a device leaves out note-ons before note-offs, so no note hangs either.
+    for (what, room) in [("hostile events", TWICE), ("hostile events with room for as many", ONCE)] {
+        let out = run_events(make().as_mut(), &hostile, &[512], FRAMES, room);
+        for fault in event_faults(&out, FRAMES).into_iter().filter(|fault| !fault.contains("out of range")) {
+            failures.push(format!("{what}: {fault}"));
+        }
+    }
+    for fault in event_faults(&run_events(make().as_mut(), &events, &[512], FRAMES, ONCE), FRAMES) {
+        failures.push(format!("the test events with room for as many: {fault}"));
+    }
+
+    // All-notes-off ends every note the device started, and the keys play again after it.
+    let mut all_off: Vec<(usize, NoteEvent)> =
+        [0u8, 40, 61, 64, 127].iter().map(|&key| (100, NoteEvent::On { key, velocity: 0.8 })).collect();
+    all_off.push((2_000, NoteEvent::AllNotesOff));
+    all_off.extend([0u8, 61, 127].iter().map(|&key| (3_000, NoteEvent::On { key, velocity: 0.8 })));
+    let all_off = released(all_off);
+    let out = run_events(make().as_mut(), &all_off, &[512], FRAMES, TWICE);
+    for fault in event_faults(&out, FRAMES) {
+        failures.push(format!("all-notes-off: {fault}"));
+    }
+    if !out.iter().any(|&(at, event)| at >= 3_000 && matches!(event, NoteEvent::On { .. })) {
+        failures.push("after all-notes-off no note plays again".into());
     }
     let mut device = make();
     for (input, room) in [(&hostile[..], 0), (&hostile[..], 1), (&events[..], 3)] {
@@ -648,5 +676,70 @@ mod tests {
         let failures = check(&|| Box::new(Through));
         let events: Vec<&String> = failures.iter().filter(|f| !f.contains("parameter")).collect();
         assert!(events.is_empty(), "{events:#?}");
+    }
+
+    /// A MIDI effect that doubles every note an octave up and writes until its output is full,
+    /// so with too little room the note-offs at the end are the ones left out; or, `swallow`,
+    /// one that drops all-notes-off and forgets nothing.
+    struct Doubler {
+        swallow: bool,
+    }
+
+    impl Device for Doubler {
+        fn info(&self) -> &'static DeviceInfo {
+            &MIDI
+        }
+        fn prepare(&mut self, sample_rate: f64) -> Result<(), DeviceError> {
+            crate::check_sample_rate(sample_rate).map(|_| ())
+        }
+        fn reset(&mut self) {}
+        fn set_param(&mut self, _: usize, _: f64) {}
+        fn param(&self, index: usize) -> Option<f64> {
+            (index == 0).then_some(1.0)
+        }
+        fn process(&mut self, _: &ProcessContext, _: &mut [f32]) {}
+        fn process_events(
+            &mut self,
+            _: &ProcessContext,
+            _: usize,
+            input: &[(usize, NoteEvent)],
+            output: &mut [(usize, NoteEvent)],
+        ) -> usize {
+            let mut written = 0;
+            let mut send = |event| {
+                if let Some(slot) = output.get_mut(written) {
+                    *slot = event;
+                    written += 1;
+                }
+            };
+            for &(at, event) in input {
+                match event {
+                    NoteEvent::AllNotesOff if self.swallow => {}
+                    NoteEvent::On { key, velocity } if !self.swallow && key < 116 => {
+                        send((at, event));
+                        send((at, NoteEvent::On { key: key + 12, velocity }));
+                    }
+                    NoteEvent::Off { key, velocity } if !self.swallow && key < 116 => {
+                        send((at, event));
+                        send((at, NoteEvent::Off { key: key + 12, velocity }));
+                    }
+                    other => send((at, other)),
+                }
+            }
+            written
+        }
+    }
+
+    #[test]
+    fn catches_a_midi_effect_that_spends_the_room_note_offs_need() {
+        let failures = check(&|| Box::new(Doubler { swallow: false }));
+        assert!(failures.iter().any(|f| f.contains("room for as many") && f.contains("still sounds")), "{failures:#?}");
+        assert!(!failures.iter().any(|f| f.starts_with("hostile events: ")), "{failures:#?}");
+    }
+
+    #[test]
+    fn catches_a_midi_effect_that_drops_all_notes_off() {
+        let failures = check(&|| Box::new(Doubler { swallow: true }));
+        assert!(failures.iter().any(|f| f.starts_with("all-notes-off:")), "{failures:#?}");
     }
 }
