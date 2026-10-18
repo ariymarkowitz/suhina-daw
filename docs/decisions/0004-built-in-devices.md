@@ -62,8 +62,8 @@ decision 9.
    `ProcessContext` (tempo, song position in beats, whether the transport runs) for devices that
    follow the tempo. `latency()` reports added delay for compensation.
 5. **Automation: the host splits, the device smooths.** The host addresses parameters by index
-   and splits a block where an automation point falls, so a change lands on its frame; the
-   device ramps a change that would click (20 ms for the utility). The output must not depend on
+   and splits a block where an automation point falls, so a change lands on its frame, and gives
+   each part the song position of its own first frame; the device ramps a change that would click (20 ms for the utility). The output must not depend on
    how a stream is divided into blocks.
 6. **Every device passes the same contract tests.** `device_api::conformance::check` runs a
    device through hostile parameter values and input (NaN, infinities, extremes), several block
