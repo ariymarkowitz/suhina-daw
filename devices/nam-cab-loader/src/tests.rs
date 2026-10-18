@@ -229,3 +229,29 @@ fn a_longer_ir_convolves_finitely() {
     let level = level(frames(&s), 2_000.0, D + 4_800);
     assert!(level > 1e-4, "level {level}");
 }
+
+/// The reader normalizes every integer width to ±1: a full-scale 24-bit sample (the width the
+/// real IR packs come in) must not come out divided by i32's range — 48 dB of missing gain.
+#[test]
+fn the_reader_normalizes_each_integer_width_to_its_own_range() {
+    let dir = std::env::temp_dir().join(format!("suhina-cab-ir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("the folder is made");
+    for (bits, peak_i) in [(16_u16, 16_384_i32), (24, 8_188_608), (32, 2_147_483_647 / 2)] {
+        let path = dir.join(format!("ir-{bits}.wav"));
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: bits,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("the writer opens");
+        writer.write_sample(peak_i).expect("the sample is written");
+        drop(writer);
+        let ir = super::ir::read(&path, 48_000).expect("the ir reads");
+        let peak = ir.side(0).iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let expected = peak_i as f64 / f64::from(1_u32 << (bits - 1));
+        assert!((peak as f64 - expected).abs() < 1e-3, "{bits}-bit: peak {peak}, expected {expected}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
