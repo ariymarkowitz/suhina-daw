@@ -1272,16 +1272,16 @@ fn run_midi_device(
     for change in lanes.changes(slot, run.from, run.to) {
         let end = change.frame.clamp(start, run.to);
         if end > start {
-            midi_span(device, events, &mut next, input, output, (start, end, false), run.context);
+            midi_span(device, events, &mut next, input, output, SdRun { from: start, to: end, ..run }, false);
         }
         device.set_param(change.param, change.value);
         start = end;
     }
-    midi_span(device, events, &mut next, input, output, (start, run.to, true), run.context);
+    midi_span(device, events, &mut next, input, output, SdRun { from: start, ..run }, true);
 }
 
-/// One span `start..end` of [`run_midi_device`]: the events from `next` that fall before `end`
-/// (all that are left, when `last`) go through the device. An event outside the span is handed
+/// One span `from..to` of [`run_midi_device`]: the events from `next` that fall before `to`
+/// (all that are left, when `rest`) go through the device. An event outside the span is handed
 /// over at its nearest frame, as `run_device` does.
 fn midi_span(
     device: &mut Box<dyn Device>,
@@ -1289,14 +1289,15 @@ fn midi_span(
     next: &mut usize,
     input: &mut Vec<(usize, NoteEvent)>,
     output: &mut Vec<(usize, NoteEvent)>,
-    (start, end, last): (usize, usize, bool),
-    context: &ProcessContext,
+    span: SdRun<'_>,
+    rest: bool,
 ) {
+    let SdRun { from: start, to: end, context } = span;
     let frames = end.saturating_sub(start);
     let final_frame = frames.saturating_sub(1);
     input.clear();
     while let Some(&(at, event)) = events.get(*next)
-        && (last || at < end)
+        && (rest || at < end)
         && input.len() < input.capacity()
     {
         input.push((at.saturating_sub(start).min(final_frame), event));

@@ -419,18 +419,7 @@ fn event_faults(out: &[(usize, NoteEvent)], frames: usize) -> Vec<String> {
             NoteEvent::On { key, velocity } | NoteEvent::Off { key, velocity } if key > 127 || !fine(velocity) => {
                 faults.push(format!("{event:?} at frame {at} is out of range"));
             }
-            NoteEvent::On { key, velocity } => {
-                if let Some(slot) = sounding.get_mut(usize::from(key)) {
-                    *slot = velocity > 0.0;
-                }
-            }
-            NoteEvent::Off { key, .. } => {
-                if let Some(slot) = sounding.get_mut(usize::from(key)) {
-                    *slot = false;
-                }
-            }
-            NoteEvent::AllNotesOff => sounding = [false; 128],
-            _ => {}
+            _ => follow(&mut sounding, event),
         }
     }
     for (key, _) in sounding.iter().enumerate().filter(|(_, sounds)| **sounds) {
@@ -439,25 +428,31 @@ fn event_faults(out: &[(usize, NoteEvent)], frames: usize) -> Vec<String> {
     faults
 }
 
+/// Follows `event` in `sounding`, the keys that sound: a note-on with a velocity above 0 starts
+/// its key, any other note-on or a note-off ends it, all-notes-off ends every key.
+fn follow(sounding: &mut [bool; 128], event: NoteEvent) {
+    match event {
+        NoteEvent::On { key, velocity } => {
+            if let Some(slot) = sounding.get_mut(usize::from(key)) {
+                *slot = velocity > 0.0;
+            }
+        }
+        NoteEvent::Off { key, .. } => {
+            if let Some(slot) = sounding.get_mut(usize::from(key)) {
+                *slot = false;
+            }
+        }
+        NoteEvent::AllNotesOff => *sounding = [false; 128],
+        _ => {}
+    }
+}
+
 /// `events` with every key still held at the end released one by one at the last frame, so a
 /// note the effect leaves hanging shows (an all-notes-off would hide it).
 fn released(mut events: Vec<(usize, NoteEvent)>) -> Vec<(usize, NoteEvent)> {
     let mut held = [false; 128];
     for &(_, event) in &events {
-        match event {
-            NoteEvent::On { key, velocity } if velocity > 0.0 => {
-                if let Some(slot) = held.get_mut(usize::from(key)) {
-                    *slot = true;
-                }
-            }
-            NoteEvent::On { key, .. } | NoteEvent::Off { key, .. } => {
-                if let Some(slot) = held.get_mut(usize::from(key)) {
-                    *slot = false;
-                }
-            }
-            NoteEvent::AllNotesOff => held = [false; 128],
-            _ => {}
-        }
+        follow(&mut held, event);
     }
     for key in (0..=127u8).filter(|&key| held.get(usize::from(key)) == Some(&true)) {
         events.push((FRAMES - 1, NoteEvent::Off { key, velocity: 0.5 }));

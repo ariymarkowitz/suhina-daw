@@ -13,6 +13,7 @@ use suhina_device_api::Role;
 use suhina_library::{FileKind, Group, Item, Library, Query};
 
 use crate::commands::{CommandKind, CommandSpec, Param, ParamType, optional, param};
+use crate::devices::role_name;
 use crate::{CommandError, Projects};
 
 const FOLDER: Param = param("folder", ParamType::Text, "a folder, as library.folders lists them");
@@ -345,7 +346,7 @@ fn describe(projects: &mut Projects, item: Item) -> Option<Found> {
         }
         Item::Device(id) => {
             let info = suhina_device_registry::info(id)?;
-            let kind = device_kind(info.role);
+            let kind = role_name(info.role);
             Some(Found { name: info.name.to_string(), kind, detail: None, plugin: false, folder: None, item })
         }
         Item::Plugin(spec) => {
@@ -355,15 +356,6 @@ fn describe(projects: &mut Projects, item: Item) -> Option<Found> {
             let detail = Some(format!("{} {}", plugin.format(), plugin.vendor).trim().to_string());
             Some(Found { name: plugin.name.clone(), kind, detail, plugin: true, folder: None, item })
         }
-    }
-}
-
-/// What a built-in device is, as a found item's kind says it.
-fn device_kind(role: Role) -> &'static str {
-    match role {
-        Role::Instrument => "instrument",
-        Role::Effect => "effect",
-        Role::MidiEffect => "midi_effect",
     }
 }
 
@@ -427,7 +419,7 @@ pub fn search_items(
     // Built-in effects and instruments, and plug-ins, unless a folder is the place.
     if within.is_none() {
         for info in suhina_device_registry::DEVICES {
-            let kind = device_kind(info.role);
+            let kind = role_name(info.role);
             let found = Found {
                 item: Item::Device(info.id.to_string()),
                 name: info.name.to_string(),
@@ -533,7 +525,7 @@ fn info(projects: &mut Projects, params: &Value) -> Result<Value, CommandError> 
         Item::Device(id) => {
             let info =
                 suhina_device_registry::info(id).ok_or_else(|| format!("no built-in effect or instrument {id:?}"))?;
-            json!({ "kind": device_kind(info.role), "name": info.name })
+            json!({ "kind": role_name(info.role), "name": info.name })
         }
         Item::Plugin(spec) => {
             let env = projects.plugin_env();

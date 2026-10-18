@@ -472,12 +472,12 @@ impl BrowserState {
         if !open {
             return;
         }
+        let kind = match role {
+            Role::Instrument => ItemKind::Instrument,
+            Role::Effect => ItemKind::Effect,
+            Role::MidiEffect => ItemKind::MidiEffect,
+        };
         for info in suhina_device_registry::DEVICES.iter().filter(|info| info.role == role) {
-            let kind = match role {
-                Role::Instrument => ItemKind::Instrument,
-                Role::Effect => ItemKind::Effect,
-                Role::MidiEffect => ItemKind::MidiEffect,
-            };
             let item = BrowserItem { key: format!("device:{}", info.id), name: info.name.into(), kind, plugin: false };
             rows.push(Row { item, depth: 1, opens: false, open: false, context: None, columns: None });
         }

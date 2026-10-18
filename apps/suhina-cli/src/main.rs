@@ -384,7 +384,7 @@ fn read_voices(path: &std::path::Path) -> Result<suhina_device_fm_synth::patch::
 /// Puts the FM synth with `patch` on the channel of every track that plays notes, first after
 /// its MIDI effects, in place of an instrument already there.
 fn put_fm_synth_on_note_tracks(project: &mut Project, patch: &suhina_device_fm_synth::Patch) {
-    use suhina_device_api::Device as _;
+    use suhina_device_api::{Device as _, Role};
     let mut synth = suhina_device_fm_synth::FmSynth::new();
     synth.load_patch(patch);
     let params: Vec<DeviceParam> = suhina_device_fm_synth::INFO
@@ -404,12 +404,15 @@ fn put_fm_synth_on_note_tracks(project: &mut Project, patch: &suhina_device_fm_s
     };
     let channels: Vec<ChannelId> =
         project.tracks.iter().filter(|t| t.content.notes).filter_map(|t| t.channel).collect();
-    let is = |d: &Device, role: suhina_device_api::Role| matches!(&d.kind, DeviceKind::Builtin(id) if suhina_device_registry::info(id).is_some_and(|i| i.role == role));
+    let role = |d: &Device| match &d.kind {
+        DeviceKind::Builtin(id) => suhina_device_registry::info(id).map(|info| info.role),
+        _ => None,
+    };
     for channel in project.channels.iter_mut().filter(|c| channels.contains(&c.id)) {
         // The synth goes after the MIDI effects that lead the chain, in place of a built-in
         // instrument there.
-        let at = channel.devices.iter().take_while(|d| is(d, suhina_device_api::Role::MidiEffect)).count();
-        if channel.devices.get(at).is_some_and(|d| is(d, suhina_device_api::Role::Instrument)) {
+        let at = channel.devices.iter().take_while(|d| role(d) == Some(Role::MidiEffect)).count();
+        if channel.devices.get(at).is_some_and(|d| role(d) == Some(Role::Instrument)) {
             channel.devices.remove(at);
         }
         channel.devices.insert(at, device.clone());
