@@ -854,6 +854,11 @@ static COMMANDS: &[CommandSpec] = &[
                 ParamType::Decibels,
                 "click level in dB, at most +6; keeps the current level (-6 at first) if left out",
             ),
+            optional(
+                "sound",
+                ParamType::Text,
+                "the click's sound: beep (the first), wood or soft; keeps it if left out",
+            ),
         ],
         kind: CommandKind::Transport,
         run: set_metronome,
@@ -3246,12 +3251,26 @@ fn set_metronome(session: &mut Session, params: &Value) -> Result<Value, Command
             Some(if db < -150.0 { 0.0 } else { 10f64.powf(db / 20.0) })
         }
     };
+    let sound = match params.get("sound").and_then(Value::as_str) {
+        None => None,
+        Some(name) => Some(
+            suhina_engine::ClickSound::from_name(name)
+                .ok_or_else(|| CommandError(format!("sound must be beep, wood or soft, got {name}")))?,
+        ),
+    };
     send(session, LaunchCommand::SetMetronome { on, gain: gain.map(|g| g as f32) })?;
-    let mut result = json!({ "metronome": on });
-    if let Some(gain) = gain {
-        result["db"] = json!(to_db(gain));
+    if let Some(sound) = sound {
+        send(session, LaunchCommand::SetMetronomeSound(sound))?;
     }
-    Ok(result)
+    session.metronome.0 = on;
+    if let Some(gain) = gain {
+        session.metronome.1 = to_db(gain).unwrap_or(f64::NEG_INFINITY);
+    }
+    if let Some(sound) = sound {
+        session.metronome.2 = sound;
+    }
+    let (_, db, sound) = session.metronome;
+    Ok(json!({ "metronome": on, "db": if db.is_finite() { json!(db) } else { json!("-inf") }, "sound": sound.name() }))
 }
 
 fn move_clip(session: &mut Session, params: &Value) -> Result<Value, CommandError> {

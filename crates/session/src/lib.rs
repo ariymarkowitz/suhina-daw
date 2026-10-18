@@ -301,6 +301,9 @@ pub struct Session {
     armed: Vec<suhina_model::TrackId>,
     /// Takes being recorded and the count-in (`docs/spec/recording.md`).
     pub(crate) recording: recording::Recording,
+    /// The metronome: on, its level in dB, its sound. Not part of the project; a new output gets
+    /// it again.
+    pub(crate) metronome: (bool, f64, suhina_engine::ClickSound),
 }
 
 /// Files kept decoded ahead of the commands that use them.
@@ -335,6 +338,7 @@ impl Session {
             backup: backup::SessionBackups::default(),
             armed: Vec::new(),
             recording: recording::Recording::default(),
+            metronome: (false, -6.0, suhina_engine::ClickSound::Beep),
         }
     }
 

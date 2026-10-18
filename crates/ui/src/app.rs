@@ -1562,6 +1562,7 @@ impl App {
         let grid = self.session().map(|s| {
             let mut grid = Grid::build(s.project(), s.player().map(|p| p.monitor()));
             grid.midi_ports = self.projects.midi_ports().to_vec();
+            grid.metronome = s.metronome();
             grid.input_channels =
                 s.player().and_then(suhina_session::Player::output_info).map_or(0, |i| i.input_channels);
             for column in &mut grid.columns {
@@ -4254,7 +4255,10 @@ impl App {
         let ts_rect = row(x, 40.0);
         widgets::text_in(&painter, ts_rect, Align2::CENTER_CENTER, &signature, mono.clone(), theme::text_secondary());
         x = ts_rect.right() + PAD;
-        let quant_rect = row(x, 64.0);
+        let small = theme::ui_font(theme::TEXT_SMALL);
+        let grid_caption = row(x, 26.0);
+        widgets::text_in(&painter, grid_caption, Align2::LEFT_CENTER, "Grid", small.clone(), theme::text_hint());
+        let quant_rect = row(grid_caption.right(), 64.0);
         // One value for both: when launched clips start, and the Arrangement view's grid.
         let current = self.session().map_or(DEFAULT_QUANTIZATION, |s| quantization_label(s.quantization()));
         let mut chosen = current;
@@ -4279,9 +4283,13 @@ impl App {
         if chosen != current {
             actions.push(Action::new("launcher.setQuantization", json!({ "value": chosen })));
         }
-        let count_in = row(quant_rect.right() + PAD, 64.0);
+        let count_caption = row(quant_rect.right() + PAD, 50.0);
+        widgets::text_in(&painter, count_caption, Align2::LEFT_CENTER, "Count-in", small, theme::text_hint());
+        let count_in = row(count_caption.right(), 64.0);
         let bars = self.session().map_or(0, |s| s.count_in_bars());
         crate::session::record_controls::count_in_menu(ui, count_in, bars, actions);
+        let metronome = row(count_in.right() + PAD, 28.0);
+        crate::session::record_controls::metronome_button(ui, &painter, metronome, grid.metronome, actions);
 
         // Centre: play, stop, record, position.
         let transport_width = 28.0 * 3.0 + 2.0 + PAD + 64.0;

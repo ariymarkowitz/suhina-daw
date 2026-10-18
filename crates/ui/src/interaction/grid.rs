@@ -191,6 +191,8 @@ pub struct Grid {
     pub mapped: Vec<(MappingTarget, String)>,
     /// The main output's volume in dB.
     pub main_volume_db: f64,
+    /// The metronome: on, its level in dB, its sound; set by the app.
+    pub metronome: (bool, f64, suhina_engine::ClickSound),
 }
 
 impl Grid {
@@ -374,6 +376,7 @@ impl Grid {
                 .iter()
                 .find(|c| c.role == ChannelRole::Master)
                 .map_or(0.0, |c| gain_to_db(c.volume)),
+            metronome: (false, -6.0, suhina_engine::ClickSound::Beep),
         }
     }
 

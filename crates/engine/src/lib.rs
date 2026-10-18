@@ -88,6 +88,7 @@ pub use live::{
     port_id,
 };
 pub use meters::{Level, MAX_METERED_TRACKS, MeterMonitor, PEAK_FALL_DB_PER_SECOND, RMS_SECONDS};
+pub use metronome::ClickSound;
 use plugin::{DEADLINE_SHARE, Delay};
 pub use plugin::{
     Followed, Joint, MAX_JOINED, OFFLINE_TIMEOUT, PluginDevice, PluginProcessor, PluginSlotInfo, Plugins, Sent,
