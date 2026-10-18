@@ -1756,7 +1756,14 @@ fn clip_box<'a>(
     }
     egui::Popup::context_menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         menus::clip_menu(ui, &menu_clips, stack, clip.enabled, &clip.name, actions);
-        menus::clip_edit_menu(ui, lane.track, clip.index, (clip.start, clip.length), split_at, actions);
+        // Consolidate joins every clip of the menu's on this track, from the first start to the
+        // last end, so two selected clips become one.
+        let joined = menu_clips
+            .iter()
+            .filter(|(track, _)| *track == lane.track)
+            .filter_map(|(_, index)| lane.clips.iter().find(|c| c.index == *index))
+            .fold((clip.start, clip.start + clip.length), |(s, e), c| (s.min(c.start), e.max(c.start + c.length)));
+        menus::clip_edit_menu(ui, lane.track, clip.index, (clip.start, clip.length), joined, split_at, actions);
     });
     let (shift, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
     if response.clicked() {

@@ -333,12 +333,15 @@ pub fn clip_menu(
 }
 
 /// The editing part of an arrangement clip's menu: split it at `at`, the beat right-clicked on
-/// (when it is inside the clip), and consolidate it into a new clip.
+/// (when it is inside the clip), and consolidate `joined` (the start and end of the selected
+/// clips on its track, or of it alone) into a new clip.
+#[allow(clippy::too_many_arguments)]
 pub fn clip_edit_menu(
     ui: &mut Ui,
     track: TrackId,
     index: usize,
     span: (f64, f64),
+    joined: (f64, f64),
     at: Option<f64>,
     actions: &mut Vec<Action>,
 ) {
@@ -352,8 +355,7 @@ pub fn clip_edit_menu(
         ui.close();
     }
     if ui.add(egui::Button::new("Consolidate").shortcut_text(shown("Ctrl+J"))).clicked() {
-        actions
-            .push(Action::new("clip.consolidate", json!({ "track": track.0, "start": start, "end": start + length })));
+        actions.push(Action::new("clip.consolidate", json!({ "track": track.0, "start": joined.0, "end": joined.1 })));
         ui.close();
     }
 }

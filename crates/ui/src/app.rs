@@ -3380,9 +3380,18 @@ impl App {
                     .map(|c| (c.start, c.length));
                 let Some((start, length)) = clip else { return };
                 if action == "selection.consolidate" {
-                    // The clips under it become one new clip.
+                    // The selected clips on its track, from the first start to the last end,
+                    // become one new clip.
+                    let lane = timeline.and_then(|t| t.lanes.iter().find(|l| l.track == track));
+                    let (from, to) = self
+                        .arrangement
+                        .selected_clips()
+                        .iter()
+                        .filter(|(t, _)| *t == track)
+                        .filter_map(|(_, i)| lane.and_then(|l| l.clips.iter().find(|c| c.index == *i)))
+                        .fold((start, start + length), |(s, e), c| (s.min(c.start), e.max(c.start + c.length)));
                     self.arrangement.clear_selected_clip();
-                    let params = json!({ "track": track.0, "start": start, "end": start + length });
+                    let params = json!({ "track": track.0, "start": from, "end": to });
                     actions.push(Action::new("clip.consolidate", params));
                 } else if beat > start && beat < start + length {
                     actions.push(Action::new("clip.split", json!({ "track": track.0, "index": index, "at": beat })));
