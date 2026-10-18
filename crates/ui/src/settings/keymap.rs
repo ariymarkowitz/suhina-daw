@@ -64,6 +64,29 @@ impl Shortcut {
         parts.join("+")
     }
 
+    /// The key as menus and Settings show it: as [`Shortcut::text`] writes it, but on macOS with
+    /// the system's signs (⌘C, ⇧⌘D, ⌥⌘M).
+    pub fn display(&self) -> String {
+        if !cfg!(target_os = "macos") {
+            return self.text();
+        }
+        let mut text = String::new();
+        if self.modifiers.ctrl && !self.modifiers.mac_cmd && !self.modifiers.command {
+            text.push('⌃');
+        }
+        if self.modifiers.alt {
+            text.push('⌥');
+        }
+        if self.modifiers.shift {
+            text.push('⇧');
+        }
+        if self.modifiers.command || self.modifiers.mac_cmd {
+            text.push('⌘');
+        }
+        text.push_str(self.key.name());
+        text
+    }
+
     fn modifier_count(&self) -> usize {
         usize::from(self.modifiers.command || self.modifiers.ctrl)
             + usize::from(self.modifiers.shift)
@@ -86,7 +109,7 @@ pub struct Action {
 }
 
 /// Actions the window does itself or on the selection, with their labels.
-const WINDOW_ACTIONS: [(&str, &str, &str); 62] = [
+const WINDOW_ACTIONS: [(&str, &str, &str); 63] = [
     ("file.new", "New project or open one", "File"),
     ("file.open", "Open a project", "File"),
     ("file.save", "Save the project", "File"),
@@ -117,7 +140,8 @@ const WINDOW_ACTIONS: [(&str, &str, &str); 62] = [
     ),
     ("selection.duplicate", "Duplicate the selected clips, or the selected notes in the piano roll", "Edit"),
     ("selection.delete", "Delete the selected clips or device, or the selected notes in the piano roll", "Edit"),
-    ("selection.mute", "Mute or unmute the selected clips", "Edit"),
+    ("selection.mute", "Mute or unmute the selected clips, or turn the device clicked last off or on", "Edit"),
+    ("selection.rename", "Rename the selected clip", "Edit"),
     ("selection.selectAll", "Select every clip in the arrangement", "Edit"),
     ("selection.split", "Split the selected clip at the playhead", "Edit"),
     ("selection.consolidate", "Consolidate the selected clip into a new one", "Edit"),
@@ -387,7 +411,7 @@ const PRESET_KEY: &str = "preset";
 /// The duplicate key of Draw-first, and the browser's key otherwise.
 const CTRL_B: Shortcut = Shortcut::new(Modifiers::COMMAND, Key::B);
 
-const DEFAULTS: [(&str, &[&str]); 63] = [
+const DEFAULTS: [(&str, &[&str]); 64] = [
     ("file.new", &["Ctrl+T"]),
     ("file.open", &["Ctrl+O"]),
     ("file.save", &["Ctrl+S"]),
@@ -414,6 +438,7 @@ const DEFAULTS: [(&str, &[&str]); 63] = [
     ("selection.duplicate", &["Ctrl+D"]),
     ("selection.delete", &["Delete", "Backspace"]),
     ("selection.mute", &["0"]),
+    ("selection.rename", &["Ctrl+R"]),
     ("selection.selectAll", &["Ctrl+A"]),
     ("selection.split", &["Ctrl+E"]),
     ("selection.consolidate", &["Ctrl+J"]),
@@ -632,7 +657,7 @@ impl Keymap {
 
     /// The first key of an action as menus show it, if it has one.
     pub fn label(&self, action: &str) -> Option<String> {
-        self.keys(action).first().map(Shortcut::text)
+        self.keys(action).first().map(Shortcut::display)
     }
 
     pub fn set(&mut self, action: &str, keys: Vec<Shortcut>) {
@@ -680,6 +705,11 @@ impl Keymap {
         }
         fired
     }
+}
+
+/// A key written as the keymap writes it ("Ctrl+C"), as menus show it on this system.
+pub fn shown(text: &str) -> String {
+    Shortcut::parse(text).map_or_else(|| text.to_string(), |s| s.display())
 }
 
 /// The window reports Ctrl+X, Ctrl+C and Ctrl+V (Cmd on macOS) as cut, copy and paste events

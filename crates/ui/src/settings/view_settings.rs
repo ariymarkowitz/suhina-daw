@@ -39,6 +39,8 @@ pub struct ViewSettings {
     pub detail_layout: DetailLayout,
     /// A double-click on an empty slot or an empty spot of a lane makes an empty clip of the track's kind.
     pub double_click_clip: bool,
+    /// Clip menus carry a name field that renames in place, instead of Rename (off by default).
+    pub menu_name_field: bool,
 }
 
 impl Default for ViewSettings {
@@ -48,6 +50,7 @@ impl Default for ViewSettings {
             strip_fader: 0,
             detail_layout: DetailLayout::Beside,
             double_click_clip: true,
+            menu_name_field: false,
         }
     }
 }
@@ -56,11 +59,12 @@ impl ViewSettings {
     /// The lines this module adds to the settings file.
     pub fn to_text(&self) -> String {
         format!(
-            "session_mixer_height = {}\nsession_strip_fader = {}\ndetail_layout = {}\ndouble_click_clip = {}\n",
+            "session_mixer_height = {}\nsession_strip_fader = {}\ndetail_layout = {}\ndouble_click_clip = {}\nmenu_name_field = {}\n",
             self.mixer_height,
             self.strip_fader,
             self.detail_layout.param(),
             if self.double_click_clip { "on" } else { "off" },
+            if self.menu_name_field { "on" } else { "off" },
         )
     }
 
@@ -79,6 +83,7 @@ impl ViewSettings {
             ("detail_layout", "beside") => self.detail_layout = DetailLayout::Beside,
             ("detail_layout", "full_width") => self.detail_layout = DetailLayout::FullWidth,
             ("double_click_clip", "on" | "off") => self.double_click_clip = value == "on",
+            ("menu_name_field", "on" | "off") => self.menu_name_field = value == "on",
             _ => return false,
         }
         true
@@ -97,6 +102,7 @@ mod tests {
             strip_fader: 90,
             detail_layout: DetailLayout::FullWidth,
             double_click_clip: false,
+            menu_name_field: true,
         };
         let settings = Settings { view, ..Settings::default() };
         let (read, warnings) = Settings::from_text(&settings.to_text());

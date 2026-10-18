@@ -152,6 +152,16 @@ fn demo_app() -> App {
     app
 }
 
+/// The demo with the clip menus' name field on (Settings › Arrangement › Name field in clip
+/// menus), as the tests of renaming in the menu use it.
+fn demo_app_with_name_field() -> App {
+    let mut app = demo_app();
+    let mut settings = app.settings().clone();
+    settings.view.menu_name_field = true;
+    app.set_settings(&egui::Context::default(), settings);
+    app
+}
+
 #[test]
 fn turning_a_track_off_is_an_edit_that_undoes() {
     let mut harness = window(demo_app());
@@ -3010,7 +3020,7 @@ fn a_double_click_on_an_empty_slot_of_an_audio_track_makes_an_empty_clip_there()
 /// the menu's name field renames it, and the drag to another slot moves it, like a MIDI clip.
 #[test]
 fn an_audio_clip_renames_and_moves_like_a_midi_one() {
-    let mut harness = window_with_step(demo_app(), 1.0 / 60.0);
+    let mut harness = window_with_step(demo_app_with_name_field(), 1.0 / 60.0);
     // An audio track and its empty clip, made with the double-click.
     harness.get_by_label("+ Audio track").click();
     harness.run();
@@ -4195,7 +4205,7 @@ fn a_slot_drag_to_another_slot_moves_it_ctrl_drags_copy_and_an_occupied_one_swap
 
 #[test]
 fn a_slots_context_menu_renames_its_clip() {
-    let mut harness = window(demo_app());
+    let mut harness = window(demo_app_with_name_field());
     // Walk's slot in Bass, scene 2: a right-click opens the menu with the clip's name field
     // (the menu stays open on a click inside: CloseOnClickOutside).
     harness.get_by_label("Launch Walk on Bass (scene 2)").click_secondary();
@@ -4218,7 +4228,7 @@ fn a_slots_context_menu_renames_its_clip() {
 
 #[test]
 fn an_empty_rename_field_clears_the_clips_name() {
-    let mut harness = window(demo_app());
+    let mut harness = window(demo_app_with_name_field());
     harness.get_by_label("Launch Walk on Bass (scene 2)").click_secondary();
     harness.run();
     harness.get_by_label_contains("Rename clip Walk").click();
@@ -4237,7 +4247,7 @@ fn an_empty_rename_field_clears_the_clips_name() {
 
 #[test]
 fn a_rename_draft_dies_with_its_menu() {
-    let mut harness = window(demo_app());
+    let mut harness = window(demo_app_with_name_field());
     harness.get_by_label("Launch Walk on Bass (scene 2)").click_secondary();
     harness.run();
     harness.get_by_label_contains("Rename clip Walk").click();
@@ -4353,4 +4363,25 @@ fn a_devices_switch_bypasses_it_and_a_click_again_enables_it() {
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert!(!enabled(&harness), "the undo undid the enable");
+}
+
+#[test]
+fn rename_in_a_slots_menu_asks_for_the_name_and_ctrl_r_does_too() {
+    let mut harness = window(demo_app());
+    // By default the menu carries Rename, not a name field.
+    harness.get_by_label("Launch Walk on Bass (scene 2)").click_secondary();
+    harness.run();
+    assert!(harness.query_by_label_contains("Rename clip Walk").is_none(), "no field in the menu by default");
+    harness.get_by_label("Rename").click();
+    harness.run();
+    assert!(harness.query_by_label("Clip name").is_some(), "Rename asks for the name");
+    harness.get_by_label("Cancel").click();
+    harness.run();
+    assert!(harness.query_by_label("Clip name").is_none(), "Cancel closes it");
+    // Ctrl+R on the selected slot asks the same.
+    harness.get_by_label("Launch Walk on Bass (scene 2)").click();
+    harness.run();
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::R);
+    harness.run();
+    assert!(harness.query_by_label("Clip name").is_some(), "Ctrl+R asks for the selected clip's name");
 }

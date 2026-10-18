@@ -954,7 +954,7 @@ fn shortcuts_page(
     top += 30.0;
     for (key, ids) in keymap.conflicts() {
         let r = Rect::from_min_size(Pos2::new(page.left(), top), Vec2::new(page.width(), 16.0));
-        let text = format!("{} runs {} at once", key.text(), ids.join(" and "));
+        let text = format!("{} runs {} at once", key.display(), ids.join(" and "));
         widgets::text_in(painter, r, Align2::LEFT_CENTER, &text, small.clone(), theme::recording());
         top += 16.0;
     }
@@ -974,7 +974,7 @@ fn shortcuts_page(
                     ui.label(egui::RichText::new(group).font(small.clone()).color(theme::text_hint()));
                 }
                 ui.horizontal(|ui| {
-                    let keys: Vec<String> = keymap.keys(&action.id).iter().map(Shortcut::text).collect();
+                    let keys: Vec<String> = keymap.keys(&action.id).iter().map(Shortcut::display).collect();
                     let capturing = state.capture.as_deref() == Some(action.id.as_str());
                     let left = egui::Layout::left_to_right(egui::Align::Center);
                     ui.allocate_ui_with_layout(Vec2::new(300.0, 18.0), left, |ui| {

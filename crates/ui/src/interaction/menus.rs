@@ -10,6 +10,7 @@ use suhina_engine::model::{AudioInput, InputChannels, MidiInput, MidiPort, Monit
 use crate::interaction::colour_picker;
 use crate::kit::theme;
 use crate::kit::widgets::Action;
+use crate::settings::keymap::shown;
 
 /// What a track's menu needs to know.
 pub struct TrackMenu<'a> {
@@ -213,7 +214,7 @@ pub fn track_menu(ui: &mut Ui, menu: &TrackMenu<'_>, actions: &mut Vec<Action>) 
 
     let selected = menu.selection.contains(&menu.track) && menu.selection.len() > 1;
     let group_label = if selected { "Group selected tracks" } else { "Group" };
-    if ui.add(egui::Button::new(group_label).shortcut_text("Ctrl+G")).clicked() {
+    if ui.add(egui::Button::new(group_label).shortcut_text(shown("Ctrl+G"))).clicked() {
         let tracks: Vec<u32> = if selected { menu.selection.iter().map(|t| t.0).collect() } else { vec![track] };
         actions.push(Action::new("track.group", json!({ "tracks": tracks })));
         ui.close();
@@ -245,6 +246,24 @@ pub fn track_menu(ui: &mut Ui, menu: &TrackMenu<'_>, actions: &mut Vec<Action>) 
     }
 }
 
+/// Whether clip menus carry the name field to rename in place (Settings › Arrangement › Name
+/// field in clip menus); off, they carry Rename, which asks for the name. The window sets it.
+pub const NAME_FIELD: &str = "menu-name-field";
+
+fn name_field_on(ui: &Ui) -> bool {
+    ui.ctx().data(|d| d.get_temp::<bool>(Id::new(NAME_FIELD))).unwrap_or(false)
+}
+
+/// The Rename item: the window asks for the clip's new name (`ui.renameClip`), as Ctrl+R does.
+fn rename_item(ui: &mut Ui, target: serde_json::Value, name: &str, actions: &mut Vec<Action>) {
+    if ui.add(egui::Button::new("Rename").shortcut_text(shown("Ctrl+R"))).clicked() {
+        let mut params = target;
+        params["name"] = json!(name);
+        actions.push(Action::new("ui.renameClip", params));
+        ui.close();
+    }
+}
+
 /// The menu of arrangement clips; `stack` is true when the stacking setting for the clips' kind
 /// is on, so their copies leave the clips they land on as they are. `clips` is the selection the
 /// click fell in, or the one clip it fell on; `enabled` is whether the clicked clip plays now.
@@ -262,9 +281,14 @@ pub fn clip_menu(
     let list: Vec<serde_json::Value> =
         clips.iter().map(|(track, index)| json!({ "track": track.0, "index": index })).collect();
     ui.set_min_width(140.0);
-    // One clip in the menu (a click on it, or the only one selected): a field renames it,
-    // applied with Enter or Rename, as a slot's clip's is.
-    if let [(track, index)] = clips {
+    // One clip in the menu (a click on it, or the only one selected): Rename, or with the
+    // setting on a field that renames it, applied with Enter or Rename, as a slot's clip's is.
+    if let [(track, index)] = clips
+        && !name_field_on(ui)
+    {
+        rename_item(ui, json!({ "track": track.0, "index": index }), name, actions);
+        ui.separator();
+    } else if let [(track, index)] = clips {
         let id = Id::new(("clip-rename", track, index));
         let mut draft: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| name.to_string());
         let field = ui.add(egui::TextEdit::singleline(&mut draft).id(id).desired_width(140.0));
@@ -281,11 +305,11 @@ pub fn clip_menu(
         }
         ui.separator();
     }
-    if ui.add(egui::Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
+    if ui.add(egui::Button::new("Copy").shortcut_text(shown("Ctrl+C"))).clicked() {
         actions.push(Action::new("clip.copy", json!({ "clips": list.clone() })));
         ui.close();
     }
-    if ui.add(egui::Button::new("Duplicate").shortcut_text("Ctrl+D")).clicked() {
+    if ui.add(egui::Button::new("Duplicate").shortcut_text(shown("Ctrl+D"))).clicked() {
         let mut params = json!({ "clips": list.clone() });
         if stack {
             params["stack"] = json!(true);
@@ -323,7 +347,7 @@ pub fn clip_edit_menu(
         actions.push(Action::new("clip.split", json!({ "track": track.0, "index": index, "at": beat })));
         ui.close();
     }
-    if ui.add(egui::Button::new("Consolidate").shortcut_text("Ctrl+J")).clicked() {
+    if ui.add(egui::Button::new("Consolidate").shortcut_text(shown("Ctrl+J"))).clicked() {
         actions
             .push(Action::new("clip.consolidate", json!({ "track": track.0, "start": start, "end": start + length })));
         ui.close();
@@ -428,8 +452,11 @@ pub fn slot_menu(
     actions: &mut Vec<Action>,
 ) {
     ui.set_min_width(140.0);
-    // The clip's name, typed to rename: applied with Enter or Rename, as a marker's is.
-    if has_clip {
+    // Rename, or with the setting on the clip's name typed to rename: applied with Enter or
+    // Rename, as a marker's is.
+    if has_clip && !name_field_on(ui) {
+        rename_item(ui, json!({ "track": track.0, "scene": scene }), name, actions);
+    } else if has_clip {
         let id = Id::new(("slot-rename", track, scene));
         let mut draft: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| name.to_string());
         let field = ui.add(egui::TextEdit::singleline(&mut draft).id(id).desired_width(140.0));
@@ -445,11 +472,11 @@ pub fn slot_menu(
             ui.close();
         }
     }
-    if ui.add_enabled(has_clip, egui::Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
+    if ui.add_enabled(has_clip, egui::Button::new("Copy").shortcut_text(shown("Ctrl+C"))).clicked() {
         actions.push(Action::new("clip.copy", json!({ "track": track.0, "scene": scene })));
         ui.close();
     }
-    if ui.add_enabled(can_paste, egui::Button::new("Paste").shortcut_text("Ctrl+V")).clicked() {
+    if ui.add_enabled(can_paste, egui::Button::new("Paste").shortcut_text(shown("Ctrl+V"))).clicked() {
         actions.push(Action::new("clip.paste", json!({ "track": track.0, "scene": scene })));
         ui.close();
     }

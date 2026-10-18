@@ -320,6 +320,9 @@ pub struct App {
     /// How tall the device chain's panels were last frame, when the detail area showed only the
     /// chain: the area is kept no taller.
     detail_cap: Option<f32>,
+    /// A clip being renamed (Rename in its menu, Ctrl+R): the command's target, the name typed
+    /// so far, and whether the field has had the keyboard yet.
+    rename: Option<(serde_json::Value, String, bool)>,
     /// The piano roll is pulled to the top (`docs/spec/ui-clip-editor.md` › Pulled to the top),
     /// and the detail area's height a splitter drag has reached so far, unclamped.
     detail_max: bool,
@@ -446,6 +449,7 @@ impl App {
             detail_open: true,
             detail_height: DETAIL_HEIGHT,
             detail_cap: None,
+            rename: None,
             detail_max: false,
             detail_drag: None,
             editor_closed: false,
@@ -1296,6 +1300,39 @@ impl App {
                 None => {}
             }
         }
+        if let Some((target, mut draft, focused)) = self.rename.take() {
+            let (mut keep, mut apply) = (true, None);
+            egui::Window::new("Rename clip")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_TOP, Vec2::new(0.0, 96.0))
+                .show(ui.ctx(), |ui| {
+                    let field = ui.add(egui::TextEdit::singleline(&mut draft).desired_width(220.0));
+                    field.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Clip name"));
+                    if !focused {
+                        field.request_focus();
+                    }
+                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    ui.horizontal(|ui| {
+                        if enter || ui.button("Rename").clicked() {
+                            let mut params = target.clone();
+                            params["name"] = json!(draft.trim());
+                            apply = Some(Action::new("clip.rename", params));
+                            keep = false;
+                        }
+                        if escape || ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            if keep {
+                self.rename = Some((target, draft, true));
+            }
+            if let Some(action) = apply {
+                self.run(&action);
+            }
+        }
         if self.about_open {
             match project_dialog::show_about(ui, window) {
                 Some(AboutChoice::Copy) => {
@@ -1454,6 +1491,15 @@ impl App {
 
     /// Runs one command and shows its outcome in the status bar.
     pub fn run(&mut self, action: &Action) {
+        if action.id == "ui.renameClip" {
+            let mut target = action.params.clone();
+            let name = target.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+            if let Some(object) = target.as_object_mut() {
+                object.remove("name");
+            }
+            self.rename = Some((target, name, false));
+            return;
+        }
         if action.id.starts_with("projects.") {
             if let Err(e) = self.projects.execute(action.id, &action.params) {
                 self.status = Status::Error(e.0);
@@ -1548,6 +1594,9 @@ impl App {
         let window = ui.max_rect();
         let mut actions = Vec::new();
         let revision = self.revision;
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui::Id::new(crate::interaction::menus::NAME_FIELD), self.settings.view.menu_name_field)
+        });
         self.follow_active();
         self.poll_scan(ui.ctx());
         self.poll_plugins(ui.ctx());
@@ -3245,6 +3294,31 @@ impl App {
                     params["stack"] = json!(true);
                 }
                 actions.push(Action::new(id, params));
+            }
+            "selection.rename" => {
+                // The selected clip: the Arrangement's, or the Session view's slot.
+                let target = match self.shown {
+                    View::Arrangement => self.arrangement.selected_clip().map(|(track, index)| {
+                        let name = self
+                            .timeline
+                            .as_ref()
+                            .and_then(|(_, _, t)| t.lanes.iter().find(|l| l.track == track))
+                            .and_then(|l| l.clips.iter().find(|c| c.index == index))
+                            .map(|c| c.name.clone())
+                            .unwrap_or_default();
+                        (json!({ "track": track.0, "index": index }), name)
+                    }),
+                    View::Session => self.view.selected_slot.and_then(|(track, scene)| {
+                        let grid = self.session().map(|s| Grid::build(s.project(), None))?;
+                        let slot = grid.columns.iter().find(|c| c.track == track)?.slots.get(scene)?;
+                        (slot.state != crate::interaction::grid::SlotState::Empty)
+                            .then(|| (json!({ "track": track.0, "scene": scene }), slot.name.clone()))
+                    }),
+                };
+                match target {
+                    Some((target, name)) => self.rename = Some((target, name, false)),
+                    None => self.status = Status::Hint("Select a clip first".into()),
+                }
             }
             "selection.split" | "selection.consolidate" => {
                 let Some((track, index)) = self.arrangement.selected_clip() else {

@@ -231,6 +231,14 @@ pub(crate) static ROWS: &[Entry] = &[
     ),
     row(
         Page::Arrangement,
+        "Clips",
+        "Name field in clip menus",
+        "A clip's right-click menu renames it in place; off, Rename (Ctrl+R) asks for the name",
+        &["menu_name_field"],
+        |cx, r| cx.on_off(r, |s| &mut s.view.menu_name_field),
+    ),
+    row(
+        Page::Arrangement,
         "Tracks",
         "Track headers",
         "Which side of the timeline they are on",
