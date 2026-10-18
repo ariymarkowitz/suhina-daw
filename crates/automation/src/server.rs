@@ -455,7 +455,7 @@ impl SuhinaMcp {
         let seconds = p.seconds;
         let project_id = p.project;
         // Only the snapshot is taken with the projects: attached to the app that runs on the
-        // window's thread, so the render itself runs on a blocking thread of its own.
+        // window's thread, so decoding missing files and the render run on a blocking thread.
         let prepared = self
             .with_projects(move |projects| {
                 let path = files.workspace(projects, project_id.map(ProjectId)).writable(&output, overwrite)?;
@@ -477,14 +477,16 @@ impl SuhinaMcp {
                     (Some(index), None) => scene_as_arrangement(&heard, index)?,
                     _ => heard,
                 };
-                let (audio, warnings) = project_audio(session, &project);
-                Ok((path, env, project, audio, warnings, launches))
+                let audio = audio_snapshot(session);
+                Ok((path, env, project, audio, launches))
             })
             .await;
         let result = match prepared {
             Err(e) => Err(e),
-            Ok((path, env, project, audio, warnings, launches)) => {
+            Ok((path, env, project, audio, launches)) => {
                 tokio::task::spawn_blocking(move || -> Result<Value, String> {
+                    // Files the session has not decoded yet are decoded here, off the window's thread.
+                    let (audio, warnings) = audio.complete(&project);
                     if let Some(steps) = launches {
                         let seconds = seconds.ok_or("launches needs seconds, the length of the render")?;
                         let (summary, steps) =
@@ -540,25 +542,44 @@ fn start_audio(projects: &mut Projects, id: ProjectId, warnings: &mut Vec<String
 /// the session's project file is, with what the session has decoded already (files added since
 /// it opened, ADR 0011) for the rest.
 fn project_audio(session: &Session, project: &Project) -> (suhina_media::AudioPool, Vec<String>) {
+    audio_snapshot(session).complete(project)
+}
+
+/// What [`project_audio`] needs from the session, taken quickly so that decoding the files it
+/// lacks can run off the window's thread.
+struct AudioSnapshot {
+    folder: Option<PathBuf>,
+    have: suhina_media::AudioPool,
+}
+
+fn audio_snapshot(session: &Session) -> AudioSnapshot {
     let folder = session
         .audio_folder()
         .map(Path::to_path_buf)
         .or_else(|| session.source().and_then(|s| s.parent()).map(Path::to_path_buf));
-    let mut have = session.audio().clone();
-    let missing = project
-        .contents
-        .iter()
-        .flat_map(|c| &c.lanes)
-        .any(|lane| matches!(&lane.data, LaneData::Audio(region) if !have.files.contains_key(&region.file)));
-    let mut warnings = Vec::new();
-    if missing {
-        let (loaded, found) = suhina_media::load_project_audio(project, folder.as_deref().unwrap_or(Path::new(".")));
-        for (key, data) in loaded.files {
-            have.files.entry(key).or_insert(data);
+    AudioSnapshot { folder, have: session.audio().clone() }
+}
+
+impl AudioSnapshot {
+    /// The pool `project` plays, decoding the files the session has not, and the warnings.
+    fn complete(self, project: &Project) -> (suhina_media::AudioPool, Vec<String>) {
+        let AudioSnapshot { folder, mut have } = self;
+        let missing = project
+            .contents
+            .iter()
+            .flat_map(|c| &c.lanes)
+            .any(|lane| matches!(&lane.data, LaneData::Audio(region) if !have.files.contains_key(&region.file)));
+        let mut warnings = Vec::new();
+        if missing {
+            let (loaded, found) =
+                suhina_media::load_project_audio(project, folder.as_deref().unwrap_or(Path::new(".")));
+            for (key, data) in loaded.files {
+                have.files.entry(key).or_insert(data);
+            }
+            warnings = found;
         }
-        warnings = found;
+        (have, warnings)
     }
-    (have, warnings)
 }
 
 /// The file `project.save` without a path would write, and whose folder `project.autosave`

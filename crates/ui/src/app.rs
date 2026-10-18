@@ -2249,11 +2249,18 @@ impl App {
     /// commands; a scan runs `Library::scan` (what `plugins.scan` runs) on a copy of the library
     /// on another thread, so the window keeps drawing, and the result replaces the library.
     fn plugin_request(&mut self, request: PluginRequest) {
-        // A scan's result replaces the library, so a switch changed meanwhile would be lost.
+        // A scan's result replaces the library, so a folder or switch changed meanwhile would be lost.
         if self.plugins.scanning
-            && matches!(request, PluginRequest::SetFolderEnabled(..) | PluginRequest::SetEnabled(..))
+            && matches!(
+                request,
+                PluginRequest::AddFolder(..)
+                    | PluginRequest::RemoveFolder(..)
+                    | PluginRequest::SetFolderEnabled(..)
+                    | PluginRequest::SetEnabled(..)
+            )
         {
-            self.status = Status::Error("Wait for the scan to finish before switching plug-ins on or off".into());
+            self.status =
+                Status::Error("Wait for the scan to finish before changing plug-in folders or switches".into());
             return;
         }
         match request {

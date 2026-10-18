@@ -74,7 +74,9 @@ The Settings page lists every folder scans may look in: the system's standard on
 standard) and the ones added. Each has a checkbox: a folder switched off is not scanned, its
 plug-ins leave the list with the next scan, and it stays listed to switch on again
 (`plugins.setFolderEnabled { folder, enabled }`, `suhina-cli plugins folder-off <dir>`,
-`folder-on`). An added one has **Remove**.
+`folder-on`). An added one has **Remove**. While a scan runs, its checkbox is greyed out, and
+adding, removing or switching a folder is refused with a message to wait: the scan's result
+replaces the library, so a change made meanwhile would be lost.
 
 Each folder is for a format: a standard one for the format its name says (`…/VST3`, `…/CLAP`),
 an added one for both CLAP and VST3 (**Both**, the default), **VST3** or **CLAP**, chosen beside
