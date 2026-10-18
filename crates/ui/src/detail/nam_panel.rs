@@ -53,7 +53,7 @@ pub const NAM_WIDTH: f32 = 440.0;
 
 /// The height a NAM panel asks for in the chain, both layouts: the name row, the controls and
 /// the file row at the mock's spacing, whatever the parameter count is.
-pub const NAM_HEIGHT: f32 = 198.0;
+pub const NAM_HEIGHT: f32 = 216.0;
 
 const KNOB: f32 = 34.0;
 const STEP: f32 = 16.0;
@@ -158,8 +158,9 @@ fn knob(
             change = Some((parameter.clamp(next), false));
         }
     }
-    let circle = (cell.height() - 26.0).clamp(20.0, KNOB);
-    widgets::knob(ui.painter(), cell.center() + egui::vec2(0.0, 2.0), circle, at as f32, theme::text_primary());
+    let circle = (cell.height() - 28.0).clamp(20.0, KNOB);
+    let circle_center = egui::pos2(cell.center().x, cell.top() + 12.0 + circle / 2.0);
+    widgets::knob(ui.painter(), circle_center, circle, at as f32, theme::text_primary());
     widgets::text_in(
         ui.painter(),
         Rect::from_min_max(cell.left_top(), egui::pos2(cell.right(), cell.top() + 12.0)),
@@ -170,7 +171,7 @@ fn knob(
     );
     widgets::text_in(
         ui.painter(),
-        Rect::from_min_max(egui::pos2(cell.left(), cell.bottom() - 16.0), cell.max),
+        Rect::from_min_max(egui::pos2(cell.left(), cell.bottom() - 14.0), cell.max),
         Align2::CENTER_CENTER,
         &shown_value(parameter, change.as_ref().map_or(value, |(v, _)| *v)),
         theme::mono_font(theme::TEXT_TINY),
@@ -183,11 +184,11 @@ fn knob(
     response
 }
 
-/// The Mid Freq's draggable value pill, under the amp's trio: its name over, its value in a
-/// dark box. A drag turns it; the arrows step while it has focus; a double-click is the
-/// default ([docs/spec/nam-amp-and-cab.md] › The panels).
+/// The Mid Freq's control under the amp's trio, as the mock draws it: the name over, a line
+/// with a diamond handle at the value's place, the value under. A drag along the line sets it,
+/// a click jumps, a double-click returns to the default, the arrows step while it has focus.
 #[allow(clippy::too_many_arguments)]
-fn mid_freq_pill(
+fn mid_freq_line(
     ui: &Ui,
     under: Rect,
     track: TrackId,
@@ -198,44 +199,38 @@ fn mid_freq_pill(
     actions: &mut Vec<Action>,
 ) -> egui::Response {
     let publisher = format!("{}: {}", prefix, parameter.name.to_lowercase());
-    let broad =
-        Rect::from_min_max(egui::pos2(under.left(), under.top()), egui::pos2(under.left() + 130.0, under.bottom()));
-    response_given(
-        ui,
-        broad,
+    let painter = ui.painter();
+    widgets::text_in(
+        painter,
+        Rect::from_min_max(under.left_top(), egui::pos2(under.right(), under.top() + 12.0)),
+        Align2::CENTER_CENTER,
+        parameter.name,
+        theme::ui_font(theme::TEXT_TINY),
+        theme::text_secondary(),
+    );
+    let width = 150.0_f32.min(under.width() - 16.0).max(60.0);
+    let line = Rect::from_min_max(
+        egui::pos2(under.center().x - width / 2.0, under.top() + 16.0),
+        egui::pos2(under.center().x + width / 2.0, under.top() + 18.0),
+    );
+    painter.rect_filled(line, 1.0, theme::control_background());
+    let response = ui.interact(
+        Rect::from_min_max(
+            egui::pos2(line.left() - 8.0, under.top() + 10.0),
+            egui::pos2(line.right() + 8.0, under.bottom()),
+        ),
         egui::Id::new(("nam-pill", track.0, device_index, parameter.id)),
-        track,
-        device_index,
-        parameter,
-        value,
-        &publisher,
-        actions,
-    )
-}
-
-/// The value-only drag of `mid_freq_pill`: a dark value box with its name over it.
-#[allow(clippy::too_many_arguments)]
-fn response_given(
-    ui: &Ui,
-    broad: Rect,
-    id: egui::Id,
-    track: TrackId,
-    device_index: usize,
-    parameter: &'static ParamInfo,
-    value: f64,
-    publisher: &str,
-    actions: &mut Vec<Action>,
-) -> egui::Response {
-    let response = ui.interact(broad, id, Sense::click_and_drag());
+        Sense::click_and_drag(),
+    );
     if response.clicked() {
         response.request_focus();
     }
-    let mut at = parameter.to_normalized(value);
     let mut change: Option<(f64, bool)> = None;
-    if response.dragged() {
-        let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
-        at = (at - f64::from(response.drag_delta().y) * 0.005 * fine).clamp(0.0, 1.0);
-        change = Some((parameter.from_normalized(at), true));
+    if response.dragged() || response.clicked() {
+        if let Some(at) = response.interact_pointer_pos() {
+            let normalized = ((at.x - line.left()) / line.width()).clamp(0.0, 1.0);
+            change = Some((parameter.from_normalized(f64::from(normalized)), response.dragged()));
+        }
     } else if response.double_clicked() {
         change = Some((parameter.default, false));
     } else if response.has_focus() {
@@ -247,38 +242,32 @@ fn response_given(
             change = Some((parameter.clamp(next), false));
         }
     }
+    let at = change.as_ref().map_or(value, |(next, _)| *next);
+    let at = parameter.to_normalized(at) as f32;
+    let handle = egui::pos2(line.left() + at * line.width(), line.center().y);
+    let half = 4.0;
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(handle.x, handle.y - half),
+            egui::pos2(handle.x + half, handle.y),
+            egui::pos2(handle.x, handle.y + half),
+            egui::pos2(handle.x - half, handle.y),
+        ],
+        theme::text_value(),
+        egui::Stroke::NONE,
+    ));
     widgets::text_in(
-        ui.painter(),
-        Rect::from_min_max(broad.left_top(), egui::pos2(broad.right(), broad.top() + 12.0)),
+        painter,
+        Rect::from_min_max(egui::pos2(under.left(), line.bottom() + 1.0), egui::pos2(under.right(), under.bottom())),
         Align2::CENTER_CENTER,
-        parameter.name,
-        theme::ui_font(theme::TEXT_TINY),
-        theme::text_secondary(),
-    );
-    let shown = shown_value(parameter, change.as_ref().map_or(value, |(v, _)| *v));
-    ui.painter().rect_filled(
-        Rect::from_min_max(
-            egui::pos2(broad.left() + 18.0, broad.top() + 13.0),
-            egui::pos2(broad.right() - 18.0, broad.bottom() - 1.0),
-        ),
-        3.0,
-        theme::control_background(),
-    );
-    widgets::text_in(
-        ui.painter(),
-        Rect::from_min_max(
-            egui::pos2(broad.left() + 18.0, broad.top() + 13.0),
-            egui::pos2(broad.right() - 18.0, broad.bottom() - 1.0),
-        ),
-        Align2::CENTER_CENTER,
-        &shown,
+        &shown_value(parameter, change.as_ref().map_or(value, |(v, _)| *v)),
         theme::mono_font(theme::TEXT_TINY),
         theme::text_value(),
     );
     if let Some((next, continuous)) = change {
         set_param(actions, track, device_index, parameter, next, continuous);
     }
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, publisher));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, &publisher));
     response
 }
 
@@ -618,8 +607,8 @@ pub(crate) fn show_amp(
     actions: &mut Vec<Action>,
 ) {
     let prefix = prefix_of(device);
-    let top = rect.top() + PAD;
-    let bottom = rect.bottom() - PAD;
+    let top = rect.top();
+    let bottom = rect.bottom();
     if let Some(pick) = rows_and_picks(ui, rect, top, bottom, track, device, &lists.models, "model", "No model") {
         actions.push(Action::new(
             "device.setNamFile",
@@ -627,13 +616,23 @@ pub(crate) fn show_amp(
         ));
     }
     let controls = controls_rect(rect, top, bottom);
-    // The Gain and Volume columns at the sides; the middle holds the trio, the Mid Freq's
-    // value and the EQ and HQ buttons.
-    let (left, right) = (60.0, 60.0);
-    let gain_cell = Rect::from_min_max(
-        egui::pos2(controls.left(), controls.top()),
-        egui::pos2(controls.left() + left, controls.top() + 62.0),
+    // The Bypass button at the controls' top left, over everything else.
+    toggle(
+        ui,
+        Rect::from_min_max(controls.left_top(), egui::pos2(controls.left() + 48.0, controls.top() + ROW_HEIGHT)),
+        track,
+        device.index,
+        &prefix,
+        amp_parameter("bypass"),
+        on_of(device, amp_parameter("bypass")),
+        actions,
     );
+    // The Gain and Volume columns at the sides; the middle holds the trio, the Mid Freq's
+    // line and the EQ button. Under the Bypass row, which tops the panel's controls.
+    let rows_top = controls.top() + ROW_HEIGHT + 2.0;
+    let (left, right) = (60.0, 60.0);
+    let gain_cell =
+        Rect::from_min_max(egui::pos2(controls.left(), rows_top), egui::pos2(controls.left() + left, rows_top + 56.0));
     knob(
         ui,
         gain_cell.shrink(2.0),
@@ -645,8 +644,8 @@ pub(crate) fn show_amp(
         actions,
     );
     let volume_cell = Rect::from_min_max(
-        egui::pos2(controls.right() - right, controls.top()),
-        egui::pos2(controls.right(), controls.top() + 62.0),
+        egui::pos2(controls.right() - right, rows_top),
+        egui::pos2(controls.right(), rows_top + 56.0),
     );
     knob(
         ui,
@@ -659,23 +658,22 @@ pub(crate) fn show_amp(
         actions,
     );
     let middle_rect = Rect::from_min_max(
-        egui::pos2(controls.left() + left + 4.0, controls.top()),
+        egui::pos2(controls.left() + left + 4.0, rows_top),
         egui::pos2(controls.right() - right - 4.0, controls.bottom()),
     );
-    let trio = Rect::from_min_max(middle_rect.left_top(), egui::pos2(middle_rect.right(), middle_rect.top() + 62.0));
+    let trio = Rect::from_min_max(middle_rect.left_top(), egui::pos2(middle_rect.right(), middle_rect.top() + 56.0));
     let cells = split(trio, 3);
     for (cell, id) in cells.iter().zip(["eqBass", "eqMid", "eqTreble"]) {
         let parameter = amp_parameter(id);
         knob(ui, cell.shrink(2.0), track, device.index, &prefix, parameter, value_of(device, parameter), actions);
     }
-    // Under the trio: the Mid Freq's draggable value, then the EQ and HQ buttons. The Delay
-    // knob and the HQ button share a narrow column at the trio's right; the trio's stack sits
-    // beside it.
+    // Under the trio: the Mid Freq's line with its handle, then the EQ button under that. The
+    // Delay knob and the HQ button share a narrow column at the trio's right.
     let mid_freq_rect = Rect::from_min_max(
         egui::pos2(middle_rect.left(), trio.bottom() + 2.0),
-        egui::pos2(middle_rect.left() + middle_rect.width() - 78.0, trio.bottom() + 24.0),
+        egui::pos2(middle_rect.left() + middle_rect.width() - 78.0, trio.bottom() + 30.0),
     );
-    mid_freq_pill(
+    mid_freq_line(
         ui,
         mid_freq_rect,
         track,
@@ -685,17 +683,16 @@ pub(crate) fn show_amp(
         value_of(device, amp_parameter("eqMidFreq")),
         actions,
     );
-    let bottom_row = Rect::from_min_max(
-        egui::pos2(middle_rect.left(), mid_freq_rect.bottom() + 6.0),
-        egui::pos2(mid_freq_rect.right(), (mid_freq_rect.bottom() + 30.0).min(controls.bottom())),
-    );
-    let eq_cell = Rect::from_center_size(
-        egui::pos2(bottom_row.left() + 32.0, bottom_row.center().y),
-        egui::vec2(48.0, ROW_HEIGHT),
+    let eq_row = Rect::from_min_max(
+        egui::pos2(
+            middle_rect.left(),
+            (mid_freq_rect.bottom() + 2.0).min((controls.bottom() - ROW_HEIGHT).max(mid_freq_rect.top() + ROW_HEIGHT)),
+        ),
+        egui::pos2(mid_freq_rect.right(), controls.bottom()),
     );
     toggle(
         ui,
-        eq_cell,
+        Rect::from_center_size(egui::pos2(eq_row.left() + 32.0, eq_row.center().y), egui::vec2(48.0, ROW_HEIGHT)),
         track,
         device.index,
         &prefix,
@@ -710,7 +707,7 @@ pub(crate) fn show_amp(
     );
     knob(
         ui,
-        Rect::from_min_max(aux.left_top(), egui::pos2(aux.right(), aux.top() + 62.0)).shrink(2.0),
+        Rect::from_min_max(aux.left_top(), egui::pos2(aux.right(), aux.top() + 56.0)).shrink(2.0),
         track,
         device.index,
         &prefix,
@@ -718,7 +715,7 @@ pub(crate) fn show_amp(
         value_of(device, amp_parameter("delay")),
         actions,
     );
-    let hq_cell = Rect::from_center_size(egui::pos2(aux.center().x, aux.top() + 78.0), egui::vec2(48.0, ROW_HEIGHT));
+    let hq_cell = Rect::from_center_size(egui::pos2(aux.center().x, aux.top() + 70.0), egui::vec2(48.0, ROW_HEIGHT));
     toggle(ui, hq_cell, track, device.index, &prefix, amp_parameter("hq"), on_of(device, amp_parameter("hq")), actions);
     // The failure note, beside the file row's left, over the file row's line.
     if let Some(note) = note_of(device, lists) {
@@ -748,8 +745,8 @@ pub(crate) fn show_cab(
     actions: &mut Vec<Action>,
 ) {
     let prefix = prefix_of(device);
-    let top = rect.top() + PAD;
-    let bottom = rect.bottom() - PAD;
+    let top = rect.top();
+    let bottom = rect.bottom();
     if let Some(pick) = rows_and_picks(ui, rect, top, bottom, track, device, &lists.irs, "cab", "No IR") {
         actions.push(Action::new(
             "device.setNamFile",
@@ -795,8 +792,8 @@ pub(crate) fn show_cab(
     // The Ø and HP buttons.
     let toggles =
         Rect::from_min_max(middle_rect.left_top(), egui::pos2(middle_rect.right(), middle_rect.top() + ROW_HEIGHT));
-    let cells = split(toggles, 2);
-    for (cell, id) in cells.iter().zip(["phase", "hpOn"]) {
+    let cells = split(toggles, 3);
+    for (cell, id) in cells.iter().zip(["bypass", "phase", "hpOn"]) {
         let parameter = cab_parameter(id);
         toggle(
             ui,

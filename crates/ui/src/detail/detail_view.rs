@@ -575,9 +575,17 @@ fn chain_row(
             )
         });
         let width = editor.map_or(authored_width, |e| authored_width.max(e.x + PAD * 2.0));
-        let bottom =
-            sdk_viewport(device).map_or(area.bottom(), |v| (area.top() + ROW + PAD * 2.0 + v[1]).min(area.bottom()));
+        let bottom = sdk_viewport(device).map_or(
+            if device.file_device.is_some() {
+                // A NAM panel's own height, not the whole area's (nam spec › The panels).
+                area.top() + crate::detail::nam_panel::NAM_HEIGHT
+            } else {
+                area.bottom()
+            },
+            |v| (area.top() + ROW + PAD * 2.0 + v[1]).min(area.bottom()),
+        );
         let rect = Rect::from_min_max(Pos2::new(x, area.top()), Pos2::new(x + width, bottom));
+        eprintln!("[nam-debug] row box {rect:?} area {area:?} bottom {bottom}");
         x = rect.right() + 1.0;
         if rect.left() > area.right() {
             break;
