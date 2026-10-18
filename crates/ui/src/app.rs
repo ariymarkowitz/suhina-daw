@@ -311,6 +311,8 @@ pub struct App {
     /// A device panel was the last thing clicked (a click in the view clears it): Delete and the
     /// mute key act on the selected device then, even while a clip is selected too.
     device_focus: bool,
+    /// Actions picked outside the window (the macOS menu bar), run at the start of the next frame.
+    queued: Vec<String>,
     /// A device removal awaiting its undo or redo: the track, the index it left, how long the
     /// chain was, and where the selection pointed before it followed the removal. Window state.
     pending_device_remove: Option<(TrackId, usize, usize, usize)>,
@@ -445,6 +447,7 @@ impl App {
             detail_showing: detail_view::Showing::Clip,
             selected_device: None,
             device_focus: false,
+            queued: Vec::new(),
             pending_device_remove: None,
             detail_open: true,
             detail_height: DETAIL_HEIGHT,
@@ -1433,6 +1436,12 @@ impl App {
         self.status = status;
     }
 
+    /// Runs a window action (`settings::keymap::actions`) on the next frame, as its key would:
+    /// for menus outside the window, such as the macOS menu bar.
+    pub fn queue_action(&mut self, id: &str) {
+        self.queued.push(id.to_owned());
+    }
+
     /// A project file the user asked to open, and how, for the app to open.
     pub fn take_open_request(&mut self) -> Option<(PathBuf, OpenAs)> {
         self.open_request.take()
@@ -1626,6 +1635,9 @@ impl App {
         let dropped = self.dropped_files(ui);
         keys_for_shortcuts(ui.ctx());
         self.launch_keys(ui, &mut actions);
+        for id in std::mem::take(&mut self.queued) {
+            self.do_action(&id, &mut actions);
+        }
         self.shortcuts(ui, &mut actions);
         self.apply_zoom(ui.ctx());
         self.sample_map_window(ui.ctx(), &mut actions);

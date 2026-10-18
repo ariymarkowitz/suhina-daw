@@ -7,6 +7,8 @@
 // Release builds on Windows start without a console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod mac_menu;
 mod recent;
 mod theme_files;
 
@@ -101,6 +103,8 @@ fn main() -> ExitCode {
         editors_embeddable: false,
         themes,
         recent,
+        #[cfg(target_os = "macos")]
+        mac_menu: None,
         splash: Some(Splash::new(env!("CARGO_PKG_VERSION"))),
         start_up: Some(StartUp {
             source: args.source,
@@ -159,6 +163,10 @@ fn main() -> ExitCode {
                 App::set_animations(&cc.egui_ctx, false);
             }
             window.share_about();
+            #[cfg(target_os = "macos")]
+            {
+                window.mac_menu = mac_menu::install(&suhina_ui::settings::keymap::actions());
+            }
             Ok(Box::new(window))
         }),
     );
@@ -214,6 +222,9 @@ struct Window {
     themes: theme_files::ThemeFiles,
     /// The projects opened and saved lately, for the project dialog.
     recent: recent::Recent,
+    /// The macOS menu bar, once installed (#650).
+    #[cfg(target_os = "macos")]
+    mac_menu: Option<mac_menu::MacMenu>,
 }
 
 /// The slow part of starting, done in the window once the splash shows rather than before the
@@ -240,6 +251,12 @@ impl eframe::App for Window {
             // The window is not ready yet: only the splash.
             let _shown = splash.show(ui);
             return;
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &self.mac_menu {
+            for id in menu.take() {
+                self.app.queue_action(&id);
+            }
         }
         self.app.ui(ui);
         if let Some((path, how)) = self.app.take_open_request() {
