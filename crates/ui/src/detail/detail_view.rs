@@ -602,7 +602,6 @@ fn chain_row(
             |v| (area.top() + ROW + PAD * 2.0 + v[1]).min(area.bottom()),
         );
         let rect = Rect::from_min_max(Pos2::new(x, area.top()), Pos2::new(x + width, bottom));
-        eprintln!("[nam-debug] row box {rect:?} area {area:?} bottom {bottom}");
         x = rect.right() + 1.0;
         if rect.left() > area.right() {
             break;

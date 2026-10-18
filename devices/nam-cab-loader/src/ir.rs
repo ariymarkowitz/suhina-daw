@@ -56,10 +56,10 @@ pub fn read(path: impl AsRef<Path>, project_rate: u32) -> Result<Ir, String> {
         }
         (hound::SampleFormat::Int, bits) if bits == 16 || bits == 24 || bits == 32 => {
             for sample in reader.samples::<i32>() {
-                let scale = match bits {
-                    16 => f64::from(i16::MAX),
-                    _ => f64::from(i32::MAX),
-                };
+                // hound widens every integer to i32 at its own width: a 24-bit sample runs
+                // ±8 388 608, so the divisor is the width's own range, not i32's (a 24-bit
+                // file divided by i32::MAX would come out 48 dB too quiet).
+                let scale = (1_i64 << (bits - 1)) as f64;
                 push(sample.map(|v| (f64::from(v) / scale) as f32))?;
             }
         }

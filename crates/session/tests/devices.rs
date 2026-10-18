@@ -582,3 +582,27 @@ fn a_nam_device_loads_its_file_with_the_command() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A project's stored path gets the extension check the command makes: opening a project whose
+/// NAM device points at, say, another kind of file leaves a note and no asset.
+#[test]
+fn a_projects_stored_path_gets_the_extension_check() {
+    let dir = std::env::temp_dir().join(format!("suhina-devices-nam-open-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("the folder is made");
+    let impostor = dir.join("not-a-model.wav");
+    std::fs::write(&impostor, b"RIFF....").unwrap();
+
+    let mut project = project();
+    project.channels[0].devices.push(Device {
+        state: Some(impostor.display().to_string().into_bytes()),
+        ..Device::new("Amp", DeviceKind::Builtin("nam-amp-modeler".into()))
+    });
+    let file = dir.join("with-nam.suhina");
+    suhina_project_file::write_file(&file, &project).expect("the project is written");
+    let (session, _) = Session::open(&file).expect("the project opens");
+    assert!(session.device_asset(&impostor.display().to_string()).is_none(), "no asset was read");
+    let note = session.device_asset_note(&impostor.display().to_string());
+    assert!(note.is_some_and(|n| n.contains(".nam")), "{note:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

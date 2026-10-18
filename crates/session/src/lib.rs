@@ -1065,6 +1065,17 @@ impl Session {
         kind: &str,
         path: &str,
     ) -> Result<suhina_device_registry::DeviceAsset, String> {
+        // The extension check `device.setNamFile` makes: a project's stored path gets the same
+        // treatment, so a hand-made or foreign project file cannot point a device at some
+        // other file (a UNC path, for one).
+        let want_extension = match kind {
+            "nam-amp-modeler" => "nam",
+            "nam-cab-loader" => "wav",
+            other => return Err(format!("{other:?} does not run a file")),
+        };
+        if !path.to_lowercase().ends_with(&format!(".{want_extension}")) {
+            return Err(format!("a {kind} runs a .{want_extension} file"));
+        }
         // An IR joins the project at the engine's rate; the session's rate is the player's, or
         // 48 kHz until the first output opens.
         let rate = self.player.as_ref().map_or(48_000, Player::sample_rate);
@@ -1080,7 +1091,7 @@ impl Session {
             "nam-cab-loader" => Ok(suhina_device_registry::DeviceAsset::Ir(std::sync::Arc::new(
                 suhina_device_nam_cab_loader::ir::read(std::path::Path::new(path), rate)?,
             ))),
-            other => Err(format!("{other:?} does not run a file")),
+            _ => Err(format!("{kind:?} does not run a file")),
         }
     }
 
