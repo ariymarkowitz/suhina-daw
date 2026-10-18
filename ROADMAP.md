@@ -164,7 +164,8 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
   those Suhina has a counterpart for with their settings, the rest as placeholders
   ([device import](docs/spec/device-import.md))
 - a delay and an algorithmic reverb; the matching devices in a Live Set to import come in as them
-  with every setting ([delay](docs/spec/delay.md), [reverb](docs/spec/reverb.md),
+  with their panel settings; the delay's Equal-Loudness option is not read and imports as the
+  linear mix law ([delay](docs/spec/delay.md), [reverb](docs/spec/reverb.md),
   [import](docs/spec/device-import.md))
 - anything not understood yet is skipped with a warning; the project still opens
 

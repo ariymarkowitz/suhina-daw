@@ -631,7 +631,14 @@ impl Device for Delay {
 
             self.fresh = false;
             self.frame = self.frame.wrapping_add(1);
-            if !follows_song {
+            if follows_song {
+                // Carry the song's position over, so stopping the transport runs on from here.
+                let next = cycles + cycles_per_frame;
+                if next.is_finite() {
+                    self.lfo_cycles = next.floor().rem_euclid((1u64 << 32) as f64) as u64;
+                    self.lfo_phase = next - next.floor();
+                }
+            } else {
                 self.lfo_phase += cycles_per_frame;
                 if self.lfo_phase >= 1.0 {
                     self.lfo_cycles = self.lfo_cycles.wrapping_add(self.lfo_phase as u64) % (1 << 32);

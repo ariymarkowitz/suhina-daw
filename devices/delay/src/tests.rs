@@ -267,6 +267,22 @@ fn a_synced_lfo_follows_the_song_position() {
 }
 
 #[test]
+fn a_synced_lfo_runs_on_from_the_song_position_when_the_transport_stops() {
+    let mut d = Delay::new();
+    d.set_param(param::LFO_MODE, 2.0);
+    d.set_param(param::LFO_SYNCED, 6.0); // one bar
+    let _ = d.prepare(SR);
+    // Playing, one beat into a bar: the triangle is at its top.
+    let _ = run(&mut d, &[], 1, ProcessContext { tempo: 120.0, beat: 1.0, playing: true });
+    // Stopped, the LFO goes on from there instead of from where it last ran free: after
+    // half a bar (1 s at 120 bpm) it is at 3/4 of the bar, the bottom.
+    let frames = SR as usize;
+    let _ = run(&mut d, &[], frames, ProcessContext { tempo: 120.0, beat: 0.0, playing: false });
+    let cycles = d.lfo_cycles as f64 + d.lfo_phase;
+    assert!((d.lfo().at(cycles) + 1.0).abs() < 1e-3, "{cycles}");
+}
+
+#[test]
 fn mix_laws() {
     for (equal, dry, wet) in [(0.0, 0.5, 0.5), (1.0, std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2)]
     {

@@ -138,7 +138,10 @@ in -> mono sum -> 90 Hz roll-off -> Low Cut -> High Cut -> predelay line -+-> 32
 - **Changes while playing.** Levels, mix, Stereo, every switch, the Spin and Chorus swings,
   Diffusion, Shape, Scale, Decay, the input band and the damping frequencies and gains ramp over
   20 ms, Predelay over 100 ms (a long jump bends the pitch on the way); delay lengths and gains are recomputed every 32 frames and interpolated frame
-  by frame in between. Switching Density starts or stops lines at once.
+  by frame in between. Switching Density starts or stops lines at once, and the mixing matrix
+  changes with them; the new lines start from silence. This is deliberate and has no crossfade:
+  changing Density while playing was listened to in the app (2026-10-18) and no click could be
+  heard. The `size-change` render covers the moment (Density Mid at 1 s).
 
 ## Import
 
