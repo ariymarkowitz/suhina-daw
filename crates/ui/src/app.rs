@@ -2853,7 +2853,7 @@ impl App {
         // Whether the File menu showed last frame, so its recent list is read once as it opens.
         let file_menu_was_open = std::mem::take(&mut self.file_menu_open);
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
+            bar_menu(ui, "File", |ui| {
                 // The start panel already offers new and open; the dialog would only cover it.
                 if ui.add(egui::Button::new("New or open…").shortcut_text(keys("file.new"))).clicked()
                     && !self.start_panel_open()
@@ -2888,7 +2888,7 @@ impl App {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
-            ui.menu_button("Edit", |ui| {
+            bar_menu(ui, "Edit", |ui| {
                 if ui.add_enabled(can_undo, egui::Button::new("Undo").shortcut_text(keys("edit.undo"))).clicked() {
                     actions.push(Action::new("edit.undo", json!({})));
                 }
@@ -2896,7 +2896,7 @@ impl App {
                     actions.push(Action::new("edit.redo", json!({})));
                 }
             });
-            ui.menu_button("View", |ui| {
+            bar_menu(ui, "View", |ui| {
                 if ui
                     .add_enabled(has_project, egui::Button::new("Session").shortcut_text(keys("view.session")))
                     .clicked()
@@ -2969,7 +2969,7 @@ impl App {
                     self.settings_changed = true;
                 }
             });
-            ui.menu_button("Projects", |ui| {
+            bar_menu(ui, "Projects", |ui| {
                 if ui
                     .add_enabled(several, egui::Button::new("Next project").shortcut_text(keys("projects.next")))
                     .clicked()
@@ -2991,12 +2991,12 @@ impl App {
                     actions.push(Action::new("projects.close", json!({ "project": active.0 })));
                 }
             });
-            ui.menu_button("Options", |ui| {
+            bar_menu(ui, "Options", |ui| {
                 if ui.add(egui::Button::new("Settings").shortcut_text(keys("settings.open"))).clicked() {
                     self.settings_open = true;
                 }
             });
-            ui.menu_button("Help", |ui| {
+            bar_menu(ui, "Help", |ui| {
                 if ui.add(egui::Button::new("About Suhina").shortcut_text(keys("help.about"))).clicked() {
                     self.about_open = true;
                 }
@@ -4902,4 +4902,15 @@ mod tests {
         // The measurement itself answers on this machine.
         assert!(memory_stats::memory_stats().is_some_and(|s| s.physical_mem > 0));
     }
+}
+
+/// One menu of the menu bar. While another of the bar's menus is open, the pointer over this
+/// one's title opens it, as system menu bars do.
+fn bar_menu<R>(ui: &mut Ui, title: &str, content: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    let shown = ui.menu_button(title, content);
+    let id = egui::Popup::default_response_id(&shown.response);
+    if shown.response.hovered() && !egui::Popup::is_id_open(ui.ctx(), id) && egui::Popup::is_any_open(ui.ctx()) {
+        egui::Popup::open_id(ui.ctx(), id);
+    }
+    shown
 }
