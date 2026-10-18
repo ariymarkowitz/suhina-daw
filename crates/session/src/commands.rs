@@ -438,6 +438,21 @@ static COMMANDS: &[CommandSpec] = &[
         run: set_volume,
     },
     CommandSpec {
+        id: "main.setVolume",
+        label: "Set the main output's volume, which every track, group and return plays through",
+        params: &[
+            param("db", ParamType::Decibels, "level in dB, at most +6; \"-inf\" or below -150 is silence"),
+            optional(
+                "continue",
+                ParamType::Bool,
+                "true adds the change to the undo step of the previous call of this command, when no other \
+                 edit came between (one drag, one step)",
+            ),
+        ],
+        kind: CommandKind::Edit,
+        run: set_main_volume,
+    },
+    CommandSpec {
         id: "track.adjustVolume",
         label: "Move the volume of each named track by the same number of decibels, keeping their differences",
         params: &[TRACKS, param("db", ParamType::Number, "how far to move it, in dB; positive is louder")],
@@ -2173,6 +2188,18 @@ fn set_volume(session: &mut Session, params: &Value) -> Result<Value, CommandErr
         }
     }
     Ok(with_override(json!({ "tracks": track_ids(&channels), "volume_db": vec![to_db(gain); channels.len()] }), off))
+}
+
+fn set_main_volume(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
+    let db = number_or_neg_infinity(params, "db")?;
+    if db > MAX_VOLUME_DB {
+        return Err(format!("db must be at most +{MAX_VOLUME_DB}, got {db}").into());
+    }
+    let Some(main) = session.project.channels.iter_mut().find(|c| c.role == ChannelRole::Master) else {
+        return Err("the project has no main channel".into());
+    };
+    main.volume = gain_of_db(db);
+    Ok(json!({ "volume_db": to_db(main.volume) }))
 }
 
 fn adjust_volume(session: &mut Session, params: &Value) -> Result<Value, CommandError> {

@@ -914,9 +914,18 @@ impl Session {
                     .any(|p| p.name == "continue")
                     .then(|| {
                         // A command over several tracks continues on its first one.
-                        commands::track_id(&self.project, params).ok().or_else(|| {
-                            commands::track_list(&self.project, params).ok().and_then(|l| l.first().copied())
-                        })
+                        commands::track_id(&self.project, params)
+                            .ok()
+                            .or_else(|| {
+                                commands::track_list(&self.project, params).ok().and_then(|l| l.first().copied())
+                            })
+                            // A command with no track (the main output's) continues on itself.
+                            .or_else(|| {
+                                (!params
+                                    .as_object()
+                                    .is_some_and(|o| o.contains_key("track") || o.contains_key("tracks")))
+                                .then_some(suhina_model::TrackId(u32::MAX))
+                            })
                     })
                     .flatten()
                     .map(|track| (spec.id, track));

@@ -617,7 +617,56 @@ fn fader_column(
         label,
     );
     let db = volume_drag(ui, &response, column, state, actions);
-    let hover = widgets::hover(ui, &response);
+    paint_fader(ui, painter, readout, fader, db, &response);
+}
+
+/// The main output's fader in the main column: as a track's, running `main.setVolume`.
+pub fn main_fader(
+    ui: &Ui,
+    painter: &egui::Painter,
+    readout: Rect,
+    fader: Rect,
+    volume_db: f64,
+    state: &mut SessionViewState,
+    actions: &mut Vec<Action>,
+) {
+    let area = Rect::from_min_max(Pos2::new(fader.left(), readout.top()), fader.max);
+    state.value_areas.push(area);
+    let mut preview = match state.drag {
+        Some((t, Control::Volume, v)) if t == MAIN => Some(v),
+        _ => None,
+    };
+    let label = widgets::format_db(preview.unwrap_or(volume_db));
+    let response =
+        widgets::value_area(ui, area.intersect(painter.clip_rect()), Id::new("main-volume"), "Main volume", label);
+    let continued = preview.is_some();
+    let send = |v: f64, continued: bool| {
+        let db = if v <= VOLUME_RANGE.0 { json!("-inf") } else { json!((v * 10.0).round() / 10.0) };
+        Action::new("main.setVolume", json!({ "db": db, "continue": continued }))
+    };
+    let mut db = volume_db;
+    match widgets::drag_value(ui, &response, &mut preview, volume_db, 0.25, 1.0, VOLUME_RANGE, 0.0) {
+        Drag::Moving(v) => {
+            state.drag = Some((MAIN, Control::Volume, v));
+            actions.push(send(v, continued));
+            db = v;
+        }
+        Drag::Done(v) => {
+            state.drag = None;
+            actions.push(send(v, continued));
+            db = v;
+        }
+        Drag::None => {}
+    }
+    paint_fader(ui, painter, readout, fader, db, &response);
+}
+
+/// Where a drag on the main fader is kept in [`SessionViewState::drag`]: no track has this id.
+pub const MAIN: TrackId = TrackId(u32::MAX);
+
+/// A fader's look: the dB value over it, the track, the level and the cap.
+fn paint_fader(ui: &Ui, painter: &egui::Painter, readout: Rect, fader: Rect, db: f64, response: &egui::Response) {
+    let hover = widgets::hover(ui, response);
     let value_color = motion::mix(theme::text_value(), theme::text_primary(), hover);
     widgets::text_in(
         painter,

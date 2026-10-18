@@ -189,6 +189,8 @@ pub struct Grid {
     /// The keys and notes mapped to slots, scenes and stop buttons that still exist, with the
     /// label the mapping mode shows (`docs/spec/ui-session-view.md` › Launch keys).
     pub mapped: Vec<(MappingTarget, String)>,
+    /// The main output's volume in dB.
+    pub main_volume_db: f64,
 }
 
 impl Grid {
@@ -367,6 +369,11 @@ impl Grid {
             meter,
             project_meter: project.transport.meter(),
             mapped,
+            main_volume_db: project
+                .channels
+                .iter()
+                .find(|c| c.role == ChannelRole::Master)
+                .map_or(0.0, |c| gain_to_db(c.volume)),
         }
     }
 

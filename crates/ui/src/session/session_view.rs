@@ -364,7 +364,13 @@ pub fn show(
     let level = state.meters.main;
     // The main meter stands where a track's does: beside the fader, or at the top of the strip
     // while the mixer is too low for a fader.
-    let parts = crate::session::mixer_strip::layout(main_mixer, false, false);
+    let shared =
+        crate::session::mixer_strip::Shared { reserve_input: state.reserve_input, fader: state.strip_fader_shown() };
+    let parts = crate::session::mixer_strip::layout_shared(main_mixer, false, false, shared);
+    if let (Some(readout), Some(fader)) = (parts.readout, parts.fader) {
+        let main_painter = painter.with_clip_rect(main_mixer);
+        crate::session::mixer_strip::main_fader(ui, &main_painter, readout, fader, grid.main_volume_db, state, actions);
+    }
     let at = parts.meter.unwrap_or_else(|| {
         Rect::from_min_size(
             main_mixer.min + Vec2::splat(PAD),
