@@ -1612,6 +1612,7 @@ impl App {
         ui.ctx().data_mut(|d| {
             d.insert_temp(egui::Id::new(crate::interaction::menus::NAME_FIELD), self.settings.view.menu_name_field)
         });
+        self.piano_roll.notes_replace = self.settings.view.notes_replace;
         self.follow_active();
         self.poll_scan(ui.ctx());
         self.poll_plugins(ui.ctx());

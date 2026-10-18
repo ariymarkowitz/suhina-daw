@@ -239,6 +239,14 @@ pub(crate) static ROWS: &[Entry] = &[
     ),
     row(
         Page::Arrangement,
+        "Clips",
+        "Moved notes replace the notes under them",
+        "In the piano roll, a note moved onto another of the same key and start takes its place; off, both play",
+        &["notes_replace"],
+        |cx, r| cx.on_off(r, |s| &mut s.view.notes_replace),
+    ),
+    row(
+        Page::Arrangement,
         "Tracks",
         "Track headers",
         "Which side of the timeline they are on",

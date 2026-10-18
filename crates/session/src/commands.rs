@@ -1721,6 +1721,12 @@ static COMMANDS: &[CommandSpec] = &[
             NOTES,
             optional("beats", ParamType::Number, "beats to move by, later when positive"),
             optional("semitones", ParamType::Integer, "semitones to move by, higher when positive"),
+            optional(
+                "replace",
+                ParamType::Bool,
+                "true removes a note the moved ones land on: the same key and the same start (default false: \
+                 both play)",
+            ),
         ],
         kind: CommandKind::Edit,
         run: notes::move_notes,
