@@ -224,6 +224,9 @@ pub struct Picked {
     pub showing: Option<Showing>,
     /// A device panel was clicked: the track and the device's index, to select.
     pub clicked: Option<(TrackId, usize)>,
+    /// How tall the device chain's panels are, in points, when the area shows only the chain:
+    /// the detail area is kept no taller.
+    pub content_height: Option<u32>,
 }
 
 /// What the piano roll has selected in the clip the detail area shows: how many notes, how many
@@ -551,13 +554,15 @@ pub fn show_row(
             } else {
                 Picked::default()
             };
-            return Picked { showing: picked, clicked: chain_picked.clicked };
+            return Picked { showing: picked, clicked: chain_picked.clicked, content_height: None };
         }
     }
     Picked::default()
 }
 
-/// A chain's devices side by side in `area`; one with an embedded editor is as wide as it.
+/// A chain's devices side by side in `area`; one with an embedded editor is as wide as it. Each
+/// panel is as tall as what it shows; a chain wider than the area scrolls sideways with the
+/// wheel's sideways turn (Shift and the wheel) or the bar along its bottom.
 fn chain_row(
     ui: &mut Ui,
     painter: &egui::Painter,
@@ -568,42 +573,68 @@ fn chain_row(
     places: &mut Vec<EditorPlace>,
 ) -> Picked {
     if chain.devices.is_empty() {
-        hint(painter, area, &format!("No devices on {} yet", chain.name));
+        hint(painter, area, &format!("No devices on {} yet: drop audio effects here", chain.name));
         return Picked::default();
     }
     let scale = ui.ctx().pixels_per_point();
     let mut picked = Picked::default();
-    let mut x = area.left();
-    for device in &chain.devices {
+    // Each panel's width and height first, so the scroll knows how wide the chain is.
+    let boxes: Vec<(f32, f32)> = chain
+        .devices
+        .iter()
+        .map(|device| {
+            let editor = device.plugin.as_ref().and_then(|p| p.editor_size(scale));
+            // A NAM panel asks for the mock's wider box (nam spec › The panels); the rest keep
+            // the plain device width.
+            let authored_base =
+                if device.file_device.is_some() { crate::detail::nam_panel::NAM_WIDTH } else { DEVICE_WIDTH };
+            let authored_width = device.graph.as_ref().map_or(authored_base, |graph| {
+                graph.canvas.as_ref().map_or_else(
+                    || {
+                        parameter_layout(&graph.parameters, DEVICE_WIDTH - PAD * 2.0, &[])
+                            .iter()
+                            .map(|cell| cell.right() + PAD * 2.0)
+                            .fold(DEVICE_WIDTH, f32::max)
+                    },
+                    |c| c.viewport_size.map_or(DEVICE_WIDTH.max(c.size[0] + PAD * 2.0), |v| v[0] + PAD * 2.0),
+                )
+            });
+            let width = editor.map_or(authored_width, |e| authored_width.max(e.x + PAD * 2.0));
+            let height = sdk_viewport(device)
+                .map_or_else(|| panel_height(device, width - PAD * 2.0, editor), |v| ROW + PAD * 2.0 + v[1]);
+            (width, height)
+        })
+        .collect();
+    let total = boxes.iter().map(|(w, _)| w + 1.0).sum::<f32>();
+    let scroll_id = Id::new(("chain-scroll", chain.track.0));
+    let most = (total - area.width()).max(0.0);
+    let mut offset = ui.data(|d| d.get_temp::<f32>(scroll_id)).unwrap_or(0.0).clamp(0.0, most);
+    if most > 0.0 && ui.rect_contains_pointer(area) {
+        offset = (offset - ui.input(|i| i.smooth_scroll_delta.x)).clamp(0.0, most);
+    }
+    // The bar along the bottom while the chain is wider than the area.
+    let bar = (most > 0.0).then(|| Rect::from_min_max(Pos2::new(area.left(), area.bottom() - 6.0), area.max));
+    if let Some(bar) = bar {
+        let response = ui.interact(bar, scroll_id.with("bar"), Sense::drag());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Device chain scroll bar"));
+        if response.dragged() {
+            offset = (offset + response.drag_delta().x * total / area.width()).clamp(0.0, most);
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(scroll_id, offset));
+    // Panels past the area's edges take no clicks there.
+    let outer_clip = ui.clip_rect();
+    ui.set_clip_rect(area.intersect(outer_clip));
+    let mut x = area.left() - offset;
+    let mut tallest: f32 = 0.0;
+    for (device, (width, height)) in chain.devices.iter().zip(boxes) {
         let editor = device.plugin.as_ref().and_then(|p| p.editor_size(scale));
-        // A NAM panel asks for the mock's wider box (nam spec › The panels); the rest keep
-        // the plain device width.
-        let authored_base =
-            if device.file_device.is_some() { crate::detail::nam_panel::NAM_WIDTH } else { DEVICE_WIDTH };
-        let authored_width = device.graph.as_ref().map_or(authored_base, |graph| {
-            graph.canvas.as_ref().map_or_else(
-                || {
-                    parameter_layout(&graph.parameters, DEVICE_WIDTH - PAD * 2.0, &[])
-                        .iter()
-                        .map(|cell| cell.right() + PAD * 2.0)
-                        .fold(DEVICE_WIDTH, f32::max)
-                },
-                |c| c.viewport_size.map_or(DEVICE_WIDTH.max(c.size[0] + PAD * 2.0), |v| v[0] + PAD * 2.0),
-            )
-        });
-        let width = editor.map_or(authored_width, |e| authored_width.max(e.x + PAD * 2.0));
-        let bottom = sdk_viewport(device).map_or(
-            if device.file_device.is_some() {
-                // A NAM panel's own height, not the whole area's (nam spec › The panels).
-                area.top() + crate::detail::nam_panel::NAM_HEIGHT
-            } else {
-                area.bottom()
-            },
-            |v| (area.top() + ROW + PAD * 2.0 + v[1]).min(area.bottom()),
-        );
-        let rect = Rect::from_min_max(Pos2::new(x, area.top()), Pos2::new(x + width, bottom));
-        eprintln!("[nam-debug] row box {rect:?} area {area:?} bottom {bottom}");
+        let rect = Rect::from_min_size(Pos2::new(x, area.top()), Vec2::new(width, height.min(area.height())));
         x = rect.right() + 1.0;
+        tallest = tallest.max(height);
+        if rect.right() < area.left() {
+            continue;
+        }
         if rect.left() > area.right() {
             break;
         }
@@ -626,7 +657,53 @@ fn chain_row(
             places.push(editor_place(ui, area, rect, editor, chain.track, device));
         }
     }
+    ui.set_clip_rect(outer_clip);
+    if let Some(bar) = bar {
+        painter.rect_filled(bar, 0.0, theme::control_background());
+        let thumb_width = (area.width() / total * bar.width()).max(24.0);
+        let thumb_left = bar.left() + offset / most * (bar.width() - thumb_width);
+        let thumb =
+            Rect::from_min_size(Pos2::new(thumb_left, bar.top() + 1.0), Vec2::new(thumb_width, bar.height() - 2.0));
+        painter.rect_filled(thumb, 0.0, theme::text_hint());
+    }
+    // Right of the last panel, what a drop does.
+    if x < area.right() - 80.0 {
+        let rest = Rect::from_min_max(
+            Pos2::new(x, area.top()),
+            Pos2::new(area.right(), (area.top() + tallest).min(area.bottom())),
+        );
+        hint(painter, rest, "Drop audio effects here");
+    }
+    picked.content_height = Some((tallest + if bar.is_some() { 8.0 } else { 0.0 }).ceil() as u32);
     picked
+}
+
+/// How tall a device's panel is in a row or a stack: its header, then its parameters, its
+/// plug-in rows, its embedded editor, or a NAM panel's own height.
+fn panel_height(device: &DeviceBox, width: f32, editor: Option<Vec2>) -> f32 {
+    let rows =
+        if device.plugin.is_some() { 2.0 + BUTTON_HEIGHT / PARAM_ROW } else { device.params.len().max(1) as f32 };
+    match editor {
+        Some(editor) => EDITOR_TOP + editor.y + PAD,
+        // A NAM panel's own height (nam spec › The panels); the rest take their rows.
+        None if device.file_device.is_some() => crate::detail::nam_panel::NAM_HEIGHT,
+        None => {
+            ROW + PAD * 2.0
+                + device.graph.as_ref().map_or(rows * PARAM_ROW, |graph| {
+                    parameter_layout(
+                        &graph.parameters,
+                        width,
+                        graph.canvas.as_ref().map_or(&[], |c| c.hidden_parameters.as_slice()),
+                    )
+                    .iter()
+                    .map(|r| r.bottom())
+                    .fold(0.0f32, f32::max)
+                })
+                + device.graph.as_ref().map_or(0.0, |graph| {
+                    graph.nodes.len() as f32 * NODE_ROW + graph.canvas.as_ref().map_or(0.0, |c| c.size[1])
+                })
+        }
+    }
 }
 
 fn sdk_viewport(device: &DeviceBox) -> Option<[f32; 2]> {
@@ -660,7 +737,7 @@ pub fn show_stack(
             } else {
                 Picked::default()
             };
-            return Picked { showing: picked, clicked: chain_picked.clicked };
+            return Picked { showing: picked, clicked: chain_picked.clicked, content_height: None };
         }
     }
     Picked::default()

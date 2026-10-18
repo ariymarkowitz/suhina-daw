@@ -314,6 +314,9 @@ pub struct App {
     /// The detail area is showing, and its height (in a row) or width (stacked).
     detail_open: bool,
     detail_height: f32,
+    /// How tall the device chain's panels were last frame, when the detail area showed only the
+    /// chain: the area is kept no taller.
+    detail_cap: Option<f32>,
     /// The piano roll is pulled to the top (`docs/spec/ui-clip-editor.md` › Pulled to the top),
     /// and the detail area's height a splitter drag has reached so far, unclamped.
     detail_max: bool,
@@ -438,6 +441,7 @@ impl App {
             pending_device_remove: None,
             detail_open: true,
             detail_height: DETAIL_HEIGHT,
+            detail_cap: None,
             detail_max: false,
             detail_drag: None,
             editor_closed: false,
@@ -2041,6 +2045,13 @@ impl App {
                 Rect::from_min_max(Pos2::new(x, area.top()), area.max),
             )
         } else {
+            // Only the chain shown: no taller than its panels.
+            if piano.is_none()
+                && clip.is_none()
+                && let Some(cap) = self.detail_cap
+            {
+                self.detail_height = self.detail_height.min(cap.max(least));
+            }
             self.detail_height = self.detail_height.clamp(least, (area.height() - MIN_VIEW).max(least));
             let y = if pulled {
                 // Above it only the edited track, or nothing.
@@ -2180,6 +2191,7 @@ impl App {
         if let Some(showing) = picked.inner.showing {
             self.detail_showing = showing;
         }
+        self.detail_cap = picked.inner.content_height.map(|h| h as f32);
         if picked.inner.clicked.is_some() {
             self.selected_device = picked.inner.clicked;
             // A fresh pick says where the user is now: a removal's undo or redo no longer
