@@ -387,6 +387,49 @@ fn a_search_opens_the_groups_it_finds_and_shows_names_under_their_group() {
     assert!(harness.query_by_label("FM Synth: Op 3 Coarse automation on Drums").is_some());
 }
 
+#[test]
+fn the_parameter_menu_stays_narrow() {
+    let (harness, _) = with_the_menu_open();
+    let search = harness.get_by_label("Search parameters").rect();
+    assert!(search.width() <= 260.0, "{search:?}");
+    assert!(harness.get_by_label("Op 3").rect().width() <= 260.0);
+}
+
+#[test]
+fn clicking_the_search_field_keeps_the_menu_open() {
+    let (mut harness, _) = with_the_menu_open();
+    harness.get_by_label("Search parameters").click();
+    harness.run();
+    assert!(harness.query_by_label("Search parameters").is_some());
+    assert!(harness.query_by_label("Op 3").is_some());
+}
+
+#[test]
+fn a_click_on_a_group_heading_opens_and_closes_it_and_keeps_the_menu_open() {
+    let (mut harness, _) = with_the_menu_open();
+    harness.get_by_label("Op 3").click();
+    harness.run();
+    assert!(harness.query_by_label("Search parameters").is_some(), "the menu closed");
+    assert!(harness.query_by_label("FM Synth: Op 3 Rate 1").is_some());
+    harness.get_by_label("Op 3").click();
+    harness.run();
+    assert!(harness.query_by_label("Search parameters").is_some(), "the menu closed");
+    assert!(harness.query_by_label("FM Synth: Op 3 Rate 1").is_none());
+    // Choosing a parameter still closes it.
+    harness.get_by_label("FM Synth: Volume").click();
+    harness.run();
+    assert!(harness.query_by_label("Search parameters").is_none());
+    assert!(harness.query_by_label("FM Synth: Volume automation on Drums").is_some());
+}
+
+#[test]
+fn a_click_outside_closes_the_parameter_menu() {
+    let (mut harness, _) = with_the_menu_open();
+    // The status bar, far from the menu.
+    click_at(&mut harness, Pos2::new(5.0, SIZE.1 - 5.0));
+    assert!(harness.query_by_label("Search parameters").is_none());
+}
+
 /// Renders the Arrangement view with lanes shown to `target/ui-snapshots/automation-lanes.png`,
 /// for looking at: `cargo test -p suhina-ui --test automation_lanes -- --ignored`.
 #[test]

@@ -36,6 +36,8 @@ const SEGMENT_POINTS: usize = 128;
 const HEADER_ROW: f32 = 15.0;
 const TOGGLE: f32 = 30.0;
 const SMALL_BUTTON: f32 = 16.0;
+/// Width of the lane header's parameter menu: its rows and search field fill it, no wider.
+const MENU_WIDTH: f32 = 240.0;
 /// The bottom of the volume's travel, as the mixer's fields show it.
 const VOLUME_FLOOR: f64 = -70.0;
 
@@ -1108,7 +1110,7 @@ fn parameter_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool, scr
 /// open, and Enter takes the first match. A parameter another lane shows (`shown`) is greyed
 /// out. Answers the one chosen.
 fn parameter_menu(ui: &mut Ui, filter: Id, choices: &[Param], current: &LaneKey, shown: &[LaneKey]) -> Option<LaneKey> {
-    ui.set_min_width(220.0);
+    ui.set_width(MENU_WIDTH);
     let mut menu: MenuState = ui.data(|d| d.get_temp(filter)).unwrap_or_default();
     let first_frame = !menu.shown;
     if first_frame && let Some(group) = choices.iter().find(|c| c.key == *current).and_then(|c| c.group.clone()) {
@@ -1230,7 +1232,10 @@ fn lane_header(
     widgets::dropdown(ui, &painter, chooser, &response, &label);
     let shown = state.shown(track, params);
     let filter = id.with("filter");
-    match egui::Popup::menu(&response).show(|ui| parameter_menu(ui, filter, params.of(track), &param.key, &shown)) {
+    // Only a click outside closes it: the search field and the group headings take clicks, and
+    // choosing a parameter closes it itself.
+    let menu = egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    match menu.show(|ui| parameter_menu(ui, filter, params.of(track), &param.key, &shown)) {
         Some(menu) => {
             if let Some(choice) = menu.inner {
                 if let Some(keys) = state.shown.get_mut(&track)
