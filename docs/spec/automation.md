@@ -152,7 +152,7 @@ A lane is 40 px tall across the timeline, with a header under the track's:
   parameter. Typing narrows the list to the parameters whose device, group and name contain
   every word typed between them ("op 3 coarse", or "lfo" for a whole group), under their
   device's and their group's headings, open; Enter takes the first of them as listed. A parameter another lane
-  of the track shows is greyed out. Clicks in the menu (the search field, a heading) leave it open; choosing a parameter or a click outside closes it, and closing it clears the search. Plug-in parameters can be set by command but are not yet in this dropdown.
+  of the track shows is greyed out. Clicks in the menu (the search field, a heading, the heading of the lane's own parameter included, which the lane keeps showing) leave it open; choosing a parameter or a click outside closes it, and closing it clears the search. Plug-in parameters can be set by command but are not yet in this dropdown.
 - **On/Off** (lanes with points): whether the lane plays. A manual change to the parameter turns
   it off (the envelope is drawn in `text.hint` and the header says "Off: set by hand"); a click
   turns it on again (`automation.setEnabled`), or off.

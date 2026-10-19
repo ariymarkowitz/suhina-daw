@@ -305,12 +305,21 @@ fn menu_with(devices: &[(&str, &str)]) -> Harness<'static, App> {
 
 /// [`menu_with`] in a window of `size`.
 fn menu_in(devices: &[(&str, &str)], size: (f32, f32)) -> Harness<'static, App> {
+    menu_on(devices, size, 0, true)
+}
+
+/// [`menu_in`], on the demo's track `track` (counting from 0) rather than the Drums, and with
+/// the detail area under the arrangement shown or not (`detail`).
+fn menu_on(devices: &[(&str, &str)], size: (f32, f32), track: usize, detail: bool) -> Harness<'static, App> {
     let mut project = demo_project();
-    for (id, name) in devices {
+    let name = project.tracks[track].name.clone();
+    let channel = project.tracks[track].channel;
+    let channel = project.channels.iter_mut().find(|c| Some(c.id) == channel).expect("the track has a channel");
+    for (id, device) in devices {
         let info = suhina_device_registry::info(id).expect("a built-in device");
         let params = info.params.iter().map(|p| DeviceParam::new(p.id, p.default)).collect();
-        project.channels[0].devices.push(Device {
-            name: (*name).into(),
+        channel.devices.push(Device {
+            name: (*device).into(),
             kind: DeviceKind::Builtin((*id).into()),
             enabled: true,
             state: None,
@@ -320,9 +329,13 @@ fn menu_in(devices: &[(&str, &str)], size: (f32, f32)) -> Harness<'static, App> 
         });
     }
     let mut harness = arrangement_sized(project, size);
-    harness.get_by_label("Show automation of Drums").click();
+    if !detail {
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
+        harness.run();
+    }
+    harness.get_by_label(&format!("Show automation of {name}")).click();
     harness.run();
-    harness.get_by_label("Parameter of Volume lane on Drums").click();
+    harness.get_by_label(&format!("Parameter of Volume lane on {name}")).click();
     harness.run();
     harness
 }
@@ -515,6 +528,42 @@ fn the_parameter_menu_stays_where_it_opened_as_it_grows() {
         let menu = menu(&harness);
         assert!(menu.bottom() <= size.1, "the menu runs past the window: {menu:?}");
     }
+}
+
+#[test]
+fn over_the_dropdown_the_menu_stays_open_and_in_place_as_the_lanes_device_closes() {
+    // A window so short, without the detail area, that the Keys lane's menu opens over its
+    // dropdown.
+    let mut harness = menu_on(&[("fm-synth", "FM Synth"), ("utility", "Utility")], (1280.0, 480.0), 2, false);
+    harness.get_by_label("Search parameters").type_text("utility gain");
+    harness.run();
+    harness.get_by_label("Utility: Gain").click();
+    harness.run();
+    let dropdown = "Parameter of Utility: Gain lane on Keys";
+    harness.get_by_label(dropdown).click();
+    harness.run();
+    let top = harness.get_by_label(dropdown).rect().top();
+    let menu = |harness: &Harness<'static, App>| {
+        let search = harness.get_by_label("Search parameters").rect().center();
+        let layer = harness.ctx.layer_id_at(search);
+        layer.and_then(|l| harness.ctx.memory(|m| m.area_rect(l.id))).expect("the menu is open")
+    };
+    assert!((menu(&harness).bottom() - top).abs() <= 1.0, "the menu opens over the dropdown");
+    assert!(harness.query_by_label("Utility: Gain").is_some());
+    let heading = harness.get_by_label("Utility").rect();
+    assert!(menu(&harness).contains_rect(heading), "the device's heading is in view");
+
+    // Closing the device of the lane's parameter shrinks the menu from under the click: it
+    // stays open, and each frame shows it against the dropdown, not first in the old place.
+    harness.get_by_label("Utility").click();
+    for _ in 0..4 {
+        harness.step();
+        assert!(harness.query_by_label("Search parameters").is_some(), "the menu closed");
+        assert!((menu(&harness).bottom() - top).abs() <= 1.0, "the menu was drawn away from the dropdown");
+    }
+    assert!(harness.query_by_label("Utility: Gain").is_none());
+    // The lane still shows its parameter.
+    assert!(harness.query_by_label(dropdown).is_some());
 }
 
 /// Renders the Arrangement view with lanes shown to `target/ui-snapshots/automation-lanes.png`,

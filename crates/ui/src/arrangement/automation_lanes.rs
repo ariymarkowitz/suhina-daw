@@ -1278,19 +1278,39 @@ fn lane_header(
     let shown = state.shown(track, params);
     let filter = id.with("filter");
     // Under the dropdown, or over it when there is more room there; on that side only, so the
-    // menu never jumps to another as it grows. Only a click outside closes it: the search field
-    // and the headings take clicks, and choosing a parameter closes it itself.
+    // menu never jumps to another as it grows.
     let window = ui.ctx().content_rect();
     let below = window.bottom() - response.rect.bottom();
     let above = response.rect.top() - window.top();
     let (align, room) =
         if below >= above { (egui::RectAlign::BOTTOM_START, below) } else { (egui::RectAlign::TOP_START, above) };
+    // Only a click outside closes it: the search field and the headings take clicks, and
+    // choosing a parameter closes it itself. Outside is where the menu was when the click came,
+    // as a heading the click closes shrinks the menu in the same frame, maybe from under it.
+    let placed = filter.with("rect");
+    let last: Option<Rect> = ui.data(|d| d.get_temp(placed));
+    let outside = ui.input(|i| {
+        i.pointer.any_click()
+            && i.pointer
+                .interact_pos()
+                .is_some_and(|p| last.is_some_and(|r| !r.contains(p)) && !response.rect.contains(p))
+    });
     let menu = egui::Popup::menu(&response)
         .align(align)
         .align_alternatives(&[])
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks);
     match menu.show(|ui| parameter_menu(ui, filter, params.of(track), &param.key, &shown, room)) {
         Some(menu) => {
+            // A menu over the dropdown is placed by its size the frame before: when that changed
+            // (a heading, a search), the frame is drawn again rather than shown in the old place.
+            let rect = menu.response.rect;
+            if last.is_some_and(|r| r.size() != rect.size()) {
+                ui.ctx().request_discard("the parameter menu changed size");
+            }
+            ui.data_mut(|d| d.insert_temp(placed, rect));
+            if outside {
+                egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&response));
+            }
             if let Some(choice) = menu.inner {
                 if let Some(keys) = state.shown.get_mut(&track)
                     && let Some(slot) = keys.iter_mut().find(|k| **k == param.key)
@@ -1300,9 +1320,12 @@ fn lane_header(
                 state.selection = None;
             }
         }
-        // Closed: the next opening starts with an empty search and its groups closed.
+        // Closed: the next opening starts with an empty search, its groups closed, and no place.
         None => {
-            ui.data_mut(|d| d.remove_temp::<MenuState>(filter));
+            ui.data_mut(|d| {
+                d.remove_temp::<MenuState>(filter);
+                d.remove::<Rect>(placed);
+            });
         }
     }
 
