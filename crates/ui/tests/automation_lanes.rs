@@ -524,6 +524,30 @@ fn the_menu_opens_the_device_and_group_of_the_lanes_parameter_and_a_search_opens
     assert!(harness.query_by_label("Utility: Gain").is_some());
 }
 
+/// A lane switched to another parameter and back opens its menu afresh: no search left over,
+/// and only the lane's own device and group open.
+#[test]
+fn a_lane_switched_back_opens_its_menu_afresh() {
+    let mut harness = menu_with(&[("fm-synth", "FM Synth"), ("utility", "Utility")]);
+    harness.get_by_label("Search parameters").type_text("op 3 coarse");
+    harness.run();
+    harness.get_by_label("FM Synth: Op 3 Coarse").click();
+    harness.run();
+    harness.get_by_label("Parameter of FM Synth: Op 3 Coarse lane on Drums").click();
+    harness.run();
+    // The list opens on the coarse tuning, the mixer's volume scrolled out of view above it.
+    harness.get_by_label("Search parameters").type_text("volume");
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    harness.get_by_label("Parameter of Volume lane on Drums").click();
+    harness.run();
+    // Left over, the search the volume lane chose with would show the coarse tuning again.
+    assert!(harness.query_by_label("FM Synth: Op 3 Coarse").is_none());
+    assert!(harness.query_by_label("Op 3").is_none(), "the FM synth was left open");
+    assert!(harness.query_by_label("Utility").is_some());
+}
+
 /// As headings open, the menu grows in place under its dropdown and stays inside the window.
 #[test]
 fn the_parameter_menu_stays_where_it_opened_as_it_grows() {

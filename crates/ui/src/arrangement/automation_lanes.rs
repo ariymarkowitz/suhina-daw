@@ -1356,6 +1356,10 @@ fn lane_header(
                 egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&response));
             }
             if let Some((choice, top)) = menu.inner {
+                // The lane's ids follow its parameter, so the menu's state is dropped under the
+                // old ones now rather than when a header with them is next drawn closed: a lane
+                // switched back opens its menu afresh even in that header's first frame.
+                forget_menu(ui, filter, placed);
                 state.from_automated.remove(&this_lane);
                 if top {
                     state.from_automated.insert((track, choice.clone()));
@@ -1369,12 +1373,7 @@ fn lane_header(
             }
         }
         // Closed: the next opening starts with an empty search, its groups closed, and no place.
-        None => {
-            ui.data_mut(|d| {
-                d.remove_temp::<MenuState>(filter);
-                d.remove::<Rect>(placed);
-            });
-        }
+        None => forget_menu(ui, filter, placed),
     }
 
     // On or off: off after a manual change; a click turns it on again (or off).
@@ -1422,6 +1421,8 @@ fn lane_header(
     let response =
         widgets::button_area(ui, hide.intersect(clip), id.with("hide"), format!("Hide {label} lane on {}", lanes.name));
     if response.clicked() {
+        // A hidden lane draws no header to drop its menu's state when the menu closes.
+        forget_menu(ui, filter, placed);
         state.from_automated.remove(&this_lane);
         if let Some(keys) = state.shown.get_mut(&track) {
             keys.retain(|k| *k != param.key);
@@ -1443,6 +1444,15 @@ fn lane_header(
         (Some(_), true) => (format!("{} points", param.points.len()), theme::text_hint()),
     };
     widgets::text_in(&painter, second, Align2::LEFT_CENTER, &text, theme::ui_font(theme::TEXT_SMALL), ink);
+}
+
+/// Drops what a lane's parameter menu keeps while it is open (its [`MenuState`] under `filter`,
+/// its place under `placed`), so the next opening starts afresh.
+fn forget_menu(ui: &Ui, filter: Id, placed: Id) {
+    ui.data_mut(|d| {
+        d.remove_temp::<MenuState>(filter);
+        d.remove::<Rect>(placed);
+    });
 }
 
 fn small_button(ui: &Ui, painter: &egui::Painter, rect: Rect, response: &egui::Response, text: &str) {
