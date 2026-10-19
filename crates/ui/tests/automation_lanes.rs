@@ -588,6 +588,11 @@ fn over_the_dropdown_the_menu_stays_open_and_in_place_as_the_lanes_device_closes
 /// The demo project with the FM synth and the utility on the Drums channel, its volume and the
 /// utility's gain automated, and its lanes shown (those two, as they have points).
 fn with_automation() -> Harness<'static, App> {
+    with_automation_of(&[])
+}
+
+/// [`with_automation`], with the FM synth's parameters `fm` (by id) automated as well.
+fn with_automation_of(fm: &[&str]) -> Harness<'static, App> {
     let mut project = demo_project();
     let channel = project.tracks.iter().find(|t| t.name == "Drums").and_then(|t| t.channel);
     let channel = project.channels.iter_mut().find(|c| c.id == channel.expect("Drums has a channel"));
@@ -602,7 +607,10 @@ fn with_automation() -> Harness<'static, App> {
     for (id, name) in [("fm-synth", "FM Synth"), ("utility", "Utility")] {
         let info = suhina_device_registry::info(id).expect("a built-in device");
         let params = info.params.iter().map(|p| DeviceParam::new(p.id, p.default)).collect();
-        let automation = if id == "utility" { vec![points("gain", [-6.0, 0.0])] } else { Vec::new() };
+        let automation = match id {
+            "utility" => vec![points("gain", [-6.0, 0.0])],
+            _ => fm.iter().map(|p| points(p, [0.0, 1.0])).collect(),
+        };
         channel.devices.push(Device {
             name: name.into(),
             kind: DeviceKind::Builtin(id.into()),
@@ -670,6 +678,63 @@ fn choosing_an_automated_parameter_at_the_top_switches_the_lane() {
     assert!(harness.query_by_label("Search parameters").is_none(), "the menu stayed open");
     assert!(harness.query_by_label("Utility: Gain automation on Drums").is_some());
     assert!(harness.query_by_label("Volume automation on Drums").is_none(), "the lane kept the volume");
+}
+
+/// The open parameter menu's own area.
+fn menu_area(harness: &Harness<'static, App>) -> egui::Rect {
+    let search = harness.get_by_label("Search parameters").rect().center();
+    let layer = harness.ctx.layer_id_at(search);
+    layer.and_then(|l| harness.ctx.memory(|m| m.area_rect(l.id))).expect("the menu is open")
+}
+
+/// Whether the row labelled `label` is in the open menu's list, not scrolled out of it.
+fn in_view(harness: &Harness<'static, App>, label: &str) -> bool {
+    let list_top = harness.get_by_label("Search parameters").rect().bottom();
+    let row = harness.get_by_label(label).rect();
+    row.top() >= list_top && row.bottom() <= menu_area(harness).bottom()
+}
+
+/// The FM synth's first operator's last parameter automated, and its lane hidden, so the
+/// volume lane may show it; the volume lane's menu open.
+fn op_1_on_automated() -> Harness<'static, App> {
+    let mut harness = with_automation_of(&["op1.on"]);
+    harness.get_by_label("Hide FM Synth: Op 1 On lane on Drums").click();
+    harness.run();
+    harness.get_by_label("Parameter of Volume lane on Drums").click();
+    harness.run();
+    harness
+}
+
+/// A parameter chosen under "Automated" opens the menu there again, with its device and group
+/// open below.
+#[test]
+fn the_menu_opens_on_the_automated_copy_it_was_chosen_from() {
+    let mut harness = op_1_on_automated();
+    harness.get_by_label("FM Synth: Op 1 On (automated)").click();
+    harness.run();
+    let dropdown = "Parameter of FM Synth: Op 1 On lane on Drums";
+    harness.get_by_label(dropdown).click();
+    harness.run();
+    assert!(in_view(&harness, "FM Synth: Op 1 On (automated)"));
+    // Its own row is listed too, in its open group, below the list's end.
+    assert!(harness.query_by_label("FM Synth: Op 1 On").is_some());
+    assert!(!in_view(&harness, "FM Synth: Op 1 On"), "the list scrolled to the parameter's own row");
+}
+
+/// A parameter chosen in its device opens the menu on its own row again, though it is
+/// automated.
+#[test]
+fn the_menu_opens_on_the_row_in_its_device_it_was_chosen_from() {
+    let mut harness = op_1_on_automated();
+    harness.get_by_label("Search parameters").type_text("op 1 on");
+    harness.run();
+    harness.get_by_label("FM Synth: Op 1 On").click();
+    harness.run();
+    let dropdown = "Parameter of FM Synth: Op 1 On lane on Drums";
+    harness.get_by_label(dropdown).click();
+    harness.run();
+    assert!(in_view(&harness, "FM Synth: Op 1 On"));
+    assert!(!in_view(&harness, "FM Synth: Op 1 On (automated)"), "the list scrolled to the top");
 }
 
 /// With nothing automated, the menu has no "Automated" section.

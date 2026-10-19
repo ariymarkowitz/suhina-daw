@@ -450,6 +450,9 @@ pub struct LanesState {
     point_drag: Option<PointDrag>,
     curve_drag: Option<CurveDrag>,
     box_drag: Option<BoxDrag>,
+    /// The lanes whose parameter was chosen in the parameter menu's "Automated" section: the
+    /// menu opens there again for them, and on the parameter's own row for the rest.
+    from_automated: HashSet<(TrackId, LaneKey)>,
     /// The clip selected in the view last frame: selecting a clip ends a selection of points.
     clip: Option<(TrackId, ClipId)>,
 }
@@ -1108,15 +1111,18 @@ fn parameter_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool, scr
 }
 
 /// A parameter's copy in the menu's "Automated" section: its whole name ("Utility: Gain"), as it
-/// stands outside its device's heading, selected for the lane's own and greyed out when it is
-/// not `free`. Its accessible label ends in " (automated)", apart from its row in its device.
-/// Answers whether it was clicked.
-fn automated_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool) -> bool {
+/// stands outside its device's heading, selected for the lane's own (scrolled to on `scroll`)
+/// and greyed out when it is not `free`. Its accessible label ends in " (automated)", apart from
+/// its row in its device. Answers whether it was clicked.
+fn automated_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool, scroll: bool) -> bool {
     let selected = choice.key == *current;
     let label = choice.label();
     let response = ui.add_enabled(free, egui::Button::selectable(selected, &label));
     let label = format!("{label} (automated)");
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, free, selected, &label));
+    if scroll && selected {
+        response.scroll_to_me(Some(egui::Align::Center));
+    }
     response.clicked()
 }
 
@@ -1129,15 +1135,19 @@ fn automated_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool) -> 
 /// scrolled into view, and a track's only device; a search shows the devices and groups with
 /// matches open, and Enter takes the first match. A parameter another lane shows (`shown`) is
 /// greyed out. The menu fits in `room`, the height on its side of the dropdown, so it grows as
-/// headings open without moving. Answers the one chosen.
+/// headings open without moving. The lane's own parameter is scrolled to where it was chosen:
+/// its copy under "Automated" when it was chosen there (`from_automated`) and still has points,
+/// its own row otherwise; its device and group open either way. Answers the one chosen, and
+/// whether it was chosen under "Automated".
 fn parameter_menu(
     ui: &mut Ui,
     filter: Id,
     choices: &[Param],
     current: &LaneKey,
     shown: &[LaneKey],
+    from_automated: bool,
     room: f32,
-) -> Option<LaneKey> {
+) -> Option<(LaneKey, bool)> {
     ui.set_width(MENU_WIDTH);
     let mut menu: MenuState = ui.data(|d| d.get_temp(filter)).unwrap_or_default();
     let first_frame = !menu.shown;
@@ -1174,6 +1184,9 @@ fn parameter_menu(
     let sections = sections(choices, &words);
     let automated: Vec<&Param> = sections.iter().flat_map(Section::params).filter(|c| !c.points.is_empty()).collect();
     let free = |choice: &Param| !shown.contains(&choice.key) || choice.key == *current;
+    // Where the menu opens: on the copy under "Automated" when the lane's parameter was chosen
+    // there, on its own row otherwise.
+    let to_top = from_automated && automated.iter().any(|c| c.key == *current);
     let mut chosen = None;
     // What is left of the room under the search field and the menu's margins.
     let used = ui.min_rect().height() + ui.spacing().menu_margin.sum().y + ui.spacing().item_spacing.y + MENU_EDGE;
@@ -1190,8 +1203,8 @@ fn parameter_menu(
                 ui.separator();
                 ui.label(egui::RichText::new("Automated").color(theme::text_hint()));
                 for choice in &automated {
-                    if automated_row(ui, choice, current, free(choice)) {
-                        chosen = Some(choice.key.clone());
+                    if automated_row(ui, choice, current, free(choice), first_frame && to_top) {
+                        chosen = Some((choice.key.clone(), true));
                     }
                 }
             }
@@ -1200,8 +1213,8 @@ fn parameter_menu(
                 // The mixer's few parameters have no heading.
                 let Some(device) = section.device else {
                     for choice in &section.loose {
-                        if parameter_row(ui, choice, current, free(choice), first_frame) {
-                            chosen = Some(choice.key.clone());
+                        if parameter_row(ui, choice, current, free(choice), first_frame && !to_top) {
+                            chosen = Some((choice.key.clone(), false));
                         }
                     }
                     continue;
@@ -1219,8 +1232,8 @@ fn parameter_menu(
                 }
                 ui.indent(("device", device), |ui| {
                     for choice in &section.loose {
-                        if parameter_row(ui, choice, current, free(choice), first_frame) {
-                            chosen = Some(choice.key.clone());
+                        if parameter_row(ui, choice, current, free(choice), first_frame && !to_top) {
+                            chosen = Some((choice.key.clone(), false));
                         }
                     }
                     for (group, params) in &section.groups {
@@ -1235,8 +1248,8 @@ fn parameter_menu(
                         if searching || menu.open.contains(&key) {
                             ui.indent(&key, |ui| {
                                 for choice in params {
-                                    if parameter_row(ui, choice, current, free(choice), first_frame) {
-                                        chosen = Some(choice.key.clone());
+                                    if parameter_row(ui, choice, current, free(choice), first_frame && !to_top) {
+                                        chosen = Some((choice.key.clone(), false));
                                     }
                                 }
                             });
@@ -1247,8 +1260,9 @@ fn parameter_menu(
         });
     });
     if chosen.is_none() && enter {
-        let mut listed = automated.iter().copied().chain(sections.iter().flat_map(Section::params));
-        chosen = listed.find(|c| free(c)).map(|c| c.key.clone());
+        let top = automated.iter().find(|c| free(c)).map(|c| (c.key.clone(), true));
+        let rest = || sections.iter().flat_map(Section::params).find(|c| free(c)).map(|c| (c.key.clone(), false));
+        chosen = top.or_else(rest);
     }
     menu.shown = true;
     ui.data_mut(|d| d.insert_temp(filter, menu));
@@ -1326,7 +1340,10 @@ fn lane_header(
         .align(align)
         .align_alternatives(&[])
         .close_behavior(egui::PopupCloseBehavior::IgnoreClicks);
-    match menu.show(|ui| parameter_menu(ui, filter, params.of(track), &param.key, &shown, room)) {
+    let this_lane = (track, param.key.clone());
+    let from_automated = state.from_automated.contains(&this_lane);
+    let choices = params.of(track);
+    match menu.show(|ui| parameter_menu(ui, filter, choices, &param.key, &shown, from_automated, room)) {
         Some(menu) => {
             // A menu over the dropdown is placed by its size the frame before: when that changed
             // (a heading, a search), the frame is drawn again rather than shown in the old place.
@@ -1338,7 +1355,11 @@ fn lane_header(
             if outside {
                 egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&response));
             }
-            if let Some(choice) = menu.inner {
+            if let Some((choice, top)) = menu.inner {
+                state.from_automated.remove(&this_lane);
+                if top {
+                    state.from_automated.insert((track, choice.clone()));
+                }
                 if let Some(keys) = state.shown.get_mut(&track)
                     && let Some(slot) = keys.iter_mut().find(|k| **k == param.key)
                 {
@@ -1401,6 +1422,7 @@ fn lane_header(
     let response =
         widgets::button_area(ui, hide.intersect(clip), id.with("hide"), format!("Hide {label} lane on {}", lanes.name));
     if response.clicked() {
+        state.from_automated.remove(&this_lane);
         if let Some(keys) = state.shown.get_mut(&track) {
             keys.retain(|k| *k != param.key);
             if keys.is_empty() {
