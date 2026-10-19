@@ -5,10 +5,12 @@
 //! moved and deleted with the pointer and the keyboard become `automation.*` commands that
 //! change the project through the session, with undo.
 
+#![allow(clippy::expect_used)] // test helpers outside #[test] functions
+
 use egui::{Key, Modifiers, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use suhina_engine::model::{AutomationPoint, Project};
+use suhina_engine::model::{AutomationPoint, Device, DeviceKind, DeviceParam, Extensions, Project};
 use suhina_session::Session;
 use suhina_ui::demo::demo_project;
 use suhina_ui::{App, kit::theme};
@@ -280,6 +282,73 @@ fn dragging_a_segment_up_bends_its_curve() {
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert_eq!(pan(&harness).0[0].curve, 0.0);
+}
+
+/// The demo project with the FM synth, which has over a hundred parameters, on the Drums
+/// channel and its lanes shown; the volume lane's parameter menu is open.
+fn with_the_menu_open() -> (Harness<'static, App>, String) {
+    let mut project = demo_project();
+    let info = suhina_device_registry::info("fm-synth").expect("the FM synth is built in");
+    let last = info.params.last().expect("the FM synth has parameters").name.to_string();
+    let params = info.params.iter().map(|p| DeviceParam::new(p.id, p.default)).collect();
+    project.channels[0].devices.push(Device {
+        name: "FM Synth".into(),
+        kind: DeviceKind::Builtin("fm-synth".into()),
+        enabled: true,
+        state: None,
+        params,
+        automation: Vec::new(),
+        extensions: Extensions::default(),
+    });
+    let mut harness = arrangement(project);
+    harness.get_by_label("Show automation of Drums").click();
+    harness.run();
+    harness.get_by_label("Parameter of Volume lane on Drums").click();
+    harness.run();
+    (harness, last)
+}
+
+#[test]
+fn the_parameter_menu_of_a_device_with_many_parameters_scrolls_to_the_current_one() {
+    let (harness, _) = with_the_menu_open();
+    let search = harness.get_by_label("Search parameters").rect();
+    assert!(search.bottom() < SIZE.1, "{search:?}");
+    // The list is longer than the window and the rows below it are clipped, not pushed out of
+    // the window; the lane's own parameter, the volume, is scrolled into view.
+    let on_screen = harness.get_all_by_label("Volume").filter(|n| n.rect().bottom() < SIZE.1).count();
+    assert!(on_screen >= 1);
+}
+
+#[test]
+fn searching_the_parameter_menu_reaches_the_last_parameter_of_a_long_device() {
+    let (mut harness, last) = with_the_menu_open();
+    harness.get_by_label("Search parameters").type_text(&last);
+    harness.run();
+    let label = format!("FM Synth: {last}");
+    harness.get_by_label(&label).click();
+    harness.run();
+    assert!(harness.query_by_label(&format!("{label} automation on Drums")).is_some());
+    assert!(harness.query_by_label("Volume automation on Drums").is_none(), "the lane showed another parameter");
+}
+
+#[test]
+fn enter_takes_the_first_match() {
+    let (mut harness, _) = with_the_menu_open();
+    let first = suhina_device_registry::info("fm-synth").and_then(|i| i.params.first()).map(|p| p.name);
+    let first = first.expect("the FM synth has parameters");
+    harness.get_by_label("Search parameters").type_text("fm synth");
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(harness.query_by_label(&format!("FM Synth: {first} automation on Drums")).is_some());
+}
+
+#[test]
+fn a_search_with_no_match_says_so() {
+    let (mut harness, _) = with_the_menu_open();
+    harness.get_by_label("Search parameters").type_text("no such parameter");
+    harness.run();
+    assert!(harness.query_by_label("No parameter matches").is_some());
 }
 
 /// Renders the Arrangement view with lanes shown to `target/ui-snapshots/automation-lanes.png`,

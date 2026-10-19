@@ -970,6 +970,87 @@ fn drop_points(drag: &PointDrag, param: &Param, geometry: &Geometry, free: bool)
     Some(Action::new("automation.movePoint", params))
 }
 
+/// The words of a search, lower case: a parameter matches when its label has all of them.
+fn query_words(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// Whether `param` matches a search (`words` from [`query_words`]; none matches everything).
+fn matches_query(param: &Param, words: &[String]) -> bool {
+    let label = param.label().to_lowercase();
+    words.iter().all(|w| label.contains(w.as_str()))
+}
+
+/// The lane header's parameter menu: a search field and, under it, the track's parameters in a
+/// list that scrolls when it is longer than the window (the FM synth has over a hundred).
+/// Without a search they are grouped by device; with one, a flat list of the matches, and Enter
+/// takes the first. The parameter of `current` is scrolled into view when the menu opens, and a
+/// parameter another lane shows (`shown`) is greyed out. Answers the one chosen.
+fn parameter_menu(ui: &mut Ui, filter: Id, choices: &[Param], current: &LaneKey, shown: &[LaneKey]) -> Option<LaneKey> {
+    ui.set_min_width(220.0);
+    let opened = filter.with("opened");
+    let first_frame = !ui.data(|d| d.get_temp::<bool>(opened)).unwrap_or(false);
+    let mut query: String = ui.data(|d| d.get_temp(filter)).unwrap_or_default();
+    let field_id = filter.with("field");
+    // Enter ends the field's focus, so whether it had it is read before the field is shown.
+    let had_focus = ui.memory(|m| m.has_focus(field_id));
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut query)
+            .id(field_id)
+            .hint_text("Search parameters")
+            .font(theme::ui_font(theme::TEXT_SMALL))
+            .desired_width(f32::INFINITY),
+    );
+    field.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search parameters"));
+    if first_frame {
+        field.request_focus();
+    }
+    let enter = had_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    ui.data_mut(|d| {
+        d.insert_temp(filter, query.clone());
+        d.insert_temp(opened, true);
+    });
+
+    let words = query_words(&query);
+    let free = |choice: &Param| !shown.contains(&choice.key) || choice.key == *current;
+    let mut chosen = None;
+    let height = (ui.ctx().content_rect().height() * 0.6).max(160.0);
+    egui::ScrollArea::vertical().max_height(height).auto_shrink([true, true]).show(ui, |ui| {
+        let mut device = None;
+        let mut any = false;
+        for choice in choices.iter().filter(|c| matches_query(c, &words)) {
+            any = true;
+            if words.is_empty() && choice.device_name != device {
+                device.clone_from(&choice.device_name);
+                ui.separator();
+                if let Some(name) = &device {
+                    ui.label(egui::RichText::new(name).color(theme::text_hint()));
+                }
+            }
+            let mark = if choice.points.is_empty() { "" } else { " •" };
+            let name = if words.is_empty() { choice.name.clone() } else { choice.label() };
+            let button = egui::Button::selectable(choice.key == *current, format!("{name}{mark}"));
+            let response = ui.add_enabled(free(choice), button);
+            if first_frame && choice.key == *current {
+                response.scroll_to_me(Some(egui::Align::Center));
+            }
+            if response.clicked() {
+                chosen = Some(choice.key.clone());
+            }
+        }
+        if !any {
+            ui.label(egui::RichText::new("No parameter matches").color(theme::text_hint()));
+        }
+    });
+    if chosen.is_none() && enter {
+        chosen = choices.iter().find(|c| matches_query(c, &words) && free(c)).map(|c| c.key.clone());
+    }
+    if chosen.is_some() {
+        ui.close();
+    }
+    chosen
+}
+
 /// A lane's header, under the track's: which parameter (a menu to choose another), whether its
 /// automation plays (a manual change turns it off; the toggle turns it on again), a button that
 /// adds a lane and one that hides this one.
@@ -1015,31 +1096,24 @@ fn lane_header(
     );
     widgets::dropdown(ui, &painter, chooser, &response, &label);
     let shown = state.shown(track, params);
-    egui::Popup::menu(&response).show(|ui| {
-        ui.set_min_width(200.0);
-        let mut device = None;
-        for choice in params.of(track) {
-            if choice.device_name != device {
-                device.clone_from(&choice.device_name);
-                ui.separator();
-                if let Some(name) = &device {
-                    ui.label(egui::RichText::new(name).color(theme::text_hint()));
-                }
-            }
-            let taken = shown.contains(&choice.key) && choice.key != param.key;
-            let mark = if choice.points.is_empty() { "" } else { " •" };
-            let button = egui::Button::selectable(choice.key == param.key, format!("{}{mark}", choice.name));
-            if ui.add_enabled(!taken, button).clicked() {
+    let filter = id.with("filter");
+    match egui::Popup::menu(&response).show(|ui| parameter_menu(ui, filter, params.of(track), &param.key, &shown)) {
+        Some(menu) => {
+            if let Some(choice) = menu.inner {
                 if let Some(keys) = state.shown.get_mut(&track)
                     && let Some(slot) = keys.iter_mut().find(|k| **k == param.key)
                 {
-                    *slot = choice.key.clone();
+                    *slot = choice;
                 }
                 state.selection = None;
-                ui.close();
             }
         }
-    });
+        // Closed: the next opening starts with an empty search.
+        None => ui.data_mut(|d| {
+            d.remove_temp::<String>(filter);
+            d.remove_temp::<bool>(filter.with("opened"));
+        }),
+    }
 
     // On or off: off after a manual change; a click turns it on again (or off).
     if has_lane {
