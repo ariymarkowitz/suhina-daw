@@ -18,11 +18,16 @@ use suhina_ui::{App, kit::theme};
 const SIZE: (f32, f32) = (1280.0, 800.0);
 
 fn arrangement(project: Project) -> Harness<'static, App> {
+    arrangement_sized(project, SIZE)
+}
+
+/// [`arrangement`] in a window of `size`.
+fn arrangement_sized(project: Project, size: (f32, f32)) -> Harness<'static, App> {
     let mut app = App::new();
     app.set_browser_open(false);
     app.set_session(Session::new(project), &[]);
     let mut harness = Harness::builder()
-        .with_size(SIZE)
+        .with_size(size)
         .with_step_dt(0.05)
         .with_max_steps(20)
         .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
@@ -295,6 +300,11 @@ fn with_the_menu_open() -> (Harness<'static, App>, String) {
 /// The demo project with built-in `devices` (id and name) on the Drums channel and its lanes
 /// shown; the volume lane's parameter menu is open.
 fn menu_with(devices: &[(&str, &str)]) -> Harness<'static, App> {
+    menu_in(devices, SIZE)
+}
+
+/// [`menu_with`] in a window of `size`.
+fn menu_in(devices: &[(&str, &str)], size: (f32, f32)) -> Harness<'static, App> {
     let mut project = demo_project();
     for (id, name) in devices {
         let info = suhina_device_registry::info(id).expect("a built-in device");
@@ -309,7 +319,7 @@ fn menu_with(devices: &[(&str, &str)]) -> Harness<'static, App> {
             extensions: Extensions::default(),
         });
     }
-    let mut harness = arrangement(project);
+    let mut harness = arrangement_sized(project, size);
     harness.get_by_label("Show automation of Drums").click();
     harness.run();
     harness.get_by_label("Parameter of Volume lane on Drums").click();
@@ -483,6 +493,28 @@ fn the_menu_opens_the_device_and_group_of_the_lanes_parameter_and_a_search_opens
     harness.get_by_label("Search parameters").type_text("gain");
     harness.run();
     assert!(harness.query_by_label("Utility: Gain").is_some());
+}
+
+#[test]
+fn the_parameter_menu_stays_where_it_opened_as_it_grows() {
+    // A window short enough that the opened list is taller than the room under the dropdown.
+    let size = (1280.0, 500.0);
+    let mut harness = menu_in(&[("fm-synth", "FM Synth"), ("utility", "Utility"), ("reverb", "Reverb")], size);
+    let search = harness.get_by_label("Search parameters").rect();
+    let menu = |harness: &Harness<'static, App>| {
+        let layer = harness.ctx.layer_id_at(search.center());
+        layer.and_then(|l| harness.ctx.memory(|m| m.area_rect(l.id))).expect("the menu is open")
+    };
+    let dropdown = harness.get_by_label("Parameter of Volume lane on Drums").rect();
+    assert!(menu(&harness).top() >= dropdown.bottom() - 1.0, "the menu opens under the dropdown");
+    // Each opened from the last up, so the next heading stays in view.
+    for heading in ["Reverb", "Utility", "FM Synth"] {
+        harness.get_by_label(heading).click();
+        harness.run();
+        assert_eq!(harness.get_by_label("Search parameters").rect(), search, "the menu moved after {heading} opened");
+        let menu = menu(&harness);
+        assert!(menu.bottom() <= size.1, "the menu runs past the window: {menu:?}");
+    }
 }
 
 /// Renders the Arrangement view with lanes shown to `target/ui-snapshots/automation-lanes.png`,

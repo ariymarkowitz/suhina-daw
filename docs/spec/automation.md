@@ -144,9 +144,11 @@ A lane is 40 px tall across the timeline, with a header under the track's:
   start ("Rate 1" under "Op 1"). Devices and groups start closed, except the device and group
   holding the lane's own parameter, and a track's only device; a click on a heading opens or
   closes it, and a device closed and opened again keeps its groups as they were. The menu grows
-  as headings open, up to the 60 % below.
-  The menu opens with a search field in focus and a list that scrolls when it is longer than 60 %
-  of the window (the FM synth has over a hundred parameters), scrolled to the lane's own
+  as headings open, up to the limits below, without moving.
+  The menu opens under the dropdown, or over it when there is more room above, and stays on that
+  side while it is open. It has a search field in focus and a list that scrolls when it is longer
+  than 60 % of the window or than the room on the menu's side (the FM synth has over a hundred
+  parameters), scrolled to the lane's own
   parameter. Typing narrows the list to the parameters whose device, group and name contain
   every word typed between them ("op 3 coarse", or "lfo" for a whole group), under their
   device's and their group's headings, open; Enter takes the first of them as listed. A parameter another lane

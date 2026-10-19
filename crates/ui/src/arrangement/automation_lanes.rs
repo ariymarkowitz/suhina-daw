@@ -38,6 +38,8 @@ const TOGGLE: f32 = 30.0;
 const SMALL_BUTTON: f32 = 16.0;
 /// Width of the lane header's parameter menu: its rows and search field fill it, no wider.
 const MENU_WIDTH: f32 = 240.0;
+/// Space the parameter menu leaves between itself and the window's edge.
+const MENU_EDGE: f32 = 8.0;
 /// The bottom of the volume's travel, as the mixer's fields show it.
 const VOLUME_FLOOR: f64 = -70.0;
 
@@ -1111,8 +1113,16 @@ fn parameter_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool, scr
 /// groups start closed except those holding the lane's own parameter (`current`), which is
 /// scrolled into view, and a track's only device; a search shows the devices and groups with
 /// matches open, and Enter takes the first match. A parameter another lane shows (`shown`) is
-/// greyed out. Answers the one chosen.
-fn parameter_menu(ui: &mut Ui, filter: Id, choices: &[Param], current: &LaneKey, shown: &[LaneKey]) -> Option<LaneKey> {
+/// greyed out. The menu fits in `room`, the height on its side of the dropdown, so it grows as
+/// headings open without moving. Answers the one chosen.
+fn parameter_menu(
+    ui: &mut Ui,
+    filter: Id,
+    choices: &[Param],
+    current: &LaneKey,
+    shown: &[LaneKey],
+    room: f32,
+) -> Option<LaneKey> {
     ui.set_width(MENU_WIDTH);
     let mut menu: MenuState = ui.data(|d| d.get_temp(filter)).unwrap_or_default();
     let first_frame = !menu.shown;
@@ -1149,7 +1159,9 @@ fn parameter_menu(ui: &mut Ui, filter: Id, choices: &[Param], current: &LaneKey,
     let sections = sections(choices, &words);
     let free = |choice: &Param| !shown.contains(&choice.key) || choice.key == *current;
     let mut chosen = None;
-    let height = (ui.ctx().content_rect().height() * 0.6).max(160.0);
+    // What is left of the room under the search field and the menu's margins.
+    let used = ui.min_rect().height() + ui.spacing().menu_margin.sum().y + ui.spacing().item_spacing.y + MENU_EDGE;
+    let height = (ui.ctx().content_rect().height() * 0.6).min(room - used).max(80.0);
     // The list's room is its own most, not what the menu had the frame before: after a heading
     // opens, the menu grows to fit it rather than the list scrolling in the old height.
     ui.allocate_ui(Vec2::new(ui.available_width(), height), |ui| {
@@ -1265,10 +1277,19 @@ fn lane_header(
     widgets::dropdown(ui, &painter, chooser, &response, &label);
     let shown = state.shown(track, params);
     let filter = id.with("filter");
-    // Only a click outside closes it: the search field and the group headings take clicks, and
-    // choosing a parameter closes it itself.
-    let menu = egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    match menu.show(|ui| parameter_menu(ui, filter, params.of(track), &param.key, &shown)) {
+    // Under the dropdown, or over it when there is more room there; on that side only, so the
+    // menu never jumps to another as it grows. Only a click outside closes it: the search field
+    // and the headings take clicks, and choosing a parameter closes it itself.
+    let window = ui.ctx().content_rect();
+    let below = window.bottom() - response.rect.bottom();
+    let above = response.rect.top() - window.top();
+    let (align, room) =
+        if below >= above { (egui::RectAlign::BOTTOM_START, below) } else { (egui::RectAlign::TOP_START, above) };
+    let menu = egui::Popup::menu(&response)
+        .align(align)
+        .align_alternatives(&[])
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    match menu.show(|ui| parameter_menu(ui, filter, params.of(track), &param.key, &shown, room)) {
         Some(menu) => {
             if let Some(choice) = menu.inner {
                 if let Some(keys) = state.shown.get_mut(&track)
