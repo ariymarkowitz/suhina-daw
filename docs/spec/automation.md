@@ -135,7 +135,12 @@ A lane is 40 px tall across the timeline, with a header under the track's:
 - **The parameter**, a dropdown of the track's volume, pan and mute and each built-in or `.sd`
   device's parameters, grouped by device; a parameter with points is marked " •". Choosing one
   shows it in this lane.
-  The track's volume, pan and mute come first, without a heading. Each device follows under a
+  The parameters with points come first, under a heading "Automated" that does not fold: a
+  shortcut to them while their devices are closed, each named with its device ("Utility: Gain")
+  and in the order of the list below, where it is listed as well. A search narrows it like the
+  rest of the list, and the heading is left out when none of the track's parameters (or none
+  that match) has points.
+  The track's volume, pan and mute come next, without a heading. Each device follows under a
   heading with an arrow, the device's name and how many parameters it has (" •" when one of
   them has points). Inside a device, parameters that name a group (the FM synth's operators,
   its LFO; an `.sd` parameter's `ui.group`) are gathered under a heading of the same kind with
@@ -151,7 +156,7 @@ A lane is 40 px tall across the timeline, with a header under the track's:
   parameters), scrolled to the lane's own
   parameter. Typing narrows the list to the parameters whose device, group and name contain
   every word typed between them ("op 3 coarse", or "lfo" for a whole group), under their
-  device's and their group's headings, open; Enter takes the first of them as listed. A parameter another lane
+  device's and their group's headings, open; Enter takes the first of them as listed, an automated one first. A parameter another lane
   of the track shows is greyed out. Clicks in the menu (the search field, a heading, the heading of the lane's own parameter included, which the lane keeps showing) leave it open; choosing a parameter or a click outside closes it, and closing it clears the search. Plug-in parameters can be set by command but are not yet in this dropdown.
 - **On/Off** (lanes with points): whether the lane plays. A manual change to the parameter turns
   it off (the envelope is drawn in `text.hint` and the header says "Off: set by hand"); a click

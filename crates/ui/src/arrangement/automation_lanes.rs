@@ -1107,9 +1107,24 @@ fn parameter_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool, scr
     response.clicked()
 }
 
+/// A parameter's copy in the menu's "Automated" section: its whole name ("Utility: Gain"), as it
+/// stands outside its device's heading, selected for the lane's own and greyed out when it is
+/// not `free`. Its accessible label ends in " (automated)", apart from its row in its device.
+/// Answers whether it was clicked.
+fn automated_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool) -> bool {
+    let selected = choice.key == *current;
+    let label = choice.label();
+    let response = ui.add_enabled(free, egui::Button::selectable(selected, &label));
+    let label = format!("{label} (automated)");
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, free, selected, &label));
+    response.clicked()
+}
+
 /// The lane header's parameter menu: a search field and, under it, the track's parameters in a
-/// list that scrolls when it is longer than the window (the FM synth has over a hundred): the
-/// mixer's first, then each device under a heading and, inside a device, by group. Devices and
+/// list that scrolls when it is longer than the window (the FM synth has over a hundred): those
+/// with points first under "Automated", a shortcut that a search narrows like the rest and that
+/// does not fold, then the mixer's, then each device under a heading and, inside a device, by
+/// group. Devices and
 /// groups start closed except those holding the lane's own parameter (`current`), which is
 /// scrolled into view, and a track's only device; a search shows the devices and groups with
 /// matches open, and Enter takes the first match. A parameter another lane shows (`shown`) is
@@ -1157,6 +1172,7 @@ fn parameter_menu(
     let words = query_words(&menu.query);
     let searching = !words.is_empty();
     let sections = sections(choices, &words);
+    let automated: Vec<&Param> = sections.iter().flat_map(Section::params).filter(|c| !c.points.is_empty()).collect();
     let free = |choice: &Param| !shown.contains(&choice.key) || choice.key == *current;
     let mut chosen = None;
     // What is left of the room under the search field and the menu's margins.
@@ -1168,6 +1184,16 @@ fn parameter_menu(
         egui::ScrollArea::vertical().max_height(height).auto_shrink([true, true]).show(ui, |ui| {
             if sections.is_empty() {
                 ui.label(egui::RichText::new("No parameter matches").color(theme::text_hint()));
+            }
+            // Every parameter with points, again at the top: their devices may be closed.
+            if !automated.is_empty() {
+                ui.separator();
+                ui.label(egui::RichText::new("Automated").color(theme::text_hint()));
+                for choice in &automated {
+                    if automated_row(ui, choice, current, free(choice)) {
+                        chosen = Some(choice.key.clone());
+                    }
+                }
             }
             for section in &sections {
                 ui.separator();
@@ -1221,7 +1247,8 @@ fn parameter_menu(
         });
     });
     if chosen.is_none() && enter {
-        chosen = sections.iter().flat_map(Section::params).find(|c| free(c)).map(|c| c.key.clone());
+        let mut listed = automated.iter().copied().chain(sections.iter().flat_map(Section::params));
+        chosen = listed.find(|c| free(c)).map(|c| c.key.clone());
     }
     menu.shown = true;
     ui.data_mut(|d| d.insert_temp(filter, menu));

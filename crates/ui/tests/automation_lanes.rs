@@ -585,6 +585,102 @@ fn over_the_dropdown_the_menu_stays_open_and_in_place_as_the_lanes_device_closes
     assert!(harness.query_by_label(dropdown).is_some());
 }
 
+/// The demo project with the FM synth and the utility on the Drums channel, its volume and the
+/// utility's gain automated, and its lanes shown (those two, as they have points).
+fn with_automation() -> Harness<'static, App> {
+    let mut project = demo_project();
+    let channel = project.tracks.iter().find(|t| t.name == "Drums").and_then(|t| t.channel);
+    let channel = project.channels.iter_mut().find(|c| c.id == channel.expect("Drums has a channel"));
+    let channel = channel.expect("the Drums channel");
+    let points = |id: &str, values: [f64; 2]| {
+        let mut lane = suhina_engine::model::AutomationLane::new(id);
+        lane.insert(AutomationPoint::new(0.0, values[0]));
+        lane.insert(AutomationPoint::new(8.0, values[1]));
+        lane
+    };
+    channel.automation.push(points("volume", [0.5, 1.0]));
+    for (id, name) in [("fm-synth", "FM Synth"), ("utility", "Utility")] {
+        let info = suhina_device_registry::info(id).expect("a built-in device");
+        let params = info.params.iter().map(|p| DeviceParam::new(p.id, p.default)).collect();
+        let automation = if id == "utility" { vec![points("gain", [-6.0, 0.0])] } else { Vec::new() };
+        channel.devices.push(Device {
+            name: name.into(),
+            kind: DeviceKind::Builtin(id.into()),
+            enabled: true,
+            state: None,
+            params,
+            automation,
+            extensions: Extensions::default(),
+        });
+    }
+    let mut harness = arrangement(project);
+    harness.get_by_label("Show automation of Drums").click();
+    harness.run();
+    harness
+}
+
+/// Every automated parameter of the track is listed again at the top under "Automated", a
+/// device's with its device's name, while its device stays closed.
+#[test]
+fn the_parameter_menu_lists_the_automated_parameters_first() {
+    let mut harness = with_automation();
+    harness.get_by_label("Parameter of Volume lane on Drums").click();
+    harness.run();
+    let heading = harness.get_by_label("Automated").rect();
+    let volume = harness.get_by_label("Volume (automated)").rect();
+    let gain = harness.get_by_label("Utility: Gain (automated)").rect();
+    let pan = harness.get_by_label("Pan").rect();
+    assert!(heading.bottom() <= volume.top() && volume.bottom() <= gain.top(), "{heading:?} {volume:?} {gain:?}");
+    assert!(gain.bottom() <= pan.top(), "the section comes before the mixer's parameters");
+    // The FM synth has no points, and the utility stays closed: its gain is not listed twice.
+    assert!(harness.query_by_label("FM Synth: Volume (automated)").is_none());
+    assert!(harness.query_by_label("Utility: Gain").is_none());
+    assert!(harness.query_by_label("Utility").is_some());
+}
+
+/// A search narrows the "Automated" section like the rest, and leaves it out when none of its
+/// parameters match.
+#[test]
+fn a_search_narrows_the_automated_parameters() {
+    let mut harness = with_automation();
+    harness.get_by_label("Parameter of Volume lane on Drums").click();
+    harness.run();
+    harness.get_by_label("Search parameters").type_text("gain");
+    harness.run();
+    assert!(harness.query_by_label("Utility: Gain (automated)").is_some());
+    assert!(harness.query_by_label("Volume (automated)").is_none());
+    // Its place in its device is listed as well.
+    assert!(harness.query_by_label("Utility: Gain").is_some());
+    harness.get_by_label("Search parameters").type_text(" coarse");
+    harness.run();
+    assert!(harness.query_by_label("Automated").is_none());
+}
+
+/// Choosing a parameter in the "Automated" section shows it in the lane.
+#[test]
+fn choosing_an_automated_parameter_at_the_top_switches_the_lane() {
+    let mut harness = with_automation();
+    // The gain's own lane is hidden, so the volume lane may show it.
+    harness.get_by_label("Hide Utility: Gain lane on Drums").click();
+    harness.run();
+    harness.get_by_label("Parameter of Volume lane on Drums").click();
+    harness.run();
+    harness.get_by_label("Utility: Gain (automated)").click();
+    harness.run();
+    assert!(harness.query_by_label("Search parameters").is_none(), "the menu stayed open");
+    assert!(harness.query_by_label("Utility: Gain automation on Drums").is_some());
+    assert!(harness.query_by_label("Volume automation on Drums").is_none(), "the lane kept the volume");
+}
+
+/// With nothing automated, the menu has no "Automated" section.
+#[test]
+fn without_automation_the_menu_has_no_automated_section() {
+    let harness = menu_with(&[("utility", "Utility")]);
+    assert!(harness.query_by_label("Search parameters").is_some());
+    assert!(harness.query_by_label("Automated").is_none());
+    assert!(harness.query_by_label("Volume (automated)").is_none());
+}
+
 /// Renders the Arrangement view with lanes shown to `target/ui-snapshots/automation-lanes.png`,
 /// for looking at: `cargo test -p suhina-ui --test automation_lanes -- --ignored`.
 #[test]
