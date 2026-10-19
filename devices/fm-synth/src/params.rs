@@ -161,6 +161,15 @@ const ROUTE_PARAMS: [[ParamInfo; 4]; 4] = [
     route_params!("pressure", "Pressure", 0, false),
 ];
 
+/// The group of each operator's parameters.
+const OP_GROUPS: [&str; 6] = ["Op 1", "Op 2", "Op 3", "Op 4", "Op 5", "Op 6"];
+
+/// The group of each global voice parameter, in [`GLOBALS`] order.
+const GLOBAL_GROUPS: [&str; GLOBAL_COUNT] = [
+    "Pitch EG", "Pitch EG", "Pitch EG", "Pitch EG", "Pitch EG", "Pitch EG", "Pitch EG", "Pitch EG", "Voice", "Voice",
+    "Voice", "LFO", "LFO", "LFO", "LFO", "LFO", "LFO", "LFO", "Voice",
+];
+
 const VOLUME_PARAM: ParamInfo =
     ParamInfo::continuous("volume", "Volume", (-70.0, 6.0), 0.0, Unit::Decibels, Scale::Linear);
 
@@ -170,26 +179,26 @@ const fn build() -> [ParamInfo; COUNT] {
     while i < 6 {
         let mut j = 0;
         while j < OP_PARAMS {
-            out[i * OP_PARAMS + j] = OPS[i][j];
+            out[i * OP_PARAMS + j] = OPS[i][j].in_group(OP_GROUPS[i]);
             j += 1;
         }
         i += 1;
     }
     let mut g = 0;
     while g < GLOBAL_COUNT {
-        out[GLOBAL + g] = GLOBALS[g];
+        out[GLOBAL + g] = GLOBALS[g].in_group(GLOBAL_GROUPS[g]);
         g += 1;
     }
     let mut p = 0;
     while p < PERFORMANCE_PARAMS.len() {
-        out[PERFORMANCE + p] = PERFORMANCE_PARAMS[p];
+        out[PERFORMANCE + p] = PERFORMANCE_PARAMS[p].in_group("Performance");
         p += 1;
     }
     let mut s = 0;
     while s < 4 {
         let mut r = 0;
         while r < 4 {
-            out[ROUTES + s * 4 + r] = ROUTE_PARAMS[s][r];
+            out[ROUTES + s * 4 + r] = ROUTE_PARAMS[s][r].in_group("Modulation");
             r += 1;
         }
         s += 1;
@@ -197,4 +206,4 @@ const fn build() -> [ParamInfo; COUNT] {
     out
 }
 
-pub const PARAMS: [ParamInfo; COUNT] = build();
+pub static PARAMS: [ParamInfo; COUNT] = build();

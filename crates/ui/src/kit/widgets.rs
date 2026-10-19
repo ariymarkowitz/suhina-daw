@@ -14,6 +14,16 @@ use serde_json::Value;
 
 use crate::kit::{motion, theme};
 
+/// The arrow of a row that opens: pointing right while closed, down while open.
+pub fn chevron(painter: &Painter, center: Pos2, open: bool, color: Color32) {
+    let points = if open {
+        vec![center + Vec2::new(-3.0, -1.5), center + Vec2::new(0.0, 1.5), center + Vec2::new(3.0, -1.5)]
+    } else {
+        vec![center + Vec2::new(-1.5, -3.0), center + Vec2::new(1.5, 0.0), center + Vec2::new(-1.5, 3.0)]
+    };
+    painter.add(egui::Shape::line(points, Stroke::new(1.1, color)));
+}
+
 /// Where the pointer is, when it is over `rect` and no layer is on top of `ui`'s there (a
 /// dialog, a menu, a tooltip): what a view that reads the wheel, a pinch or a press itself may
 /// act on, so they reach only the dialog while one is open.

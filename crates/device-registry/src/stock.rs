@@ -25,6 +25,7 @@ pub fn definition(id: &str) -> Result<DeviceGraph, DeviceSdkError> {
         .map(|p| {
             let mut parameter = Parameter::new(p.id, p.name, (p.min, p.max), p.default);
             parameter.smoothing_ms = 0.;
+            parameter.ui.group = p.group.into();
             parameter.control = match p.kind {
                 ParamKind::Continuous(Scale::Logarithmic) => ParameterControl::LogKnob,
                 ParamKind::Continuous(_) => ParameterControl::Knob,

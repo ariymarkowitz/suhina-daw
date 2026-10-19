@@ -210,20 +210,24 @@ impl Lfo {
 
 /// The parameters, in [`param`] order.
 const PARAMS: [ParamInfo; param::COUNT] = [
-    ParamInfo::toggle("link", "Link", true),
-    ParamInfo::toggle("syncLeft", "Sync Left", true),
-    ParamInfo::toggle("syncRight", "Sync Right", true),
-    ParamInfo::choice("sixteenthsLeft", "Sixteenths Left", &SIXTEENTH_NAMES, 2),
-    ParamInfo::choice("sixteenthsRight", "Sixteenths Right", &SIXTEENTH_NAMES, 3),
-    ParamInfo::continuous("timeLeft", "Time Left", (0.001, 5.0), 0.375, Unit::Seconds, Scale::Logarithmic),
-    ParamInfo::continuous("timeRight", "Time Right", (0.001, 5.0), 0.375, Unit::Seconds, Scale::Logarithmic),
-    ParamInfo::continuous("offsetLeft", "Offset Left", (-0.333, 0.333), 0.0, Unit::Percent, Scale::Linear),
-    ParamInfo::continuous("offsetRight", "Offset Right", (-0.333, 0.333), 0.0, Unit::Percent, Scale::Linear),
-    ParamInfo::continuous("feedback", "Feedback", (0.0, 0.95), 0.5, Unit::Percent, Scale::Linear),
-    ParamInfo::toggle("freeze", "Freeze", false),
-    ParamInfo::toggle("pingPong", "Ping Pong", false),
-    ParamInfo::choice("transition", "Transition", &TRANSITIONS, 0),
-    ParamInfo::toggle("filter", "Filter", true),
+    ParamInfo::toggle("link", "Link", true).in_group("Time"),
+    ParamInfo::toggle("syncLeft", "Sync Left", true).in_group("Time"),
+    ParamInfo::toggle("syncRight", "Sync Right", true).in_group("Time"),
+    ParamInfo::choice("sixteenthsLeft", "Sixteenths Left", &SIXTEENTH_NAMES, 2).in_group("Time"),
+    ParamInfo::choice("sixteenthsRight", "Sixteenths Right", &SIXTEENTH_NAMES, 3).in_group("Time"),
+    ParamInfo::continuous("timeLeft", "Time Left", (0.001, 5.0), 0.375, Unit::Seconds, Scale::Logarithmic)
+        .in_group("Time"),
+    ParamInfo::continuous("timeRight", "Time Right", (0.001, 5.0), 0.375, Unit::Seconds, Scale::Logarithmic)
+        .in_group("Time"),
+    ParamInfo::continuous("offsetLeft", "Offset Left", (-0.333, 0.333), 0.0, Unit::Percent, Scale::Linear)
+        .in_group("Time"),
+    ParamInfo::continuous("offsetRight", "Offset Right", (-0.333, 0.333), 0.0, Unit::Percent, Scale::Linear)
+        .in_group("Time"),
+    ParamInfo::continuous("feedback", "Feedback", (0.0, 0.95), 0.5, Unit::Percent, Scale::Linear).in_group("Feedback"),
+    ParamInfo::toggle("freeze", "Freeze", false).in_group("Feedback"),
+    ParamInfo::toggle("pingPong", "Ping Pong", false).in_group("Feedback"),
+    ParamInfo::choice("transition", "Transition", &TRANSITIONS, 0).in_group("Feedback"),
+    ParamInfo::toggle("filter", "Filter", true).in_group("Filter"),
     ParamInfo::continuous(
         "filterFrequency",
         "Filter Frequency",
@@ -231,19 +235,22 @@ const PARAMS: [ParamInfo; param::COUNT] = [
         1_000.0,
         Unit::Hertz,
         Scale::Logarithmic,
-    ),
-    ParamInfo::continuous("filterWidth", "Filter Width", (0.5, 9.0), 8.0, Unit::Octaves, Scale::Linear),
-    ParamInfo::choice("lfoMode", "LFO Mode", &LFO_MODES, 0),
-    ParamInfo::continuous("lfoRate", "LFO Rate", (0.01, 40.0), 0.5, Unit::Hertz, Scale::Logarithmic),
-    ParamInfo::continuous("lfoTime", "LFO Time", (0.1, 200.0), 1.0, Unit::Seconds, Scale::Logarithmic),
-    ParamInfo::choice("lfoSynced", "LFO Synced Rate", &SYNCED_RATE_NAMES, 4),
-    ParamInfo::integer("lfoSixteenths", "LFO Sixteenths", (1, 64), 16, Unit::None),
-    ParamInfo::choice("lfoShape", "LFO Shape", &LFO_SHAPES, 1),
-    ParamInfo::continuous("lfoMorph", "LFO Morph", (-1.0, 1.0), 0.0, Unit::Percent, Scale::Linear),
-    ParamInfo::continuous("lfoToTime", "LFO to Time", (0.0, 1.0), 0.0, Unit::Percent, Scale::Linear),
-    ParamInfo::continuous("lfoToFilter", "LFO to Filter", (0.0, 1.0), 0.0, Unit::Percent, Scale::Linear),
-    ParamInfo::continuous("mix", "Dry/Wet", (0.0, 1.0), 0.5, Unit::Percent, Scale::Linear),
-    ParamInfo::toggle("equalLoudness", "Equal-Loudness Mix", false),
+    )
+    .in_group("Filter"),
+    ParamInfo::continuous("filterWidth", "Filter Width", (0.5, 9.0), 8.0, Unit::Octaves, Scale::Linear)
+        .in_group("Filter"),
+    ParamInfo::choice("lfoMode", "LFO Mode", &LFO_MODES, 0).in_group("LFO"),
+    ParamInfo::continuous("lfoRate", "LFO Rate", (0.01, 40.0), 0.5, Unit::Hertz, Scale::Logarithmic).in_group("LFO"),
+    ParamInfo::continuous("lfoTime", "LFO Time", (0.1, 200.0), 1.0, Unit::Seconds, Scale::Logarithmic).in_group("LFO"),
+    ParamInfo::choice("lfoSynced", "LFO Synced Rate", &SYNCED_RATE_NAMES, 4).in_group("LFO"),
+    ParamInfo::integer("lfoSixteenths", "LFO Sixteenths", (1, 64), 16, Unit::None).in_group("LFO"),
+    ParamInfo::choice("lfoShape", "LFO Shape", &LFO_SHAPES, 1).in_group("LFO"),
+    ParamInfo::continuous("lfoMorph", "LFO Morph", (-1.0, 1.0), 0.0, Unit::Percent, Scale::Linear).in_group("LFO"),
+    ParamInfo::continuous("lfoToTime", "LFO to Time", (0.0, 1.0), 0.0, Unit::Percent, Scale::Linear).in_group("LFO"),
+    ParamInfo::continuous("lfoToFilter", "LFO to Filter", (0.0, 1.0), 0.0, Unit::Percent, Scale::Linear)
+        .in_group("LFO"),
+    ParamInfo::continuous("mix", "Dry/Wet", (0.0, 1.0), 0.5, Unit::Percent, Scale::Linear).in_group("Output"),
+    ParamInfo::toggle("equalLoudness", "Equal-Loudness Mix", false).in_group("Output"),
 ];
 
 /// What the delay is and the parameters it has.

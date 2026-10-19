@@ -205,7 +205,7 @@ control. Choice/radio use integer values 0..N-1 and `ui.options` (N nonempty lab
 128 labels of 128 bytes). Log controls require a positive minimum. Integer/toggle/button and
 choice/radio values stay discrete. All edits use `device.setParam` and persist in the project.
 
-Optional `ui` settings: `tooltip` (up to 1024 bytes), `group` (label prefix, up to 128 bytes),
+Optional `ui` settings: `tooltip` (up to 1024 bytes), `group` (label prefix in the generated panel, and the heading the automation lanes' parameter menu gathers the parameter under; up to 128 bytes),
 `step` (nonnegative finite value, default 0), `decimals` (0..8, default 3), and `options`.
 Rows use the selected control's height and the panel scrolls when controls exceed its viewport.
 Executable UI code and arbitrary pixel layouts are not part of the data format.

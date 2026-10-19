@@ -69,6 +69,9 @@ pub enum ParamKind {
 pub struct ParamInfo {
     pub id: &'static str,
     pub name: &'static str,
+    /// The part of the device it belongs to ("Op 1", "LFO"), or empty: lists of many
+    /// parameters (the automation lanes' menu) gather a group's parameters under its name.
+    pub group: &'static str,
     pub kind: ParamKind,
     pub min: f64,
     pub max: f64,
@@ -85,12 +88,12 @@ impl ParamInfo {
         unit: Unit,
         scale: Scale,
     ) -> Self {
-        Self { id, name, kind: ParamKind::Continuous(scale), min: range.0, max: range.1, default, unit }
+        Self { id, name, group: "", kind: ParamKind::Continuous(scale), min: range.0, max: range.1, default, unit }
     }
 
     pub const fn toggle(id: &'static str, name: &'static str, default: bool) -> Self {
         let default = if default { 1.0 } else { 0.0 };
-        Self { id, name, kind: ParamKind::Toggle, min: 0.0, max: 1.0, default, unit: Unit::None }
+        Self { id, name, group: "", kind: ParamKind::Toggle, min: 0.0, max: 1.0, default, unit: Unit::None }
     }
 
     /// A whole number in `range`.
@@ -98,6 +101,7 @@ impl ParamInfo {
         Self {
             id,
             name,
+            group: "",
             kind: ParamKind::Integer,
             min: range.0 as f64,
             max: range.1 as f64,
@@ -114,7 +118,21 @@ impl ParamInfo {
         default: usize,
     ) -> Self {
         let max = options.len().saturating_sub(1) as f64;
-        Self { id, name, kind: ParamKind::Choice(options), min: 0.0, max, default: default as f64, unit: Unit::None }
+        Self {
+            id,
+            name,
+            group: "",
+            kind: ParamKind::Choice(options),
+            min: 0.0,
+            max,
+            default: default as f64,
+            unit: Unit::None,
+        }
+    }
+
+    /// The same parameter in `group` ("Op 1", "LFO").
+    pub const fn in_group(self, group: &'static str) -> Self {
+        Self { group, ..self }
     }
 
     /// `value` made valid for this parameter: limited to its range, rounded to a whole number

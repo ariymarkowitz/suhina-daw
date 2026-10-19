@@ -272,6 +272,9 @@ pub struct Param {
     pub name: String,
     /// The device's name, for a device's parameter: the chooser groups by it.
     pub device_name: Option<String>,
+    /// The part of its device it belongs to ("Op 1", "LFO"): the chooser gathers a group's
+    /// parameters under its name.
+    pub group: Option<String>,
     pub scale: Scale,
     pub points: Vec<AutomationPoint>,
     pub enabled: bool,
@@ -300,6 +303,7 @@ impl Params {
                             key: LaneKey::mixer(id),
                             name: name.into(),
                             device_name: None,
+                            group: None,
                             scale,
                             enabled: lane.as_ref().is_none_or(|l| l.enabled),
                             points: lane.map(|l| l.points).unwrap_or_default(),
@@ -316,6 +320,7 @@ impl Params {
                                 key: LaneKey { device: Some(index), param: spec.id.into() },
                                 name: spec.name.into(),
                                 device_name: Some(device.name.clone()),
+                                group: (!spec.group.is_empty()).then(|| spec.group.to_string()),
                                 scale: Scale::Device(*spec),
                                 enabled: lane.as_ref().is_none_or(|l| l.enabled),
                                 points: lane.map(|l| l.points).unwrap_or_default(),
@@ -337,6 +342,7 @@ impl Params {
                                 key: LaneKey { device: Some(index), param: spec.id.clone() },
                                 name: spec.name.clone(),
                                 device_name: Some(device.name.clone()),
+                                group: (!spec.ui.group.is_empty()).then(|| spec.ui.group.clone()),
                                 scale: Scale::Sd(Box::new(spec.clone())),
                                 enabled: lane.as_ref().is_none_or(|l| l.enabled),
                                 points: lane.map(|l| l.points).unwrap_or_default(),
@@ -367,6 +373,28 @@ impl Param {
             Some(device) => format!("{device}: {}", self.name),
             None => self.name.clone(),
         }
+    }
+
+    /// The name under its group's heading, without the group's name in front ("Rate 1" for
+    /// "Op 1 Rate 1" in "Op 1"); the whole name when it does not start with the group's or is
+    /// nothing more.
+    pub fn short_name(&self) -> &str {
+        self.group
+            .as_deref()
+            .and_then(|group| self.name.strip_prefix(group))
+            .and_then(|rest| rest.strip_prefix(' '))
+            .filter(|rest| !rest.trim().is_empty())
+            .unwrap_or(&self.name)
+    }
+
+    /// What a search looks in: the device, the group and the name, lower case.
+    fn search_text(&self) -> String {
+        [self.device_name.as_deref(), self.group.as_deref(), Some(self.name.as_str())]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
     }
 }
 
@@ -970,32 +998,127 @@ fn drop_points(drag: &PointDrag, param: &Param, geometry: &Geometry, free: bool)
     Some(Action::new("automation.movePoint", params))
 }
 
-/// The words of a search, lower case: a parameter matches when its label has all of them.
+/// The words of a search, lower case: a parameter matches when its device, group and name have
+/// all of them between them.
 fn query_words(query: &str) -> Vec<String> {
     query.split_whitespace().map(str::to_lowercase).collect()
 }
 
 /// Whether `param` matches a search (`words` from [`query_words`]; none matches everything).
 fn matches_query(param: &Param, words: &[String]) -> bool {
-    let label = param.label().to_lowercase();
-    words.iter().all(|w| label.contains(w.as_str()))
+    let text = param.search_text();
+    words.iter().all(|w| text.contains(w.as_str()))
+}
+
+/// One device's part of the parameter menu, or the track mixer's: its parameters without a
+/// group, then each group in the order its first parameter comes.
+#[derive(Debug)]
+struct Section<'a> {
+    device: Option<usize>,
+    name: Option<&'a str>,
+    loose: Vec<&'a Param>,
+    groups: Vec<(&'a str, Vec<&'a Param>)>,
+}
+
+impl<'a> Section<'a> {
+    /// Its parameters in the order the menu lists them.
+    fn params(&self) -> impl Iterator<Item = &'a Param> + '_ {
+        self.loose.iter().copied().chain(self.groups.iter().flat_map(|(_, params)| params.iter().copied()))
+    }
+}
+
+/// The parameter menu's sections: the `choices` that match a search (`words`), by device in the
+/// order they come, each with its groups.
+fn sections<'a>(choices: &'a [Param], words: &[String]) -> Vec<Section<'a>> {
+    let mut sections: Vec<Section<'a>> = Vec::new();
+    for choice in choices.iter().filter(|c| matches_query(c, words)) {
+        if sections.last().is_none_or(|s| s.device != choice.key.device) {
+            sections.push(Section {
+                device: choice.key.device,
+                name: choice.device_name.as_deref(),
+                loose: Vec::new(),
+                groups: Vec::new(),
+            });
+        }
+        let Some(section) = sections.last_mut() else { continue };
+        match choice.group.as_deref() {
+            None => section.loose.push(choice),
+            Some(group) => match section.groups.iter_mut().find(|(g, _)| *g == group) {
+                Some((_, params)) => params.push(choice),
+                None => section.groups.push((group, vec![choice])),
+            },
+        }
+    }
+    sections
+}
+
+/// What the parameter menu keeps while it is open: the search, whether it has been shown yet,
+/// and the groups opened, by device and name.
+#[derive(Debug, Clone, Default)]
+struct MenuState {
+    query: String,
+    shown: bool,
+    open: HashSet<(Option<usize>, String)>,
+}
+
+/// A group's heading in the parameter menu: an arrow, its name, and how many parameters it has
+/// (" •" when one of them has points). A click opens or closes it (`toggles`), except while a
+/// search shows every group open.
+fn group_row(ui: &mut Ui, name: &str, count: usize, marked: bool, open: bool, toggles: bool) -> egui::Response {
+    let height = ui.spacing().interact_size.y;
+    let sense = if toggles { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), sense);
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if toggles && response.hovered() {
+            painter.rect_filled(rect, 2.0, ui.visuals().widgets.hovered.weak_bg_fill);
+        }
+        widgets::chevron(painter, Pos2::new(rect.left() + 6.0, rect.center().y), open, theme::text_hint());
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let text = Pos2::new(rect.left() + 14.0, rect.center().y);
+        painter.text(text, Align2::LEFT_CENTER, name, font.clone(), ui.visuals().text_color());
+        let count = format!("{count}{}", if marked { " •" } else { "" });
+        let end = Pos2::new(rect.right() - 4.0, rect.center().y);
+        painter.text(end, Align2::RIGHT_CENTER, count, font, theme::text_hint());
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, name));
+    response
+}
+
+/// A parameter's row in the menu: its name (short under a group's heading) and " •" when it has
+/// points; selected for the lane's own, greyed out when it is not `free`. Its accessible label is
+/// the whole "Device: Name". Answers whether it was clicked.
+fn parameter_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool, scroll: bool) -> bool {
+    let mark = if choice.points.is_empty() { "" } else { " •" };
+    let selected = choice.key == *current;
+    let button = egui::Button::selectable(selected, format!("{}{mark}", choice.short_name()));
+    let response = ui.add_enabled(free, button);
+    let label = choice.label();
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, free, selected, &label));
+    if scroll && selected {
+        response.scroll_to_me(Some(egui::Align::Center));
+    }
+    response.clicked()
 }
 
 /// The lane header's parameter menu: a search field and, under it, the track's parameters in a
-/// list that scrolls when it is longer than the window (the FM synth has over a hundred).
-/// Without a search they are grouped by device; with one, a flat list of the matches, and Enter
-/// takes the first. The parameter of `current` is scrolled into view when the menu opens, and a
-/// parameter another lane shows (`shown`) is greyed out. Answers the one chosen.
+/// list that scrolls when it is longer than the window (the FM synth has over a hundred), by
+/// device and, inside a device, by group. Groups start closed except the one holding the lane's
+/// own parameter (`current`), which is scrolled into view; a search shows the groups with matches
+/// open, and Enter takes the first match. A parameter another lane shows (`shown`) is greyed
+/// out. Answers the one chosen.
 fn parameter_menu(ui: &mut Ui, filter: Id, choices: &[Param], current: &LaneKey, shown: &[LaneKey]) -> Option<LaneKey> {
     ui.set_min_width(220.0);
-    let opened = filter.with("opened");
-    let first_frame = !ui.data(|d| d.get_temp::<bool>(opened)).unwrap_or(false);
-    let mut query: String = ui.data(|d| d.get_temp(filter)).unwrap_or_default();
+    let mut menu: MenuState = ui.data(|d| d.get_temp(filter)).unwrap_or_default();
+    let first_frame = !menu.shown;
+    if first_frame && let Some(group) = choices.iter().find(|c| c.key == *current).and_then(|c| c.group.clone()) {
+        menu.open.insert((current.device, group));
+    }
     let field_id = filter.with("field");
     // Enter ends the field's focus, so whether it had it is read before the field is shown.
     let had_focus = ui.memory(|m| m.has_focus(field_id));
     let field = ui.add(
-        egui::TextEdit::singleline(&mut query)
+        egui::TextEdit::singleline(&mut menu.query)
             .id(field_id)
             .hint_text("Search parameters")
             .font(theme::ui_font(theme::TEXT_SMALL))
@@ -1006,45 +1129,55 @@ fn parameter_menu(ui: &mut Ui, filter: Id, choices: &[Param], current: &LaneKey,
         field.request_focus();
     }
     let enter = had_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
-    ui.data_mut(|d| {
-        d.insert_temp(filter, query.clone());
-        d.insert_temp(opened, true);
-    });
 
-    let words = query_words(&query);
+    let words = query_words(&menu.query);
+    let searching = !words.is_empty();
+    let sections = sections(choices, &words);
     let free = |choice: &Param| !shown.contains(&choice.key) || choice.key == *current;
     let mut chosen = None;
     let height = (ui.ctx().content_rect().height() * 0.6).max(160.0);
     egui::ScrollArea::vertical().max_height(height).auto_shrink([true, true]).show(ui, |ui| {
-        let mut device = None;
-        let mut any = false;
-        for choice in choices.iter().filter(|c| matches_query(c, &words)) {
-            any = true;
-            if words.is_empty() && choice.device_name != device {
-                device.clone_from(&choice.device_name);
-                ui.separator();
-                if let Some(name) = &device {
-                    ui.label(egui::RichText::new(name).color(theme::text_hint()));
+        if sections.is_empty() {
+            ui.label(egui::RichText::new("No parameter matches").color(theme::text_hint()));
+        }
+        for section in &sections {
+            ui.separator();
+            if let Some(name) = section.name {
+                ui.label(egui::RichText::new(name).color(theme::text_hint()));
+            }
+            for choice in &section.loose {
+                if parameter_row(ui, choice, current, free(choice), first_frame) {
+                    chosen = Some(choice.key.clone());
                 }
             }
-            let mark = if choice.points.is_empty() { "" } else { " •" };
-            let name = if words.is_empty() { choice.name.clone() } else { choice.label() };
-            let button = egui::Button::selectable(choice.key == *current, format!("{name}{mark}"));
-            let response = ui.add_enabled(free(choice), button);
-            if first_frame && choice.key == *current {
-                response.scroll_to_me(Some(egui::Align::Center));
+            for (group, params) in &section.groups {
+                let key = (section.device, (*group).to_string());
+                let marked = params.iter().any(|p| !p.points.is_empty());
+                let was_open = menu.open.contains(&key);
+                if group_row(ui, group, params.len(), marked, searching || was_open, !searching).clicked() {
+                    if was_open {
+                        menu.open.remove(&key);
+                    } else {
+                        menu.open.insert(key.clone());
+                    }
+                }
+                if searching || menu.open.contains(&key) {
+                    ui.indent(&key, |ui| {
+                        for choice in params {
+                            if parameter_row(ui, choice, current, free(choice), first_frame) {
+                                chosen = Some(choice.key.clone());
+                            }
+                        }
+                    });
+                }
             }
-            if response.clicked() {
-                chosen = Some(choice.key.clone());
-            }
-        }
-        if !any {
-            ui.label(egui::RichText::new("No parameter matches").color(theme::text_hint()));
         }
     });
     if chosen.is_none() && enter {
-        chosen = choices.iter().find(|c| matches_query(c, &words) && free(c)).map(|c| c.key.clone());
+        chosen = sections.iter().flat_map(Section::params).find(|c| free(c)).map(|c| c.key.clone());
     }
+    menu.shown = true;
+    ui.data_mut(|d| d.insert_temp(filter, menu));
     if chosen.is_some() {
         ui.close();
     }
@@ -1108,11 +1241,10 @@ fn lane_header(
                 state.selection = None;
             }
         }
-        // Closed: the next opening starts with an empty search.
-        None => ui.data_mut(|d| {
-            d.remove_temp::<String>(filter);
-            d.remove_temp::<bool>(filter.with("opened"));
-        }),
+        // Closed: the next opening starts with an empty search and its groups closed.
+        None => {
+            ui.data_mut(|d| d.remove_temp::<MenuState>(filter));
+        }
     }
 
     // On or off: off after a manual change; a click turns it on again (or off).
@@ -1318,6 +1450,117 @@ mod tests {
         assert_eq!(frequency.map(|p| p.scale.text(1_000.0)).as_deref(), Some("1000.00 Hz"));
         let position = (1_000.0_f64.ln() - 20.0_f64.ln()) / (20_000.0_f64.ln() - 20.0_f64.ln());
         assert!((frequency.map_or(0.0, |p| p.scale.position(1_000.0)) - position).abs() < 1e-9);
+    }
+
+    /// A parameter of device `device` (`None`: the mixer) in `group`.
+    fn param(device: Option<usize>, group: Option<&str>, name: &str) -> Param {
+        Param {
+            key: LaneKey { device, param: name.to_lowercase() },
+            name: name.into(),
+            device_name: device.map(|d| format!("Device {d}")),
+            group: group.map(str::to_string),
+            scale: Scale::Pan,
+            points: Vec::new(),
+            enabled: true,
+        }
+    }
+
+    fn names<'a>(params: &[&'a Param]) -> Vec<&'a str> {
+        params.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    #[test]
+    fn the_menu_lists_each_device_with_loose_parameters_first_and_a_group_once() {
+        let choices = [
+            param(None, None, "Volume"),
+            param(Some(0), Some("Op 1"), "Op 1 Rate"),
+            param(Some(0), None, "Algorithm"),
+            param(Some(0), Some("LFO"), "LFO Speed"),
+            // Not next to the rest of its group: still listed under it.
+            param(Some(0), Some("Op 1"), "Op 1 Level"),
+            param(Some(1), Some("Op 1"), "Op 1 Rate"),
+        ];
+        let sections = sections(&choices, &[]);
+        assert_eq!(sections.len(), 3);
+        assert_eq!((sections[0].device, sections[0].name), (None, None));
+        assert_eq!(names(&sections[0].loose), ["Volume"]);
+        assert_eq!(names(&sections[1].loose), ["Algorithm"]);
+        let groups: Vec<_> = sections[1].groups.iter().map(|(g, params)| (*g, names(params))).collect();
+        assert_eq!(groups, [("Op 1", vec!["Op 1 Rate", "Op 1 Level"]), ("LFO", vec!["LFO Speed"])]);
+        let order: Vec<_> = sections[1].params().map(|p| p.name.as_str()).collect();
+        assert_eq!(order, ["Algorithm", "Op 1 Rate", "Op 1 Level", "LFO Speed"]);
+        // The same group in another device is another group.
+        assert_eq!(sections[2].device, Some(1));
+        assert_eq!(sections[2].groups.len(), 1);
+    }
+
+    #[test]
+    fn a_search_matches_a_group_name_and_words_across_device_group_and_name() {
+        let choices = [
+            param(Some(0), Some("Op 1"), "Rate 1"),
+            param(Some(0), Some("Op 3"), "Rate 1"),
+            param(Some(0), Some("LFO"), "Speed"),
+        ];
+        let found = |query: &str| -> Vec<String> {
+            sections(&choices, &query_words(query))
+                .iter()
+                .flat_map(Section::params)
+                .map(|p| format!("{} {}", p.group.as_deref().unwrap_or(""), p.name))
+                .collect()
+        };
+        assert_eq!(found("OP 3 rate"), ["Op 3 Rate 1"]);
+        assert_eq!(found("lfo"), ["LFO Speed"]);
+        assert_eq!(found("device 0 rate"), ["Op 1 Rate 1", "Op 3 Rate 1"]);
+        assert!(found("op 2").is_empty());
+    }
+
+    #[test]
+    fn a_name_under_its_group_leaves_out_the_group() {
+        assert_eq!(param(Some(0), Some("Op 1"), "Op 1 Rate 1").short_name(), "Rate 1");
+        assert_eq!(param(Some(0), Some("LFO"), "Speed").short_name(), "Speed");
+        // Nothing would be left, or the group is only the start of a word.
+        assert_eq!(param(Some(0), Some("Decay"), "Decay").short_name(), "Decay");
+        assert_eq!(param(Some(0), Some("Op"), "Opacity").short_name(), "Opacity");
+        assert_eq!(param(Some(0), None, "Op 1 Rate").short_name(), "Op 1 Rate");
+        // The lane's own name keeps the whole name.
+        assert_eq!(param(Some(0), Some("Op 1"), "Op 1 Rate 1").label(), "Device 0: Op 1 Rate 1");
+    }
+
+    #[test]
+    fn built_in_and_sd_parameters_carry_their_group() {
+        let mut project = crate::demo::demo_project();
+        let track = project.tracks[0].id;
+        let Some(channel) = project.tracks[0].channel.and_then(|id| project.channels.iter_mut().find(|c| c.id == id))
+        else {
+            return;
+        };
+        channel.devices.push(suhina_engine::model::Device::new("FM Synth", DeviceKind::Builtin("fm-synth".into())));
+        let mut graph =
+            suhina_device_sdk::DeviceGraph::new("test.gain", "Test Gain", suhina_device_sdk::DeviceRole::Effect);
+        let mut parameter = suhina_device_sdk::Parameter::new("level", "Level", (0.0, 1.0), 1.0);
+        parameter.ui.group = "Output".into();
+        graph.parameters.push(parameter);
+        graph.nodes = vec![
+            suhina_device_sdk::Node::audio_input("in"),
+            suhina_device_sdk::Node::gain("gain", "level"),
+            suhina_device_sdk::Node::audio_output("out"),
+        ];
+        graph.connections =
+            vec![suhina_device_sdk::Connection::new("in", "gain"), suhina_device_sdk::Connection::new("gain", "out")];
+        let state = graph.to_sd().ok().map(String::into_bytes);
+        channel.devices.push(suhina_engine::model::Device {
+            state,
+            ..suhina_engine::model::Device::new("Test Gain", DeviceKind::Sd)
+        });
+        let params = Params::build(&project);
+        let group = |device, id: &str| {
+            params.param(track, &LaneKey { device: Some(device), param: id.into() }).and_then(|p| p.group.clone())
+        };
+        assert_eq!(group(0, "op3.rate1").as_deref(), Some("Op 3"));
+        assert_eq!(group(0, "lfoSpeed").as_deref(), Some("LFO"));
+        assert_eq!(group(0, "volume"), None);
+        assert_eq!(group(1, "level").as_deref(), Some("Output"));
+        assert!(params.of(track).iter().filter(|p| p.key.device.is_none()).all(|p| p.group.is_none()));
     }
 
     #[test]

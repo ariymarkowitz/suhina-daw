@@ -145,15 +145,6 @@ fn icon(painter: &egui::Painter, rect: Rect, kind: ItemKind, color: Color32) {
     }
 }
 
-fn chevron(painter: &egui::Painter, center: Pos2, open: bool, color: Color32) {
-    let points = if open {
-        vec![center + Vec2::new(-3.0, -1.5), center + Vec2::new(0.0, 1.5), center + Vec2::new(3.0, -1.5)]
-    } else {
-        vec![center + Vec2::new(-1.5, -3.0), center + Vec2::new(1.5, 0.0), center + Vec2::new(-1.5, 3.0)]
-    };
-    painter.add(egui::Shape::line(points, Stroke::new(1.1, color)));
-}
-
 fn tag_color(text: &str) -> Color32 {
     theme::parse_hex(text).unwrap_or_else(theme::text_hint)
 }
@@ -645,7 +636,7 @@ fn results_view(
         let lead = Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(10.0, ROW));
         let previewable = matches!(row.item.kind, ItemKind::Sample | ItemKind::Midi);
         if row.opens {
-            chevron(&painter, lead.center(), row.open, theme::text_hint());
+            widgets::chevron(&painter, lead.center(), row.open, theme::text_hint());
         } else if previewable && (selected || response.hovered()) {
             let button = widgets::button_area(
                 ui,

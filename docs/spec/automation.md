@@ -135,10 +135,18 @@ A lane is 40 px tall across the timeline, with a header under the track's:
 - **The parameter**, a dropdown of the track's volume, pan and mute and each built-in or `.sd`
   device's parameters, grouped by device; a parameter with points is marked " •". Choosing one
   shows it in this lane.
+  Inside a device, parameters that name a group (the FM synth's operators, its LFO; an `.sd`
+  parameter's `ui.group`) are gathered under a heading with an arrow, the group's name and how
+  many parameters it holds (" •" when one of them has points); a device's parameters without a
+  group come first, then each group in the order its first parameter comes. A row under a
+  heading leaves out the group's name at the start ("Rate 1" under "Op 1"). Groups start
+  closed, except the one holding the lane's own parameter; a click on a heading opens or closes
+  it.
   The menu opens with a search field in focus and a list that scrolls when it is longer than 60 %
   of the window (the FM synth has over a hundred parameters), scrolled to the lane's own
-  parameter. Typing narrows the list to the parameters whose device and name contain every word
-  typed, each shown as "Device: Name"; Enter takes the first of them. A parameter another lane
+  parameter. Typing narrows the list to the parameters whose device, group and name contain
+  every word typed between them ("op 3 coarse", or "lfo" for a whole group), under their
+  device's name and their group's heading, open; Enter takes the first of them as listed. A parameter another lane
   of the track shows is greyed out. Closing the menu clears the search. Plug-in parameters can be set by command but are not yet in this dropdown.
 - **On/Off** (lanes with points): whether the lane plays. A manual change to the parameter turns
   it off (the envelope is drawn in `text.hint` and the header says "Off: set by hand"); a click

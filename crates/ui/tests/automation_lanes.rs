@@ -334,13 +334,24 @@ fn searching_the_parameter_menu_reaches_the_last_parameter_of_a_long_device() {
 #[test]
 fn enter_takes_the_first_match() {
     let (mut harness, _) = with_the_menu_open();
-    let first = suhina_device_registry::info("fm-synth").and_then(|i| i.params.first()).map(|p| p.name);
-    let first = first.expect("the FM synth has parameters");
+    // The first listed: the device's parameters without a group (its volume) come before its
+    // groups, though the operators come first in the device's own order.
     harness.get_by_label("Search parameters").type_text("fm synth");
     harness.run();
     harness.key_press(Key::Enter);
     harness.run();
-    assert!(harness.query_by_label(&format!("FM Synth: {first} automation on Drums")).is_some());
+    assert!(harness.query_by_label("FM Synth: Volume automation on Drums").is_some());
+}
+
+#[test]
+fn enter_takes_the_first_match_inside_a_group() {
+    let (mut harness, _) = with_the_menu_open();
+    // A group's name finds its parameters.
+    harness.get_by_label("Search parameters").type_text("lfo");
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(harness.query_by_label("FM Synth: LFO Speed automation on Drums").is_some());
 }
 
 #[test]
@@ -349,6 +360,31 @@ fn a_search_with_no_match_says_so() {
     harness.get_by_label("Search parameters").type_text("no such parameter");
     harness.run();
     assert!(harness.query_by_label("No parameter matches").is_some());
+}
+
+#[test]
+fn the_parameter_menu_gathers_a_devices_parameters_into_closed_groups() {
+    let (harness, _) = with_the_menu_open();
+    // Each operator is a group heading; its parameters stay hidden until it opens.
+    assert!(harness.query_by_label("Op 3").is_some());
+    assert!(harness.query_by_label("LFO").is_some());
+    assert!(harness.query_by_label("FM Synth: Op 3 Rate 1").is_none());
+    // A parameter without a group is listed under the device's name.
+    assert!(harness.query_by_label("FM Synth: Volume").is_some());
+}
+
+#[test]
+fn a_search_opens_the_groups_it_finds_and_shows_names_under_their_group() {
+    let (mut harness, _) = with_the_menu_open();
+    harness.get_by_label("Search parameters").type_text("op 3 coarse");
+    harness.run();
+    assert!(harness.query_by_label("Op 3").is_some());
+    assert!(harness.query_by_label("Op 1").is_none(), "a group without a match is left out");
+    // The row reads "Coarse" under the "Op 3" heading; its accessible label is the whole name.
+    assert!(harness.query_by_label("FM Synth: Op 3 Fine").is_none());
+    harness.get_by_label("FM Synth: Op 3 Coarse").click();
+    harness.run();
+    assert!(harness.query_by_label("FM Synth: Op 3 Coarse automation on Drums").is_some());
 }
 
 /// Renders the Arrangement view with lanes shown to `target/ui-snapshots/automation-lanes.png`,

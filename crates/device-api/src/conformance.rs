@@ -61,6 +61,9 @@ fn check_info(device: &dyn Device, failures: &mut Vec<String>) {
         if p.min.partial_cmp(&p.max).is_none_or(|o| o.is_gt()) || p.clamp(p.default) != p.default {
             failures.push(format!("parameter {:?}: default {} is outside {}..{}", p.id, p.default, p.min, p.max));
         }
+        if p.group.len() > 64 || p.group.trim() != p.group {
+            failures.push(format!("parameter {:?}: group {:?} is longer than 64 bytes or padded", p.id, p.group));
+        }
         if let ParamKind::Choice(options) = p.kind
             && options.is_empty()
         {
