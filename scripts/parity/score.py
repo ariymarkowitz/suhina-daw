@@ -202,7 +202,8 @@ CHAPTERS = [
      "Envelopes for track volume, pan and mute, built-in, .sd and plug-in device parameters: breakpoints "
      "with curved segments and jumps, saved, played in playback and renders (64-frame steps, ramped "
      "mixer gains), a manual change turning a lane off until re-enabled. Lanes under each track in "
-     "the Arrangement: a parameter chooser, points added, moved on the grid, selected and moved or "
+     "the Arrangement: a parameter chooser with a search, devices and parameter groups folded under "
+     "headings, points added, moved on the grid, selected and moved or "
      "deleted together, curves bent by dragging, re-enabled from the lane. Missing recording, "
      "drawing with a pencil, plug-in lanes in the view, send, master and tempo automation, "
      "locking, simplifying envelopes."),
