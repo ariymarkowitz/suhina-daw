@@ -1547,10 +1547,13 @@ mod tests {
         }
     }
 
+    /// The names of `params`, in order.
     fn names<'a>(params: &[&'a Param]) -> Vec<&'a str> {
         params.iter().map(|p| p.name.as_str()).collect()
     }
 
+    /// A device's parameters without a group come first, and a group is listed once, under its
+    /// device, even when its parameters are not next to each other.
     #[test]
     fn the_menu_lists_each_device_with_loose_parameters_first_and_a_group_once() {
         let choices = [
@@ -1576,6 +1579,7 @@ mod tests {
         assert_eq!(sections[2].groups.len(), 1);
     }
 
+    /// A search matches its words against the device, group and name together.
     #[test]
     fn a_search_matches_a_group_name_and_words_across_device_group_and_name() {
         let choices = [
@@ -1596,6 +1600,7 @@ mod tests {
         assert!(found("op 2").is_empty());
     }
 
+    /// A row under a group's heading drops the group's name in front, unless nothing would be left.
     #[test]
     fn a_name_under_its_group_leaves_out_the_group() {
         assert_eq!(param(Some(0), Some("Op 1"), "Op 1 Rate 1").short_name(), "Rate 1");
@@ -1608,6 +1613,7 @@ mod tests {
         assert_eq!(param(Some(0), Some("Op 1"), "Op 1 Rate 1").label(), "Device 0: Op 1 Rate 1");
     }
 
+    /// Built-in and `.sd` parameters take their group from the device; the mixer's have none.
     #[test]
     fn built_in_and_sd_parameters_carry_their_group() {
         let mut project = crate::demo::demo_project();

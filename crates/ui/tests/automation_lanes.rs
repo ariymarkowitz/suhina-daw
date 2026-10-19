@@ -340,6 +340,7 @@ fn menu_on(devices: &[(&str, &str)], size: (f32, f32), track: usize, detail: boo
     harness
 }
 
+/// A long list scrolls inside the window and opens on the lane's own parameter.
 #[test]
 fn the_parameter_menu_of_a_device_with_many_parameters_scrolls_to_the_current_one() {
     let (harness, _) = with_the_menu_open();
@@ -351,6 +352,7 @@ fn the_parameter_menu_of_a_device_with_many_parameters_scrolls_to_the_current_on
     assert!(on_screen >= 1);
 }
 
+/// A search finds the last parameter of a long device, and choosing it shows it in the lane.
 #[test]
 fn searching_the_parameter_menu_reaches_the_last_parameter_of_a_long_device() {
     let (mut harness, last) = with_the_menu_open();
@@ -363,6 +365,7 @@ fn searching_the_parameter_menu_reaches_the_last_parameter_of_a_long_device() {
     assert!(harness.query_by_label("Volume automation on Drums").is_none(), "the lane showed another parameter");
 }
 
+/// Enter takes the first match as listed: a device's parameters without a group come first.
 #[test]
 fn enter_takes_the_first_match() {
     let (mut harness, _) = with_the_menu_open();
@@ -375,6 +378,7 @@ fn enter_takes_the_first_match() {
     assert!(harness.query_by_label("FM Synth: Volume automation on Drums").is_some());
 }
 
+/// Enter takes the first match inside a group that a search by its name finds.
 #[test]
 fn enter_takes_the_first_match_inside_a_group() {
     let (mut harness, _) = with_the_menu_open();
@@ -386,6 +390,7 @@ fn enter_takes_the_first_match_inside_a_group() {
     assert!(harness.query_by_label("FM Synth: LFO Speed automation on Drums").is_some());
 }
 
+/// A search that matches nothing says so.
 #[test]
 fn a_search_with_no_match_says_so() {
     let (mut harness, _) = with_the_menu_open();
@@ -394,6 +399,7 @@ fn a_search_with_no_match_says_so() {
     assert!(harness.query_by_label("No parameter matches").is_some());
 }
 
+/// A device's grouped parameters sit under closed group headings.
 #[test]
 fn the_parameter_menu_gathers_a_devices_parameters_into_closed_groups() {
     let (harness, _) = with_the_menu_open();
@@ -405,6 +411,7 @@ fn the_parameter_menu_gathers_a_devices_parameters_into_closed_groups() {
     assert!(harness.query_by_label("FM Synth: Volume").is_some());
 }
 
+/// A search opens only the groups with matches, and a row there chooses its parameter.
 #[test]
 fn a_search_opens_the_groups_it_finds_and_shows_names_under_their_group() {
     let (mut harness, _) = with_the_menu_open();
@@ -419,6 +426,7 @@ fn a_search_opens_the_groups_it_finds_and_shows_names_under_their_group() {
     assert!(harness.query_by_label("FM Synth: Op 3 Coarse automation on Drums").is_some());
 }
 
+/// The menu keeps its own width rather than filling the window.
 #[test]
 fn the_parameter_menu_stays_narrow() {
     let (harness, _) = with_the_menu_open();
@@ -427,6 +435,7 @@ fn the_parameter_menu_stays_narrow() {
     assert!(harness.get_by_label("Op 3").rect().width() <= 260.0);
 }
 
+/// A click in the search field leaves the menu open.
 #[test]
 fn clicking_the_search_field_keeps_the_menu_open() {
     let (mut harness, _) = with_the_menu_open();
@@ -436,6 +445,8 @@ fn clicking_the_search_field_keeps_the_menu_open() {
     assert!(harness.query_by_label("Op 3").is_some());
 }
 
+/// A group heading opens and closes with a click while the menu stays open; choosing a
+/// parameter closes it.
 #[test]
 fn a_click_on_a_group_heading_opens_and_closes_it_and_keeps_the_menu_open() {
     let (mut harness, _) = with_the_menu_open();
@@ -454,6 +465,7 @@ fn a_click_on_a_group_heading_opens_and_closes_it_and_keeps_the_menu_open() {
     assert!(harness.query_by_label("FM Synth: Volume automation on Drums").is_some());
 }
 
+/// A click outside the menu closes it.
 #[test]
 fn a_click_outside_closes_the_parameter_menu() {
     let (mut harness, _) = with_the_menu_open();
@@ -462,6 +474,8 @@ fn a_click_outside_closes_the_parameter_menu() {
     assert!(harness.query_by_label("Search parameters").is_none());
 }
 
+/// Several devices each fold under their name, and a device closed and opened again keeps its
+/// groups as they were.
 #[test]
 fn with_several_devices_each_folds_under_its_name() {
     let mut harness = menu_with(&[("fm-synth", "FM Synth"), ("utility", "Utility")]);
@@ -490,6 +504,8 @@ fn with_several_devices_each_folds_under_its_name() {
     assert!(harness.query_by_label("Search parameters").is_some(), "the menu closed");
 }
 
+/// The menu opens on the device and group of the lane's parameter, and a search opens the
+/// devices closed around it.
 #[test]
 fn the_menu_opens_the_device_and_group_of_the_lanes_parameter_and_a_search_opens_the_rest() {
     let mut harness = menu_with(&[("fm-synth", "FM Synth"), ("utility", "Utility")]);
@@ -508,6 +524,7 @@ fn the_menu_opens_the_device_and_group_of_the_lanes_parameter_and_a_search_opens
     assert!(harness.query_by_label("Utility: Gain").is_some());
 }
 
+/// As headings open, the menu grows in place under its dropdown and stays inside the window.
 #[test]
 fn the_parameter_menu_stays_where_it_opened_as_it_grows() {
     // A window short enough that the opened list is taller than the room under the dropdown.
@@ -530,6 +547,8 @@ fn the_parameter_menu_stays_where_it_opened_as_it_grows() {
     }
 }
 
+/// Over its dropdown, the menu stays open and against the dropdown in every frame as the
+/// device of the lane's parameter closes.
 #[test]
 fn over_the_dropdown_the_menu_stays_open_and_in_place_as_the_lanes_device_closes() {
     // A window so short, without the detail area, that the Keys lane's menu opens over its

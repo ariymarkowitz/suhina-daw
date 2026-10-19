@@ -206,4 +206,5 @@ const fn build() -> [ParamInfo; COUNT] {
     out
 }
 
+/// Every parameter, in index order, each in its group.
 pub static PARAMS: [ParamInfo; COUNT] = build();
