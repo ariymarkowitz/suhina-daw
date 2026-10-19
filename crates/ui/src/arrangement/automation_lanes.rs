@@ -1055,18 +1055,20 @@ fn sections<'a>(choices: &'a [Param], words: &[String]) -> Vec<Section<'a>> {
 }
 
 /// What the parameter menu keeps while it is open: the search, whether it has been shown yet,
-/// and the groups opened, by device and name.
+/// the devices opened (by index) and the groups opened (by device and name). A device keeps its
+/// groups open while it is closed.
 #[derive(Debug, Clone, Default)]
 struct MenuState {
     query: String,
     shown: bool,
+    devices: HashSet<usize>,
     open: HashSet<(Option<usize>, String)>,
 }
 
-/// A group's heading in the parameter menu: an arrow, its name, and how many parameters it has
-/// (" •" when one of them has points). A click opens or closes it (`toggles`), except while a
-/// search shows every group open.
-fn group_row(ui: &mut Ui, name: &str, count: usize, marked: bool, open: bool, toggles: bool) -> egui::Response {
+/// A device's or a group's heading in the parameter menu: an arrow, its name, and how many
+/// parameters it has (" •" when one of them has points). A click opens or closes it
+/// (`toggles`), except while a search shows every heading open.
+fn heading_row(ui: &mut Ui, name: &str, count: usize, marked: bool, open: bool, toggles: bool) -> egui::Response {
     let height = ui.spacing().interact_size.y;
     let sense = if toggles { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), sense);
@@ -1104,17 +1106,27 @@ fn parameter_row(ui: &mut Ui, choice: &Param, current: &LaneKey, free: bool, scr
 }
 
 /// The lane header's parameter menu: a search field and, under it, the track's parameters in a
-/// list that scrolls when it is longer than the window (the FM synth has over a hundred), by
-/// device and, inside a device, by group. Groups start closed except the one holding the lane's
-/// own parameter (`current`), which is scrolled into view; a search shows the groups with matches
-/// open, and Enter takes the first match. A parameter another lane shows (`shown`) is greyed
-/// out. Answers the one chosen.
+/// list that scrolls when it is longer than the window (the FM synth has over a hundred): the
+/// mixer's first, then each device under a heading and, inside a device, by group. Devices and
+/// groups start closed except those holding the lane's own parameter (`current`), which is
+/// scrolled into view, and a track's only device; a search shows the devices and groups with
+/// matches open, and Enter takes the first match. A parameter another lane shows (`shown`) is
+/// greyed out. Answers the one chosen.
 fn parameter_menu(ui: &mut Ui, filter: Id, choices: &[Param], current: &LaneKey, shown: &[LaneKey]) -> Option<LaneKey> {
     ui.set_width(MENU_WIDTH);
     let mut menu: MenuState = ui.data(|d| d.get_temp(filter)).unwrap_or_default();
     let first_frame = !menu.shown;
-    if first_frame && let Some(group) = choices.iter().find(|c| c.key == *current).and_then(|c| c.group.clone()) {
-        menu.open.insert((current.device, group));
+    if first_frame {
+        if let Some(device) = current.device {
+            menu.devices.insert(device);
+        }
+        if let Some(group) = choices.iter().find(|c| c.key == *current).and_then(|c| c.group.clone()) {
+            menu.open.insert((current.device, group));
+        }
+        let devices: HashSet<usize> = choices.iter().filter_map(|c| c.key.device).collect();
+        if let [only] = devices.into_iter().collect::<Vec<_>>()[..] {
+            menu.devices.insert(only);
+        }
     }
     let field_id = filter.with("field");
     // Enter ends the field's focus, so whether it had it is read before the field is shown.
@@ -1138,42 +1150,63 @@ fn parameter_menu(ui: &mut Ui, filter: Id, choices: &[Param], current: &LaneKey,
     let free = |choice: &Param| !shown.contains(&choice.key) || choice.key == *current;
     let mut chosen = None;
     let height = (ui.ctx().content_rect().height() * 0.6).max(160.0);
-    egui::ScrollArea::vertical().max_height(height).auto_shrink([true, true]).show(ui, |ui| {
-        if sections.is_empty() {
-            ui.label(egui::RichText::new("No parameter matches").color(theme::text_hint()));
-        }
-        for section in &sections {
-            ui.separator();
-            if let Some(name) = section.name {
-                ui.label(egui::RichText::new(name).color(theme::text_hint()));
+    // The list's room is its own most, not what the menu had the frame before: after a heading
+    // opens, the menu grows to fit it rather than the list scrolling in the old height.
+    ui.allocate_ui(Vec2::new(ui.available_width(), height), |ui| {
+        egui::ScrollArea::vertical().max_height(height).auto_shrink([true, true]).show(ui, |ui| {
+            if sections.is_empty() {
+                ui.label(egui::RichText::new("No parameter matches").color(theme::text_hint()));
             }
-            for choice in &section.loose {
-                if parameter_row(ui, choice, current, free(choice), first_frame) {
-                    chosen = Some(choice.key.clone());
-                }
-            }
-            for (group, params) in &section.groups {
-                let key = (section.device, (*group).to_string());
-                let marked = params.iter().any(|p| !p.points.is_empty());
-                let was_open = menu.open.contains(&key);
-                if group_row(ui, group, params.len(), marked, searching || was_open, !searching).clicked() {
-                    if was_open {
-                        menu.open.remove(&key);
-                    } else {
-                        menu.open.insert(key.clone());
-                    }
-                }
-                if searching || menu.open.contains(&key) {
-                    ui.indent(&key, |ui| {
-                        for choice in params {
-                            if parameter_row(ui, choice, current, free(choice), first_frame) {
-                                chosen = Some(choice.key.clone());
-                            }
+            for section in &sections {
+                ui.separator();
+                // The mixer's few parameters have no heading.
+                let Some(device) = section.device else {
+                    for choice in &section.loose {
+                        if parameter_row(ui, choice, current, free(choice), first_frame) {
+                            chosen = Some(choice.key.clone());
                         }
-                    });
+                    }
+                    continue;
+                };
+                let name = section.name.unwrap_or("Device");
+                let marked = section.params().any(|p| !p.points.is_empty());
+                let open = searching || menu.devices.contains(&device);
+                if heading_row(ui, name, section.params().count(), marked, open, !searching).clicked()
+                    && !menu.devices.remove(&device)
+                {
+                    menu.devices.insert(device);
                 }
+                if !(searching || menu.devices.contains(&device)) {
+                    continue;
+                }
+                ui.indent(("device", device), |ui| {
+                    for choice in &section.loose {
+                        if parameter_row(ui, choice, current, free(choice), first_frame) {
+                            chosen = Some(choice.key.clone());
+                        }
+                    }
+                    for (group, params) in &section.groups {
+                        let key = (section.device, (*group).to_string());
+                        let marked = params.iter().any(|p| !p.points.is_empty());
+                        let open = searching || menu.open.contains(&key);
+                        if heading_row(ui, group, params.len(), marked, open, !searching).clicked()
+                            && !menu.open.remove(&key)
+                        {
+                            menu.open.insert(key.clone());
+                        }
+                        if searching || menu.open.contains(&key) {
+                            ui.indent(&key, |ui| {
+                                for choice in params {
+                                    if parameter_row(ui, choice, current, free(choice), first_frame) {
+                                        chosen = Some(choice.key.clone());
+                                    }
+                                }
+                            });
+                        }
+                    }
+                });
             }
-        }
+        });
     });
     if chosen.is_none() && enter {
         chosen = sections.iter().flat_map(Section::params).find(|c| free(c)).map(|c| c.key.clone());

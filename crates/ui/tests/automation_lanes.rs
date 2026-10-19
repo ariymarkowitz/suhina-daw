@@ -287,25 +287,34 @@ fn dragging_a_segment_up_bends_its_curve() {
 /// The demo project with the FM synth, which has over a hundred parameters, on the Drums
 /// channel and its lanes shown; the volume lane's parameter menu is open.
 fn with_the_menu_open() -> (Harness<'static, App>, String) {
-    let mut project = demo_project();
     let info = suhina_device_registry::info("fm-synth").expect("the FM synth is built in");
     let last = info.params.last().expect("the FM synth has parameters").name.to_string();
-    let params = info.params.iter().map(|p| DeviceParam::new(p.id, p.default)).collect();
-    project.channels[0].devices.push(Device {
-        name: "FM Synth".into(),
-        kind: DeviceKind::Builtin("fm-synth".into()),
-        enabled: true,
-        state: None,
-        params,
-        automation: Vec::new(),
-        extensions: Extensions::default(),
-    });
+    (menu_with(&[("fm-synth", "FM Synth")]), last)
+}
+
+/// The demo project with built-in `devices` (id and name) on the Drums channel and its lanes
+/// shown; the volume lane's parameter menu is open.
+fn menu_with(devices: &[(&str, &str)]) -> Harness<'static, App> {
+    let mut project = demo_project();
+    for (id, name) in devices {
+        let info = suhina_device_registry::info(id).expect("a built-in device");
+        let params = info.params.iter().map(|p| DeviceParam::new(p.id, p.default)).collect();
+        project.channels[0].devices.push(Device {
+            name: (*name).into(),
+            kind: DeviceKind::Builtin((*id).into()),
+            enabled: true,
+            state: None,
+            params,
+            automation: Vec::new(),
+            extensions: Extensions::default(),
+        });
+    }
     let mut harness = arrangement(project);
     harness.get_by_label("Show automation of Drums").click();
     harness.run();
     harness.get_by_label("Parameter of Volume lane on Drums").click();
     harness.run();
-    (harness, last)
+    harness
 }
 
 #[test]
@@ -428,6 +437,52 @@ fn a_click_outside_closes_the_parameter_menu() {
     // The status bar, far from the menu.
     click_at(&mut harness, Pos2::new(5.0, SIZE.1 - 5.0));
     assert!(harness.query_by_label("Search parameters").is_none());
+}
+
+#[test]
+fn with_several_devices_each_folds_under_its_name() {
+    let mut harness = menu_with(&[("fm-synth", "FM Synth"), ("utility", "Utility")]);
+    // The lane shows the volume, so both devices start closed.
+    assert!(harness.query_by_label("FM Synth").is_some());
+    assert!(harness.query_by_label("Op 3").is_none());
+    assert!(harness.query_by_label("Utility: Gain").is_none());
+    harness.get_by_label("Utility").click();
+    harness.run();
+    assert!(harness.query_by_label("Utility: Gain").is_some());
+    // Closed again, so what follows fits in the list without scrolling.
+    harness.get_by_label("Utility").click();
+    harness.run();
+    assert!(harness.query_by_label("Utility: Gain").is_none());
+    // A device closed and opened again keeps its open groups.
+    harness.get_by_label("FM Synth").click();
+    harness.run();
+    harness.get_by_label("Op 3").click();
+    harness.run();
+    harness.get_by_label("FM Synth").click();
+    harness.run();
+    assert!(harness.query_by_label("FM Synth: Op 3 Rate 1").is_none());
+    harness.get_by_label("FM Synth").click();
+    harness.run();
+    assert!(harness.query_by_label("FM Synth: Op 3 Rate 1").is_some());
+    assert!(harness.query_by_label("Search parameters").is_some(), "the menu closed");
+}
+
+#[test]
+fn the_menu_opens_the_device_and_group_of_the_lanes_parameter_and_a_search_opens_the_rest() {
+    let mut harness = menu_with(&[("fm-synth", "FM Synth"), ("utility", "Utility")]);
+    harness.get_by_label("Search parameters").type_text("op 3 coarse");
+    harness.run();
+    harness.get_by_label("FM Synth: Op 3 Coarse").click();
+    harness.run();
+    harness.get_by_label("Parameter of FM Synth: Op 3 Coarse lane on Drums").click();
+    harness.run();
+    // Its device and group are open, the other device closed, and the search is empty again.
+    assert!(harness.query_by_label("FM Synth: Op 3 Coarse").is_some());
+    assert!(harness.query_by_label("FM Synth: Op 1 Rate 1").is_none());
+    assert!(harness.query_by_label("Utility: Gain").is_none());
+    harness.get_by_label("Search parameters").type_text("gain");
+    harness.run();
+    assert!(harness.query_by_label("Utility: Gain").is_some());
 }
 
 /// Renders the Arrangement view with lanes shown to `target/ui-snapshots/automation-lanes.png`,
