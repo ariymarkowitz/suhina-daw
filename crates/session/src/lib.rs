@@ -48,6 +48,7 @@ use serde_json::Value;
 use suhina_engine::{Controller, LauncherMonitor, Quantization};
 use suhina_model::Project;
 
+pub use ara::ClipNotes;
 pub use audio::{AudioSystem, InputChoice, LiveOutput, OutputChoice, OutputInfo, audio_commands};
 pub use blank::blank_project;
 pub use commands::{CommandKind, CommandSpec, Param, ParamType, Run, commands, parse_quantization};
@@ -165,7 +166,10 @@ impl Player {
 
     /// Makes the engine play `project` from now on, keeping what is playing (ADR 0005).
     pub fn update(&mut self, project: &Project) -> Result<(), CommandError> {
-        self.controller.update(project).map_err(CommandError)
+        let began = std::time::Instant::now();
+        let updated = self.controller.update(project).map_err(CommandError);
+        trace_update(began);
+        updated
     }
 
     /// Like [`Player::update`], for a project with one scene inserted or removed since the last
@@ -175,7 +179,10 @@ impl Player {
         project: &Project,
         scenes: Option<suhina_engine::SceneShift>,
     ) -> Result<(), CommandError> {
-        self.controller.update_with_scenes(project, scenes).map_err(CommandError)
+        let began = std::time::Instant::now();
+        let updated = self.controller.update_with_scenes(project, scenes).map_err(CommandError);
+        trace_update(began);
+        updated
     }
 
     /// Sets one parameter of a device on a track from the next audio block, without building a
@@ -214,6 +221,22 @@ impl Player {
     /// in per mille (1000 is busy all of the time).
     pub fn cpu_monitor(&self) -> &suhina_engine::CpuMonitor {
         self.controller.cpu_monitor()
+    }
+
+    /// Frames of stretched (warped) clips that were not ready in time and played as silence,
+    /// so far.
+    pub fn stretch_underruns(&self) -> u64 {
+        self.controller.stretch_underruns()
+    }
+
+    /// Edits while playing whose new graph had to restart the stretched clips, so far.
+    pub fn stretch_moves(&self) -> u64 {
+        self.controller.stretch_moves()
+    }
+
+    /// Plug-in blocks not answered in time, and the plug-in (its key) that missed most.
+    pub fn plugin_misses(&self) -> (u64, u64, u64) {
+        self.controller.plugin_misses()
     }
 
     /// The level meters of the main output and every track.
@@ -257,6 +280,23 @@ pub struct ParamEdit {
     pub value: f64,
 }
 
+/// The edits that change nothing the engine plays, so a playing engine keeps its graph: colours,
+/// names and markers.
+const UNHEARD_EDITS: &[&str] = &[
+    "clip.setColor",
+    "clip.setColorMany",
+    "clip.rename",
+    "clip.renameMany",
+    "track.setColor",
+    "track.colorGroup",
+    "track.rename",
+    "scene.rename",
+    "marker.add",
+    "marker.move",
+    "marker.rename",
+    "marker.delete",
+];
+
 pub struct Session {
     project: Project,
     source: Option<PathBuf>,
@@ -265,6 +305,9 @@ pub struct Session {
     /// saved elsewhere, because the decoded audio is kept under those paths; saving writes them
     /// relative to the new file.
     audio_folder: Option<PathBuf>,
+    /// The audio outside the project's folder it may read: the person's own saved files and
+    /// library folders (`docs/spec/missing-files.md` › Project file boundaries).
+    trusted: suhina_media::Trusted,
     /// Counts changes to the project (edits, undo, redo), and the count when it was last saved.
     changes: u64,
     saved_at: u64,
@@ -285,8 +328,15 @@ pub struct Session {
     note_clipboard: Option<notes::NoteClipboard>,
     /// Set by an edit command whose changes are device parameters.
     pub(crate) param_edits: Vec<ParamEdit>,
+    /// The fader moves of an edit that is only track volumes: sent to a playing engine as
+    /// messages ([`suhina_engine::MIXER_VOLUME`]) instead of a new graph when it can take them.
+    /// Unlike `param_edits`, they leave undo as the command's own steps make it.
+    pub(crate) mixer_edits: Vec<ParamEdit>,
     /// Parameter whose live drag has already recorded its single undo snapshot.
     param_gesture: Option<(suhina_model::TrackId, usize, String)>,
+    /// The colours a track without one of its own shows, by its place among the tracks (the
+    /// window's palette), and the one a new track gets instead, when set ([`Session::set_track_colours`]).
+    track_colours: (Vec<suhina_model::Rgb>, Option<suhina_model::Rgb>),
     /// The project's plug-ins, running while it plays (ADR 0006).
     pub(crate) plugins: rack::Rack,
     /// The project's decoded audio, by the key its regions name (ADR 0011).
@@ -335,6 +385,7 @@ impl Session {
             project,
             source: None,
             audio_folder: None,
+            trusted: suhina_media::Trusted::default(),
             changes: 0,
             saved_at: 0,
             undo: Vec::new(),
@@ -346,7 +397,9 @@ impl Session {
             device_clipboard: Vec::new(),
             note_clipboard: None,
             param_edits: Vec::new(),
+            mixer_edits: Vec::new(),
             param_gesture: None,
+            track_colours: (Vec::new(), None),
             plugins: rack::Rack::default(),
             audio: suhina_engine::AudioPool::new(),
             audio_changed: false,
@@ -398,6 +451,60 @@ impl Session {
     /// The project's decoded audio, which players are started with (ADR 0011).
     pub fn audio(&self) -> &suhina_engine::AudioPool {
         &self.audio
+    }
+
+    /// The audio outside the project's folder that it may read (› Project file boundaries in
+    /// `docs/spec/missing-files.md`); the app gives it before the audio is decoded.
+    pub fn set_trusted(&mut self, trusted: suhina_media::Trusted) {
+        self.trusted = trusted;
+    }
+
+    pub fn trusted(&self) -> &suhina_media::Trusted {
+        &self.trusted
+    }
+
+    /// The absolute paths of the audio files the project names that are decoded now: what the
+    /// person loaded or relinked, or what was trusted when it opened. Saving keeps them as
+    /// trusted, so the project opens with them again.
+    pub fn loaded_audio_paths(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        for (_, path) in self.loaded_audio() {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        out
+    }
+
+    /// [`Session::loaded_audio_paths`] with the name the clips and devices give each (the key
+    /// of its decoded audio), each name once.
+    pub(crate) fn loaded_audio(&self) -> Vec<(String, PathBuf)> {
+        let loaded = |file: &str| {
+            self.audio.files.contains_key(file) || self.audio.files.contains_key(&suhina_model::stream_key(file, 0))
+        };
+        let from = self.audio_from();
+        let path = |file: &str, absolute: Option<&str>| {
+            absolute.map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| from.join(file))
+        };
+        let mut out: Vec<(String, PathBuf)> = Vec::new();
+        let devices = self.project.channels.iter().flat_map(|c| &c.devices);
+        let named = devices.filter_map(|d| d.sample_file().map(|f| (f, d.sample_absolute_file()))).chain(
+            self.project.contents.iter().flat_map(|c| &c.lanes).filter_map(|l| match &l.data {
+                suhina_model::LaneData::Audio(region) if !region.file.is_empty() => {
+                    Some((region.file.as_str(), region.absolute_file.as_deref()))
+                }
+                _ => None,
+            }),
+        );
+        for (file, absolute) in named {
+            if loaded(file) && !out.iter().any(|(f, _)| f == file) {
+                let path = path(file, absolute);
+                if path.is_absolute() {
+                    out.push((file.to_string(), path));
+                }
+            }
+        }
+        out
     }
 
     /// Gives the session its project's decoded audio (`media::load_project_audio`), before a
@@ -678,6 +785,12 @@ impl Session {
         self.plugins.sync(&self.project, &self.audio, self.player.as_mut())
     }
 
+    /// The plug-ins (by spec) found to edit clips over ARA since the last call although the
+    /// catalog did not say so ([`Rack::take_ara_learned`](crate::rack::Rack::take_ara_learned)).
+    pub fn take_ara_learned(&mut self) -> Vec<String> {
+        self.plugins.take_ara_learned()
+    }
+
     /// The window plug-in editors open over, owned by it (a Win32 `HWND`, an X11 window id):
     /// they float above it, have no taskbar entry of their own and go with it.
     pub fn set_editor_owner(&mut self, owner: Option<u64>) {
@@ -714,10 +827,22 @@ impl Session {
         }
     }
 
+    /// The notes the ARA plug-in that edits `clip` found in it, for the arrangement to draw
+    /// (#720): `None` when it has none, or its plug-in is bypassed or not running.
+    pub fn clip_notes(&self, clip: suhina_model::ClipId) -> Option<&ClipNotes> {
+        self.plugins.clip_notes(clip)
+    }
+
     /// The first device on `track` that runs a plug-in bound to its audio clips (ARA), by its
     /// index in the track's chain.
     pub fn ara_device(&self, track: suhina_model::TrackId) -> Option<usize> {
         self.ara_tracks().into_iter().find(|(t, _)| *t == track).map(|(_, device)| device)
+    }
+
+    /// Whether clips' edits are still on their way to another track's plug-in (ADR 0028 step 6):
+    /// a clip moved there with its edits kept, waiting for that plug-in to run with it.
+    pub fn carrying_ara_edits(&self) -> bool {
+        self.plugins.carrying()
     }
 
     /// Takes the editor of the plug-in device `device` on `track`, one that edits clips, out of
@@ -920,7 +1045,10 @@ impl Session {
     /// The project as it would be saved into `folder`: with the running plug-ins' state as it
     /// is now ([`Session::project_as_heard`]) and audio paths relative to `folder`.
     pub(crate) fn snapshot(&mut self, folder: &Path) -> Project {
-        let mut project = self.project_as_heard();
+        // The plug-in states last read, not asked for now: asking waited up to a second for a
+        // busy plug-in on the window's thread at every backup.
+        let states = self.plugins.known_states();
+        let mut project = self.with_states(&states);
         suhina_project_file::rebase_audio(&mut project, &self.audio_from(), folder);
         project
     }
@@ -951,8 +1079,13 @@ impl Session {
 
     /// [`Session::project_as_heard`], with the plug-in states it holds by device key.
     fn heard(&mut self) -> (Project, std::collections::HashMap<u64, suhina_plugins::SavedState>) {
-        let mut project = self.project.clone();
         let states = self.plugins.current_states();
+        (self.with_states(&states), states)
+    }
+
+    /// A copy of the project with `states` (by device key) in its plug-in devices.
+    fn with_states(&self, states: &std::collections::HashMap<u64, suhina_plugins::SavedState>) -> Project {
+        let mut project = self.project.clone();
         for device in suhina_engine::plugin_devices(&project) {
             let Some(state) = states.get(&device.key) else { continue };
             let slot = project
@@ -972,7 +1105,7 @@ impl Session {
                 }
             }
         }
-        (project, states)
+        project
     }
 
     pub fn source(&self) -> Option<&Path> {
@@ -990,6 +1123,42 @@ impl Session {
     /// Runs the command `id` with JSON `params` and returns its JSON result. An editing command
     /// records one undo step when it changes the project; if it fails, or leaves a project that
     /// does not validate, the project is restored and an error is returned.
+    /// The colours a track without one of its own shows, by its place among the tracks (the
+    /// window's palette, which follows the theme), and `fixed`, the colour a new track gets
+    /// instead of the palette's, when set. Without a palette, tracks keep no colour of their own.
+    pub fn set_track_colours(&mut self, palette: Vec<suhina_model::Rgb>, fixed: Option<suhina_model::Rgb>) {
+        if self.track_colours.0 != palette || self.track_colours.1 != fixed {
+            self.track_colours = (palette, fixed);
+        }
+    }
+
+    /// After an edit that adds, removes or moves tracks: every track keeps the colour it showed
+    /// (#690, #709). A track without a colour of its own showed its place's colour from the
+    /// palette, so it is given that colour now, before the places shift; a new track gets the
+    /// colour of its place, or the fixed one. Part of the same undo step.
+    fn keep_track_colours(&mut self, before: &Project) {
+        let (palette, fixed) = &self.track_colours;
+        if palette.is_empty() {
+            return;
+        }
+        let order = |p: &Project| p.tracks.iter().map(|t| t.id).collect::<Vec<_>>();
+        let was = order(before);
+        if was == order(&self.project) {
+            return;
+        }
+        let colour = |place: usize| palette[place % palette.len()];
+        for (place, track) in before.tracks.iter().enumerate().filter(|(_, t)| t.color.is_none()) {
+            if let Some(now) = self.project.tracks.iter_mut().find(|t| t.id == track.id && t.color.is_none()) {
+                now.color = Some(colour(place));
+            }
+        }
+        for (place, track) in self.project.tracks.iter_mut().enumerate() {
+            if track.color.is_none() && !was.contains(&track.id) {
+                track.color = Some(fixed.unwrap_or_else(|| colour(place)));
+            }
+        }
+    }
+
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         let spec = commands().iter().find(|c| c.id == id).ok_or_else(|| unknown_command(id))?;
         let explicit_gesture = if id == "device.setParam" {
@@ -1040,6 +1209,7 @@ impl Session {
             }
             CommandKind::Edit => {
                 self.param_edits.clear();
+                self.mixer_edits.clear();
                 // A command with a `continue` parameter can add to the step it made last time.
                 let step = spec
                     .params
@@ -1070,6 +1240,7 @@ impl Session {
                 let result = (spec.run)(self, params).and_then(|value| {
                     // A lane, clip or scene the command added without an id gets one now.
                     self.project.assign_ids()?;
+                    self.keep_track_colours(&before);
                     Ok(value)
                 });
                 let result = result.and_then(|value| match self.project.validate() {
@@ -1107,12 +1278,21 @@ impl Session {
                             }
                             // A parameter change goes to the engine as a message; anything else,
                             // or a message that cannot be sent, as a new graph.
-                            let sent = match (changes.is_empty(), self.player.as_mut()) {
-                                (false, Some(player)) => {
-                                    changes.into_iter().all(|change| player.set_device_param(change).is_ok())
-                                }
-                                _ => false,
-                            };
+                            let mixer = std::mem::take(&mut self.mixer_edits);
+                            // An edit that changes nothing the engine plays (a colour, a name, a
+                            // marker) keeps the playing graph: colouring every clip of a large
+                            // project built a graph for each of them, six seconds in all.
+                            let unheard = UNHEARD_EDITS.contains(&id);
+                            let sent = unheard
+                                || match (changes.is_empty(), mixer.is_empty(), self.player.as_mut()) {
+                                    (false, _, Some(player)) => {
+                                        changes.into_iter().all(|change| player.set_device_param(change).is_ok())
+                                    }
+                                    (true, false, Some(player)) => {
+                                        mixer.into_iter().all(|change| player.set_device_param(change).is_ok())
+                                    }
+                                    _ => false,
+                                };
                             if !sent {
                                 match self.update_player(shift) {
                                     Ok(()) => self.player_behind = false,
@@ -1297,6 +1477,17 @@ impl Session {
 }
 
 /// The key of the plug-in device at `device` among `track`'s channel's devices.
+/// The track and name of the plug-in device whose key is `key`, for the trace.
+pub fn plugin_device_name(project: &Project, key: u64) -> Option<String> {
+    project.tracks.iter().find_map(|track| {
+        let channel = project.channels.iter().find(|c| Some(c.id) == track.channel)?;
+        (0..channel.devices.len()).find_map(|index| {
+            (plugin_key_at(project, track.id, index) == Some(key))
+                .then(|| format!("{} on {}", channel.devices.get(index).map_or("?", |d| d.name.as_str()), track.name))
+        })
+    })
+}
+
 pub(crate) fn plugin_key_at(project: &Project, track: suhina_model::TrackId, device: usize) -> Option<u64> {
     plugin_key_at_path(project, track, &[device])
 }
@@ -1330,6 +1521,19 @@ fn live_filter(project: &Project, track: suhina_model::TrackId) -> suhina_engine
         MidiPort::Nothing => LivePorts::Nothing,
     };
     LiveFilter { ports, channel: input.channel.and_then(|c| c.checked_sub(1)) }
+}
+
+/// Traces an engine update that took the caller's thread [`suhina_plugins::trace::SLOW_WORK`] or
+/// more, with what its graph's build took part by part.
+fn trace_update(began: std::time::Instant) {
+    let took = began.elapsed();
+    if took >= suhina_plugins::trace::SLOW_WORK {
+        suhina_plugins::trace!(
+            "slow engine update: {:.1} ms ({})",
+            took.as_secs_f64() * 1000.0,
+            suhina_engine::build_report::last()
+        );
+    }
 }
 
 #[cfg(test)]

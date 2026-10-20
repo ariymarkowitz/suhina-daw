@@ -57,6 +57,9 @@ pub struct SessionViewState {
     /// or a click on an empty slot selected it. The detail area shows its clip; Ctrl+C and Ctrl+V
     /// act on it.
     pub selected_slot: Option<(TrackId, usize)>,
+    /// A track's header (or a return's column) was the last thing clicked: Delete removes the
+    /// track then (#690). A click on a slot takes it away.
+    pub track_focus: bool,
     /// Something has been copied, so a slot's menu can paste it; the window says so each frame.
     pub can_paste: bool,
     /// A clip slot whose drag started this frame (track, scene from 0): the window carries the
@@ -75,6 +78,9 @@ pub struct SessionViewState {
     /// Where the mixer strip's pan and volume controls were drawn last frame: the wheel over one
     /// changes its value instead of scrolling the view.
     pub(crate) value_areas: Vec<Rect>,
+    /// Lists that scroll with the wheel themselves (a strip's devices): the view leaves the wheel
+    /// over them alone, with or without Alt.
+    pub(crate) scroll_areas: Vec<Rect>,
     /// The volume as a knob beside the pan knob instead of a plain value
     /// (Settings › Session and mixer › Mixer controls).
     pub knobs: bool,
@@ -95,8 +101,6 @@ pub struct SessionViewState {
     pub(crate) strip_fader_dragged: Option<f32>,
     /// Some strip holds an audio input's block, so every strip keeps its room.
     pub(crate) reserve_input: bool,
-    /// The metronome's level while the main strip's metronome button is held and dragged.
-    pub(crate) metronome_drag: Option<f64>,
     /// How far each strip's device list is scrolled.
     pub(crate) device_scroll: std::collections::BTreeMap<TrackId, f32>,
     /// The device row clicked last in a strip (track, device index): it stays lit.
@@ -129,6 +133,7 @@ impl SessionViewState {
 
     /// Selects the clip slot at `scene` (from 0) on `track`, and the track with it.
     pub fn select_slot(&mut self, track: TrackId, scene: usize) {
+        self.track_focus = false;
         self.selected_slot = Some((track, scene));
         self.selected = Some(track);
     }
@@ -221,9 +226,13 @@ pub fn show(
         .sum();
     let content_height = (grid.scenes.len() as f32 + 1.0) * PITCH;
     let fields = std::mem::take(&mut state.value_areas);
+    let lists = std::mem::take(&mut state.scroll_areas);
     if ui.rect_contains_pointer(area) {
-        let over_field =
-            ui.ctx().pointer_hover_pos().is_some_and(|pointer| fields.iter().any(|rect| rect.contains(pointer)));
+        // Alt and the wheel over a value field are the field's; the wheel alone scrolls.
+        let pointer = ui.ctx().pointer_hover_pos();
+        let over_field = (widgets::wheel_moves_value(ui)
+            && pointer.is_some_and(|pointer| fields.iter().any(|rect| rect.contains(pointer))))
+            || pointer.is_some_and(|pointer| lists.iter().any(|rect| rect.contains(pointer)));
         if !over_field {
             let delta = ui.input(|i| i.smooth_scroll_delta());
             state.scroll -= delta;
@@ -252,6 +261,8 @@ pub fn show(
     };
     // Where each track column is this frame, for a dragged header to find its place.
     let mut spans: Vec<(&Column, egui::Rangef)> = Vec::new();
+    // The returns' columns too, which take dropped devices and plug-ins as a track's do (#687).
+    let mut return_spans: Vec<(&Column, egui::Rangef)> = Vec::new();
     let mut track_x = area.left() - state.scroll.x;
     let mut return_x = returns_x;
     let mut track_number = 0;
@@ -269,7 +280,9 @@ pub fn show(
         };
         let span = egui::Rangef::new(*x, *x + width);
         *x += width + 1.0;
-        if column.kind != ColumnKind::Return {
+        if column.kind == ColumnKind::Return {
+            return_spans.push((column, span));
+        } else {
             spans.push((column, span));
         }
         if span.max < clip.left() || span.min > clip.right() {
@@ -292,6 +305,12 @@ pub fn show(
     }
     if let Some(probe) = state.drop.as_mut() {
         let row_of = |y: f32| ((y - bands.top) / PITCH).floor().max(0.0) as usize;
+        if probe.devices && !probe.files && !probe.clip {
+            for (column, span) in &return_spans {
+                let whole = Rect::from_x_y_ranges(*span, egui::Rangef::new(header.top(), mixer.bottom()));
+                probe.offer(whole.intersect(returns_clip), DropTarget::Track(column.track));
+            }
+        }
         for (column, span) in &spans {
             // Devices alone land on the track wherever its column is under the pointer: the
             // header, the slots or the mixer strip, a group's and a return's too.
@@ -391,6 +410,9 @@ pub fn show(
     let shared =
         crate::session::mixer_strip::Shared { reserve_input: state.reserve_input, fader: state.strip_fader_shown() };
     let parts = crate::session::mixer_strip::layout_shared(main_mixer, false, false, shared);
+    if let Some(list) = parts.devices {
+        crate::session::mixer_strip::main_devices(&painter.with_clip_rect(main_mixer), list, &grid.main_devices);
+    }
     if let (Some(readout), Some(fader)) = (parts.readout, parts.fader) {
         let main_painter = painter.with_clip_rect(main_mixer);
         crate::session::mixer_strip::main_fader(ui, &main_painter, readout, fader, grid.main_volume_db, state, actions);
@@ -405,7 +427,7 @@ pub fn show(
     // The metronome in the main strip's toggle row, as the main channel's click control.
     let click =
         Rect::from_min_size(parts.toggles.min, Vec2::new(28.0_f32.min(parts.toggles.width()), parts.toggles.height()));
-    main_metronome(ui, &painter.with_clip_rect(main_mixer), click, grid.metronome, state, actions);
+    main_metronome(ui, &painter.with_clip_rect(main_mixer), click, grid.metronome, actions);
     mixer_edge(ui, &painter, area, mixer, mixer_height, state);
 }
 
@@ -416,10 +438,8 @@ fn main_metronome(
     painter: &egui::Painter,
     rect: Rect,
     (on, db, _): (bool, f64, suhina_engine::ClickSound),
-    state: &mut SessionViewState,
     actions: &mut Vec<Action>,
 ) {
-    const RANGE: (f64, f64) = (-60.0, 6.0);
     let response = ui
         .interact(rect.intersect(painter.clip_rect()), Id::new("main-metronome"), Sense::click_and_drag())
         .on_hover_text("Metronome: click to turn it on or off; hold and drag up or down for its level");
@@ -427,58 +447,12 @@ fn main_metronome(
     if response.clicked() {
         actions.push(Action::new("transport.setMetronome", json!({ "on": !on })));
     }
-    let start = if db.is_finite() { db } else { RANGE.0 };
-    if response.drag_started() {
-        state.metronome_drag = Some(start);
-    }
-    if response.dragged()
-        && let Some(level) = state.metronome_drag
-    {
-        let next = (level - f64::from(response.drag_delta().y) * 0.25).clamp(RANGE.0, RANGE.1);
-        if next != level {
-            state.metronome_drag = Some(next);
-            actions
-                .push(Action::new("transport.setMetronome", json!({ "on": on, "db": (next * 10.0).round() / 10.0 })));
-        }
-    }
-    if response.drag_stopped() {
-        state.metronome_drag = None;
-    }
     let fill = if on { theme::control_active() } else { theme::control_background() };
     painter.rect_filled(rect, 0.0, fill);
     let glyph = if on { theme::accent() } else { theme::text_primary() };
     crate::session::record_controls::metronome_glyph(painter, rect, glyph);
-    // Held: the level's slider over the button, above everything else.
-    if response.is_pointer_button_down_on() {
-        let level = state.metronome_drag.unwrap_or(start);
-        let slider =
-            Rect::from_min_max(Pos2::new(rect.left(), rect.top() - 128.0), Pos2::new(rect.right(), rect.top() - 2.0));
-        let over =
-            ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::new("main-metronome-slider")));
-        over.rect_filled(slider, 0.0, theme::panel_background());
-        over.rect_stroke(slider, 0.0, theme::hairline(theme::border_strong()), egui::StrokeKind::Inside);
-        let track = Rect::from_min_max(
-            Pos2::new(slider.center().x - 2.0, slider.top() + 18.0),
-            Pos2::new(slider.center().x + 2.0, slider.bottom() - 6.0),
-        );
-        over.rect_filled(track, 0.0, theme::control_background());
-        let position = ((level - RANGE.0) / (RANGE.1 - RANGE.0)) as f32;
-        let y = track.bottom() - track.height() * position;
-        over.rect_filled(Rect::from_min_max(Pos2::new(track.left(), y), track.max), 0.0, theme::control_playing());
-        over.rect_filled(
-            Rect::from_center_size(Pos2::new(track.center().x, y), Vec2::new(18.0, 5.0)),
-            0.0,
-            theme::text_primary(),
-        );
-        widgets::text_in(
-            &over,
-            Rect::from_min_max(slider.min, Pos2::new(slider.right(), slider.top() + 16.0)),
-            Align2::CENTER_CENTER,
-            &format!("{level:.0}"),
-            theme::mono_font(theme::TEXT_SMALL),
-            theme::text_value(),
-        );
-    }
+    // Held: the level's slider beside the button, where there is room.
+    crate::session::record_controls::metronome_level(ui, &response, rect, (on, db), actions);
 }
 
 /// The mixer's height this frame: the one being dragged to, else the saved one, kept between the
@@ -567,6 +541,7 @@ fn draw_column(
             if response.clicked() {
                 state.selected = Some(column.track);
                 state.selected_slot = None;
+                state.track_focus = true;
             }
             track_menu_on(&response, column, bands, actions);
         }
@@ -592,7 +567,9 @@ fn draw_column(
 
 /// The track's right-click menu on `response`: its header, its strip, a return's column.
 fn track_menu_on(response: &Response, column: &Column, bands: &Bands, actions: &mut Vec<Action>) {
-    response.context_menu(|ui| {
+    // Open until a click outside: its items close it themselves, and a colour dragged in its
+    // picker does not (#712).
+    egui::Popup::context_menu(response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let into: Vec<(TrackId, String)> = nesting::move_targets(&bands.places, column.track)
             .into_iter()
             .filter_map(|g| bands.groups.iter().find(|(t, _)| *t == g).cloned())
@@ -643,6 +620,7 @@ fn column_header(
     if response.clicked() {
         state.selected = Some(column.track);
         state.selected_slot = None;
+        state.track_focus = true;
     }
     if response.double_clicked() {
         state.open_devices = Some(column.track);
@@ -667,6 +645,11 @@ fn column_header(
         text.min.x = (text.min.x + FOLD_ARROW).min(text.max.x);
     }
     widgets::text_in(painter, text, Align2::LEFT_CENTER, &column.name, theme::ui_font(theme::TEXT), color);
+    // The name's place, for a rename in place (Ctrl+R, #696).
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(Id::new((crate::app::NAME_RECT_TRACK, u64::from(column.track.0))), (text, pass));
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -807,6 +790,9 @@ fn column_body(
                 ui.ctx().data_mut(|d| d.remove::<String>(Id::new(("slot-rename", column.track, number))));
             }
             for response in [&launch, &select].into_iter().flatten() {
+                if response.clicked() || response.secondary_clicked() {
+                    state.track_focus = false;
+                }
                 // An empty slot is selected by a click, any slot by a right-click: Ctrl+C and
                 // Ctrl+V act on it.
                 if (!has_clip && response.clicked()) || response.secondary_clicked() {

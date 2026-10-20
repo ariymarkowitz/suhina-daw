@@ -3,7 +3,7 @@ description: How third-party plug-ins are hosted out of process (process model, 
 read_when: plug-in, plugin host, CLAP, VST3, VST2, sandbox, out of process, IPC, shared memory, unsafe, plug-in crash, scanning, plug-in editor
 type: decision
 status: current
-last_verified: 2026-10-19
+last_verified: 2026-10-20
 covers:
   - crates/ipc/**
   - crates/plugins/**
@@ -157,7 +157,9 @@ workspace forbids.
      with its automation yet.
    - **Messages** over a local socket or pipe, with a versioned protocol: load and unload,
      state save and load, latency changes, editor open and close, ping. *Built:* protocol
-     version 11 (the two below together with `transport_key`, which a host sends unasked when
+     version 12 (`ara_playback` comes unasked when an ARA plug-in asks the transport to play,
+     stop or move, and `ara_notes` when the notes it found in a region change,
+     [ADR 0028](0028-ara-hosting.md)); version 11 (the two below together with `transport_key`, which a host sends unasked when
      Space is pressed in a plug-in's window, so the engine starts or stops playback); version 10
      (`memory` comes unasked once a second: the host's process reports its resident memory, and
      `host_memory` reads the running hosts' reports for the control bar's total); version 9
@@ -225,7 +227,8 @@ workspace forbids.
    the engine renders in leaves the driver its own, with a notice that says which size plays.
    With ASIO and WASAPI exclusive mode the device's buffer is that size too; WASAPI shared mode
    keeps the period Windows gives it, and the ring holds a device buffer and a block when the
-   device takes more than a block at once. Where the device's buffer is not Suhina's to set, the
+   device takes more than a block at once. WASAPI offers sizes up to 2048 frames: past that a
+   shared stream only gains latency, and interfaces refuse such an exclusive period (N48). Where the device's buffer is not Suhina's to set, the
    Settings row says *Engine block*, since the number is the engine's block and not the device's
    buffer. The session counts each plug-in's blocks and late blocks
    (`device.plugin`: `blocks`, `late_blocks`, `longest_us`, `no_time`), and the device panel

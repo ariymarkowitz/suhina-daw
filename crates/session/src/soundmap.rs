@@ -98,6 +98,8 @@ impl Projects {
     /// tests and the CLI never analyse a user's folders unasked.
     pub fn start_sound_map(&mut self) {
         self.sound_map_started = true;
+        // A large cache is read off the caller's thread (the window's).
+        self.sound_map_mut().read_in_background(true);
         self.poll_sound_map();
     }
 
@@ -119,14 +121,29 @@ impl Projects {
             library.poll();
             let revision = library.revision();
             if self.sound_map_revision != Some(revision) {
-                let files = sample_files(self);
-                self.sound_map_mut().update(&files);
-                self.sound_map_revision = Some(revision);
+                if self.sound_map_mut().reads_in_background() {
+                    // Listed and compared on a thread of its own: a large library held the
+                    // window up for a second here.
+                    let snapshot = self.file_library_mut().index_snapshot();
+                    let started = self.sound_map_mut().update_in_background(move || {
+                        suhina_library::files_in(&snapshot, Some(FileKind::Sample))
+                            .map(|f| SourceFile { folder: f.folder, path: f.path, size: f.size, modified: f.modified })
+                            .collect()
+                    });
+                    // Still working out the one before: asked again at a later poll.
+                    if started {
+                        self.sound_map_revision = Some(revision);
+                    }
+                } else {
+                    let files = sample_files(self);
+                    self.sound_map_mut().update(&files);
+                    self.sound_map_revision = Some(revision);
+                }
                 changed = true;
             }
         }
         if let Some(map) = &mut self.sound_map {
-            changed |= map.poll();
+            changed |= suhina_plugins::trace::timed("sound map: results", || map.poll());
         }
         changed
     }

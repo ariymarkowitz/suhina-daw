@@ -171,3 +171,92 @@ fn copying_clips_by_drag_leaves_them_and_places_copies_of_their_own() {
     run(&mut session, "edit.undo", json!({})).unwrap();
     assert_eq!(spans(&session, 1), [(0.0, 4.0)], "one undo step");
 }
+
+#[test]
+fn adding_a_section_inserts_empty_time_and_moves_everything_after_it() {
+    let mut p = project();
+    p.arrangement.lanes.iter_mut().find(|l| l.track == Some(TrackId(2))).unwrap().clips[0].start = 8.0;
+    p.arrangement.markers.push(Marker::new(8.0, "Chorus"));
+    p.transport.tempo_changes.push(TempoPoint { beat: 8.0, bpm: 90.0, ramp: false });
+    p.transport
+        .time_signature_changes
+        .push(TimeSignatureChange { bar: 2, time_signature: TimeSignature { numerator: 3, denominator: 4 } });
+    p.transport.loop_range = Some(LoopRange { start: 8.0, end: 12.0 });
+    let main = p.channels.iter().position(|c| c.role == ChannelRole::Master).unwrap();
+    p.channels[main].automation.push(AutomationLane {
+        param: "volume".into(),
+        points: vec![
+            AutomationPoint { beat: 1.0, value: 1.0, curve: 0.0 },
+            AutomationPoint { beat: 8.0, value: 0.5, curve: 0.0 },
+        ],
+        enabled: true,
+    });
+    let mut session = Session::new(p);
+    let before = session.project().clone();
+    // One bar at beat 2, inside track 1's clip (0..4): it is split there, its rest moves.
+    run(&mut session, "range.insertTime", json!({ "start": 2.0, "end": 6.0 })).unwrap();
+    assert_eq!(spans(&session, 1), [(0.0, 2.0), (6.0, 2.0)]);
+    assert_eq!(spans(&session, 2), [(12.0, 4.0)]);
+    let p = session.project();
+    assert_eq!(p.arrangement.markers[0].beat, 12.0);
+    assert_eq!(p.transport.tempo_changes[0].beat, 12.0);
+    assert_eq!(p.transport.time_signature_changes[0].bar, 3, "a whole bar moves the change a bar");
+    assert_eq!(p.transport.loop_range, Some(LoopRange { start: 12.0, end: 16.0 }));
+    let points: Vec<f64> = p.channels[main].automation[0].points.iter().map(|pt| pt.beat).collect();
+    assert_eq!(points, [1.0, 12.0]);
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    // One undo step; the id counter stays where it went (ADR 0025).
+    assert_eq!(session.project(), &Project { next_id: session.project().next_id, ..before });
+    assert!(run(&mut session, "range.insertTime", json!({ "start": 4.0, "end": 4.0 })).is_err());
+}
+
+/// A selection on several tracks moves by as many tracks, each from its own; a drop under the
+/// tracks makes a track of the clips' kind for them, in the same undo step.
+#[test]
+fn clips_move_by_tracks_or_to_a_new_track() {
+    let mut session = Session::new(project());
+    let added = run(&mut session, "track.add", json!({ "kind": "midi", "after": 2 })).unwrap();
+    let third = added["track"].as_u64().unwrap() as u32;
+    let clips = json!([{ "track": 1, "index": 0 }, { "track": 2, "index": 0 }]);
+    run(&mut session, "clip.moveMany", json!({ "clips": clips, "beats": 0.0, "tracks_by": 1 })).unwrap();
+    assert!(spans(&session, 1).is_empty());
+    assert_eq!(spans(&session, 2), [(0.0, 4.0)]);
+    assert_eq!(spans(&session, third), [(0.0, 4.0)]);
+    // Onto a track that cannot hold them (an audio track under the MIDI ones): refused.
+    let down = json!([{ "track": 2, "index": 0 }, { "track": third, "index": 0 }]);
+    assert!(run(&mut session, "clip.moveMany", json!({ "clips": down, "beats": 0.0, "tracks_by": 1 })).is_err());
+    // Under the tracks: a new MIDI track holds the copy.
+    let tracks = session.project().tracks.len();
+    let one = json!([{ "track": third, "index": 0 }]);
+    let moved =
+        run(&mut session, "clip.moveMany", json!({ "clips": one, "beats": 4.0, "copy": true, "to_new_track": true }))
+            .unwrap();
+    assert_eq!(session.project().tracks.len(), tracks + 1);
+    let new_id = moved["clips"][0]["track"].as_u64().unwrap() as u32;
+    let new = session.project().tracks.iter().find(|t| t.id.0 == new_id).unwrap();
+    assert!(new.content.notes, "a MIDI track for a MIDI clip");
+    assert_eq!(spans(&session, new.id.0), [(4.0, 4.0)]);
+    assert_eq!(spans(&session, third), [(0.0, 4.0)], "copied, the clip stays");
+    // One undo takes the copy and its track away together.
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    assert_eq!(session.project().tracks.len(), tracks);
+}
+
+/// `ara_edits` (ADR 0028 step 6): keep carries the edits of clips a plug-in edits; clips no
+/// plug-in edits move as ever and carry nothing; anything but keep or new is refused.
+#[test]
+fn keeping_ara_edits_moves_plain_clips_as_ever() {
+    let mut session = Session::new(project());
+    let one = json!([{ "track": 1, "index": 0 }]);
+    let moved =
+        run(&mut session, "clip.moveMany", json!({ "clips": one, "beats": 0.0, "to_track": 2, "ara_edits": "keep" }))
+            .unwrap();
+    assert_eq!(moved["edits_carried"], 0, "no plug-in edits these clips");
+    assert!(spans(&session, 1).is_empty());
+    assert!(!session.carrying_ara_edits());
+    let back = json!([{ "track": 2, "index": 0 }]);
+    assert!(
+        run(&mut session, "clip.moveMany", json!({ "clips": back, "beats": 0.0, "to_track": 1, "ara_edits": "maybe" }))
+            .is_err()
+    );
+}

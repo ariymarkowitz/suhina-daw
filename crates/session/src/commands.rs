@@ -581,6 +581,25 @@ static COMMANDS: &[CommandSpec] = &[
         run: set_color,
     },
     CommandSpec {
+        id: "track.colorGroup",
+        label: "Give every track inside a group, at any depth, the group's colour, and with clips their clips too, as one undo step",
+        params: &[
+            TRACK,
+            optional(
+                "color",
+                ParamType::Text,
+                "\"#rrggbb\": the colour the group shows, for a group given none of its own (the default: the group's own)",
+            ),
+            optional(
+                "clips",
+                ParamType::Bool,
+                "true: the clips of the group and of every track inside it show their track's colour again",
+            ),
+        ],
+        kind: CommandKind::Edit,
+        run: color_group,
+    },
+    CommandSpec {
         id: "track.delete",
         label: "Delete a track with its clips; a deleted group's tracks stay",
         params: &[TRACK],
@@ -606,6 +625,20 @@ static COMMANDS: &[CommandSpec] = &[
         ],
         kind: CommandKind::Edit,
         run: rename_clip,
+    },
+    CommandSpec {
+        id: "clip.renameMany",
+        label: "Give several arrangement clips the same name, as one undo step; clips that play the same content share the name",
+        params: &[CLIPS, param("name", ParamType::Text, "the new name (empty clears it)")],
+        kind: CommandKind::Edit,
+        run: rename_clips,
+    },
+    CommandSpec {
+        id: "clip.setColorMany",
+        label: "Give several arrangement clips a colour of their own, or their tracks' colour again, as one undo step",
+        params: &[CLIPS, param("color", ParamType::Text, "\"#rrggbb\", or \"none\" for each track's colour")],
+        kind: CommandKind::Edit,
+        run: set_clips_color,
     },
     CommandSpec {
         id: "clip.setGain",
@@ -656,6 +689,17 @@ static COMMANDS: &[CommandSpec] = &[
         ],
         kind: CommandKind::Edit,
         run: set_clip_fades,
+    },
+    CommandSpec {
+        id: "clip.shiftFades",
+        label: "Lengthen or shorten the fade-in or fade-out of several arrangement clips by the same beats, each from its own, kept from 0 to what the clip's other fade leaves; as one undo step",
+        params: &[
+            CLIPS,
+            param("edge", ParamType::Text, "in or out"),
+            param("beats", ParamType::Number, "how much longer (or, below 0, shorter) each fade gets"),
+        ],
+        kind: CommandKind::Edit,
+        run: shift_fades,
     },
     CommandSpec {
         id: "clip.copy",
@@ -793,6 +837,13 @@ static COMMANDS: &[CommandSpec] = &[
         run: crate::range::split_range,
     },
     CommandSpec {
+        id: "range.insertTime",
+        label: "Insert empty time as long as a time selection at its start, on every track: clips crossing it are split there, and clips, markers, automation, tempo changes and the loop region after it move later by as much (time-signature changes too, when the length is whole bars)",
+        params: &[RANGE_START, RANGE_END],
+        kind: CommandKind::Edit,
+        run: crate::range::insert_time,
+    },
+    CommandSpec {
         id: "range.delete",
         label: "Delete what plays inside a time selection on some tracks: clips crossing an edge keep their parts outside it, and the gap stays",
         params: &[TRACKS, RANGE_START, RANGE_END],
@@ -831,11 +882,26 @@ static COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         id: "clip.moveMany",
-        label: "Move several arrangement clips by the same number of beats at once, so none replaces another on the way; to_track takes clips of one track to another",
+        label: "Move several arrangement clips by the same number of beats at once, so none replaces another on the way; to_track takes clips of one track to another, tracks_by moves each by as many tracks, to_new_track makes a track for them",
         params: &[
             param("clips", ParamType::Clips, "the clips to move, each {track, index} from project.clips"),
             param("beats", ParamType::Number, "how far to move them, in beats; negative is earlier"),
             optional("to_track", ParamType::Track, "track to move them to, when they are all on one track"),
+            optional(
+                "tracks_by",
+                ParamType::Integer,
+                "instead of to_track: move each that many tracks down (negative: up) from its own, among the tracks that hold clips",
+            ),
+            optional(
+                "to_new_track",
+                ParamType::Bool,
+                "instead of to_track: true makes a track of the clips' kind after the last and moves them there, in the same undo step",
+            ),
+            optional(
+                "ara_edits",
+                ParamType::Text,
+                "for clips a plug-in edits (Melodyne) going to another track: keep takes their edits along and puts the plug-in on that track when it has none; new (default) starts them there without",
+            ),
             optional(
                 "color",
                 ParamType::Text,
@@ -878,6 +944,11 @@ static COMMANDS: &[CommandSpec] = &[
             TRACK,
             param("start", ParamType::Number, "where the range starts, in beats from the beginning, at least 0"),
             param("end", ParamType::Number, "where the range ends, in beats, after start"),
+            optional(
+                "clips",
+                ParamType::Integers,
+                "only these clips (ids from project.clips), the others in the range left as they are: one row of a stack",
+            ),
         ],
         kind: CommandKind::Edit,
         run: editing::consolidate,
@@ -1192,6 +1263,25 @@ static COMMANDS: &[CommandSpec] = &[
         ],
         kind: CommandKind::Edit,
         run: crate::clip_shape::set_loop,
+    },
+    CommandSpec {
+        id: "clip.setAudio",
+        label: "Set an audio clip's warp switch, warp mode or transpose (an arrangement clip, or the clip in a track's slot by scene); every clip that plays the same audio follows",
+        params: &[
+            CLIP_TRACK,
+            CLIP,
+            CLIP_INDEX,
+            CLIP_SCENE,
+            optional("warp", ParamType::Bool, "true warps the audio to the tempo, false plays it at its own speed"),
+            optional(
+                "mode",
+                ParamType::Text,
+                "the warp mode: repitch, rhythmic, tonal, texture, smooth or high-quality",
+            ),
+            optional("transpose", ParamType::Number, "pitch shift in semitones, -48 to 48 (fractions are cents)"),
+        ],
+        kind: CommandKind::Edit,
+        run: crate::clip_shape::set_audio,
     },
     CommandSpec {
         id: "clip.setLength",
@@ -1538,6 +1628,17 @@ static COMMANDS: &[CommandSpec] = &[
         run: crate::relink::relink_files,
     },
     CommandSpec {
+        id: "project.collect",
+        label: "Copy the audio the project plays from outside its folder into Samples/Collected there and point the clips at the copies, as one undo step; save afterwards to keep it (Collect and save)",
+        params: &[optional(
+            "folder",
+            ParamType::Text,
+            "the folder to collect into: the project's own by default; needed before it is saved",
+        )],
+        kind: CommandKind::Edit,
+        run: crate::relink::collect,
+    },
+    CommandSpec {
         id: "clip.addFiles",
         label: "Place samples and MIDI files as clips: on a track (or new tracks when none is given), one after another from a beat in the arrangement or down the clip slots from a scene; separate gives each clip a track of its own",
         params: &[
@@ -1701,6 +1802,25 @@ static COMMANDS: &[CommandSpec] = &[
         params: &[TRACK, DEVICE],
         kind: CommandKind::Edit,
         run: device_groups::duplicate,
+    },
+    CommandSpec {
+        id: "device.moveToTrack",
+        label: "Move a device (a group with everything in it) to another track, or copy it there; it goes where its kind goes on that track, a running plug-in's state with it, as one undo step",
+        params: &[
+            TRACK,
+            DEVICE,
+            param("to_track", ParamType::Track, "the track to move or copy it to, by id or name"),
+            optional("copy", ParamType::Bool, "true copies it and leaves it where it is (default false)"),
+        ],
+        kind: CommandKind::Edit,
+        run: devices::move_to_track,
+    },
+    CommandSpec {
+        id: "device.duplicateMany",
+        label: "Copy several devices of a track (groups with everything in them) right after the last of them, in their order, as one undo step; the device clipboard stays as it was",
+        params: &[TRACK, DEVICES],
+        kind: CommandKind::Edit,
+        run: devices::duplicate_many,
     },
     CommandSpec {
         id: "branch.add",
@@ -2039,6 +2159,7 @@ static COMMANDS: &[CommandSpec] = &[
             TRACK,
             RETURN,
             param("level", ParamType::Decibels, "send level in dB, at most +6; \"-inf\" or below -150 is silence"),
+            CONTINUE,
         ],
         kind: CommandKind::Edit,
         run: crate::sends::set_send,
@@ -2639,6 +2760,19 @@ fn set_volume(session: &mut Session, params: &Value) -> Result<Value, CommandErr
             off |= automation::override_lane(&mut channel.automation, |l| l.param == suhina_model::automation::VOLUME);
         }
     }
+    // A fader move, nothing else: a playing engine takes it as a message where it can (a lane
+    // turned off changes more than the volume).
+    if !off {
+        session.mixer_edits = channels
+            .iter()
+            .map(|(track, _)| crate::ParamEdit {
+                track: *track,
+                device: suhina_engine::MIXER_VOLUME,
+                param: 0,
+                value: gain,
+            })
+            .collect();
+    }
     Ok(with_override(json!({ "tracks": track_ids(&channels), "volume_db": vec![to_db(gain); channels.len()] }), off))
 }
 
@@ -2969,6 +3103,63 @@ fn rename_track(session: &mut Session, params: &Value) -> Result<Value, CommandE
         c.name.clone_from(&name);
     }
     Ok(json!({ "name": name }))
+}
+
+/// `track.colorGroup`: the tracks inside the group `track`, at any depth, take its colour.
+fn color_group(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
+    let group = track_id(&session.project, params)?;
+    let p = &mut session.project;
+    let own = p.tracks.iter().find(|t| t.id == group).map(|t| t.color).ok_or("the track is missing")?;
+    let colour = match params.get("color") {
+        None | Some(Value::Null) => own,
+        Some(_) => crate::clip_color::parse_color(params, "color")?.or(own),
+    };
+    let parent_of =
+        |id: TrackId, tracks: &[suhina_model::Track]| tracks.iter().find(|t| t.id == id).and_then(|t| t.parent);
+    let inside: Vec<TrackId> = p
+        .tracks
+        .iter()
+        .filter(|t| {
+            let mut parent = t.parent;
+            let mut hops = 0;
+            while let Some(id) = parent {
+                if id == group {
+                    return true;
+                }
+                hops += 1;
+                if hops > 64 {
+                    return false;
+                }
+                parent = parent_of(id, &p.tracks);
+            }
+            false
+        })
+        .map(|t| t.id)
+        .collect();
+    if inside.is_empty() {
+        return Err("the track holds no tracks".into());
+    }
+    for track in p.tracks.iter_mut().filter(|t| inside.contains(&t.id)) {
+        track.color = colour;
+    }
+    // Their clips follow the tracks' colour again, the group's own too.
+    let mut clips = 0usize;
+    if params.get("clips").and_then(Value::as_bool) == Some(true) {
+        let held = |track: Option<TrackId>| track.is_some_and(|t| t == group || inside.contains(&t));
+        for lane in p.arrangement.lanes.iter_mut().filter(|l| held(l.track)) {
+            for clip in &mut lane.clips {
+                clip.color = None;
+                clips += 1;
+            }
+        }
+        for column in p.launcher.columns.iter_mut().filter(|c| held(Some(c.track))) {
+            for clip in column.slots.iter_mut().filter_map(|s| s.clip.as_mut()) {
+                clip.color = None;
+                clips += 1;
+            }
+        }
+    }
+    Ok(json!({ "tracks": inside.iter().map(|t| t.0).collect::<Vec<_>>(), "clips": clips }))
 }
 
 fn set_color(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
@@ -3442,6 +3633,76 @@ fn rename_clip(session: &mut Session, params: &Value) -> Result<Value, CommandEr
         session.project.contents.iter_mut().find(|c| c.id == content).ok_or("the clip's content is missing")?;
     content.name.clone_from(&name);
     Ok(json!({ "name": name }))
+}
+
+/// `clip.shiftFades {clips, edge, beats}` (#715).
+fn shift_fades(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
+    let fade_in = match params.get("edge").and_then(Value::as_str) {
+        Some("in") => true,
+        Some("out") => false,
+        _ => return Err("edge must be in or out".into()),
+    };
+    let beats = number(params, "beats")?;
+    let p = &mut session.project;
+    let chosen = clip_list(p, params)?;
+    let mut changed = 0;
+    for (track, index) in chosen {
+        let clip = p
+            .arrangement
+            .lanes
+            .iter_mut()
+            .find(|l| l.track == Some(track))
+            .and_then(|l| l.clips.get_mut(index))
+            .ok_or("the clip is missing")?;
+        let (own, other) = if fade_in { (clip.fade_in, clip.fade_out) } else { (clip.fade_out, clip.fade_in) };
+        let most = (clip.length - other).max(0.0);
+        let now = (own + beats).clamp(0.0, most);
+        if fade_in {
+            clip.fade_in = now;
+        } else {
+            clip.fade_out = now;
+        }
+        changed += 1;
+    }
+    Ok(json!({ "clips": changed }))
+}
+
+/// `clip.renameMany {clips, name}` (#693).
+fn rename_clips(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
+    let name = match params.get("name") {
+        Some(Value::String(name)) => name.trim().to_string(),
+        _ => return Err("name must be a text (empty clears it)".into()),
+    };
+    let p = &mut session.project;
+    let mut contents = Vec::new();
+    for (track, index) in clip_list(p, params)? {
+        let clip = p
+            .arrangement
+            .lanes
+            .iter()
+            .find(|l| l.track == Some(track))
+            .and_then(|l| l.clips.get(index))
+            .ok_or("the clip is missing")?;
+        contents.push(clip.content);
+    }
+    for content in p.contents.iter_mut().filter(|c| contents.contains(&c.id)) {
+        content.name.clone_from(&name);
+    }
+    Ok(json!({ "name": name, "clips": contents.len() }))
+}
+
+/// `clip.setColorMany`: the clips `clips` names take `color` (or their tracks' again), every one
+/// checked before any changes.
+fn set_clips_color(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
+    let color = crate::clip_color::parse_color(params, "color")?;
+    let p = &mut session.project;
+    let clips = clip_list(p, params)?;
+    for (track, index) in &clips {
+        let lane = p.arrangement.lanes.iter_mut().find(|l| l.track == Some(*track));
+        let clip = lane.and_then(|l| l.clips.get_mut(*index)).ok_or("the clip is missing")?;
+        clip.color = color;
+    }
+    Ok(json!({ "clips": clips.len(), "color": params.get("color") }))
 }
 
 /// Removes the clips named by `clips`, which must exist; returns how many went. Indices are read

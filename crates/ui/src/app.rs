@@ -22,7 +22,8 @@ use suhina_engine::model::{ClipId, TrackId};
 use suhina_session::{CommandKind, PluginStatus, ProjectId, Projects, Session};
 
 use crate::app::project_dialog::{
-    AboutChoice, AgentChoice, Choice, DialogState, Lists, RecoveryChoice, SaveChoice, SavePrompt, UnsavedChoice,
+    AboutChoice, AgentChoice, AraEditsChoice, Choice, DialogState, Lists, RecoveryChoice, SaveChoice, SavePrompt,
+    UnsavedChoice,
 };
 use crate::app::start_panel::{AudioSummary, StartChoice, StartState};
 use crate::arrangement::arrangement_view::{self, ArrangementViewState};
@@ -61,6 +62,8 @@ const TABS: f32 = 22.0;
 const RECENT_IN_MENU: usize = 10;
 /// The detail area's height in a row, by default, and the splitter between it and the view.
 const DETAIL_HEIGHT: f32 = 200.0;
+/// How long the browser takes to slide in or out, with animations on (#708).
+const BROWSER_SLIDE: f32 = 0.18;
 /// The least the view keeps above the detail area; pulled past it, the piano roll goes to the top.
 const MIN_VIEW: f32 = 160.0;
 const SPLITTER: f32 = 6.0;
@@ -271,6 +274,9 @@ pub struct App {
     /// A project with unsaved changes waiting for Save, Don't save or Cancel before it is closed,
     /// replaced or the app quits.
     unsaved_prompt: Option<Leaving>,
+    /// Clips a plug-in edits about to go to another track, waiting for Keep edits or Copy as
+    /// new (ADR 0028 step 6): the move, and the plug-in's name.
+    ara_prompt: Option<(Action, String)>,
     /// What to do once the project is saved, when Save in that question first asks for a name.
     save_then: Option<Leaving>,
     /// Every project with unsaved changes was answered for: the window may close.
@@ -311,7 +317,14 @@ pub struct App {
     /// selected, and the one whose ARA editor was last opened on its own when it was selected:
     /// once per clip, so an editor the user closes stays closed.
     ara_told: Option<(TrackId, Option<ClipId>)>,
+    /// The clip whose ARA editor the user closed while it was shown: not opened again on its
+    /// own until another clip is shown or Alt+M asks (#719).
     ara_opened: Option<(TrackId, ClipId)>,
+    /// The clip whose ARA editor was open last frame, and when the editor was last asked to
+    /// open for which clip (seconds of the window's clock): a refused or lost open is asked
+    /// again a second later, as a plug-in that is busy or reloading misses it (#719).
+    ara_was_open: Option<(TrackId, ClipId)>,
+    ara_open_asked: Option<((TrackId, ClipId), f64)>,
     /// The device selected in the detail area (its panel's click): the track and the device's
     /// index, for the Delete key to take off the track. Window state.
     selected_device: Option<(TrackId, usize)>,
@@ -332,6 +345,13 @@ pub struct App {
     /// How tall the device chain's panels were last frame, when the detail area showed only the
     /// chain: the area is kept no taller.
     detail_cap: Option<f32>,
+    /// Where each frame's time goes, written to the trace log when tracing is on.
+    frame_trace: crate::kit::frame_trace::FrameTrace,
+    /// The embedded plug-in editors the detail area has grown to fit, once each as they open:
+    /// after that its height is the user's, and the editor is fitted to it (#689).
+    fitted_editors: std::collections::HashSet<(TrackId, Vec<usize>)>,
+    /// An editor is embedded in the chain shown: the area may be taller than the panels.
+    editor_in_chain: bool,
     /// A clip being renamed (Rename in its menu, Ctrl+R): the command's target, the name typed
     /// so far, and whether the field has had the keyboard yet.
     rename: Option<(serde_json::Value, String, bool)>,
@@ -345,6 +365,9 @@ pub struct App {
     /// and the detail area's height a splitter drag has reached so far, unclamped.
     detail_max: bool,
     detail_drag: Option<f32>,
+    /// The app's own window (`set_editor_owner`): a press on its controls takes the keyboard
+    /// back from an embedded plug-in editor (`kit::keyboard`).
+    window: Option<u64>,
     /// The detail area was closed as an editor (the splitter dragged down, the toolbar's ×, View ›
     /// Hide editor): selecting a clip opens it again. And the clip shown last frame, to tell when
     /// another is selected (`docs/spec/ui-clip-editor.md` › Least height and closing).
@@ -424,8 +447,17 @@ pub struct App {
     /// bar shows it and once a second is often enough for a number that moves that slowly.
     ram: Option<u64>,
     next_ram: Option<f64>,
+    /// The audio's health counters last traced: device underruns, late stretched frames and late plug-in blocks.
+    audio_traced: (u64, u64, u64),
     /// A clip carried between the views, and the view whose name it hovers over since when.
     carry: Option<Carry>,
+    /// A device carried from a chain or a strip's list onto another track (#688): its track and
+    /// index.
+    device_carry: Option<(TrackId, usize)>,
+    /// How much of the browser shows, 0 to 1, while it slides in or out (#708).
+    browser_part: f32,
+    /// The hosts' reader threads wake this window ([`suhina_plugins::set_waker`]).
+    waker_set: bool,
     switch_hover: Option<(View, f64)>,
     /// Agents (ADR 0028): connections waiting for the person's answer, the answers for the app,
     /// the agents let in, and those the person disconnected, for the app.
@@ -443,12 +475,17 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
+        // The window opens the person's own projects: their audio is read wherever it is on a
+        // local disk, as projects name it (docs/spec/missing-files.md › Project file boundaries).
+        let mut projects = Projects::new();
+        projects.read_local_audio(true);
         Self {
-            projects: Projects::new(),
+            projects,
             shown_project: None,
             stashes: HashMap::new(),
             open_prompt: None,
             unsaved_prompt: None,
+            ara_prompt: None,
             save_then: None,
             quit_confirmed: false,
             quit_now: false,
@@ -474,6 +511,8 @@ impl App {
             detail_showing: detail_view::Showing::Clip,
             ara_told: None,
             ara_opened: None,
+            ara_was_open: None,
+            ara_open_asked: None,
             selected_device: None,
             device_focus: false,
             device_picks: Vec::new(),
@@ -482,11 +521,15 @@ impl App {
             detail_open: true,
             detail_height: DETAIL_HEIGHT,
             detail_cap: None,
+            frame_trace: crate::kit::frame_trace::FrameTrace::default(),
+            fitted_editors: std::collections::HashSet::new(),
+            editor_in_chain: false,
             rename: None,
             tab_switcher: None,
             clips_before: Vec::new(),
             detail_max: false,
             detail_drag: None,
+            window: None,
             editor_closed: false,
             last_clip: None,
             piano_grid: crate::detail::piano_roll_grid::PianoGrid::default(),
@@ -529,7 +572,11 @@ impl App {
             reveal: None,
             ram: None,
             next_ram: None,
+            audio_traced: (0, 0, 0),
             carry: None,
+            device_carry: None,
+            browser_part: 1.0,
+            waker_set: false,
             switch_hover: None,
             agent_asks: Vec::new(),
             agent_answers: Vec::new(),
@@ -596,7 +643,9 @@ impl App {
     /// A window whose `plugins.*` commands use `library` instead of the one in Suhina's
     /// settings folder (tests, portable setups).
     pub fn with_library(library: suhina_plugins::library::Library) -> Self {
-        Self { projects: Projects::with_library(library), ..Self::new() }
+        let mut projects = Projects::with_library(library);
+        projects.read_local_audio(true);
+        Self { projects, ..Self::new() }
     }
 
     /// Shows `session`, replacing the active project. `warnings` are what the importer skipped.
@@ -668,9 +717,13 @@ impl App {
     /// header column's side and width) carry over.
     fn restore(&mut self, id: ProjectId, stash: Stash) {
         let (headers_left, header_width) = (self.arrangement.headers_left, self.arrangement.header_width);
+        let returns_hidden = self.arrangement.returns_hidden;
+        let waveform_zoom = self.arrangement.waveform_zoom;
         self.view = stash.view;
         self.arrangement = stash.arrangement.unwrap_or_default();
         self.arrangement.headers_left = headers_left;
+        self.arrangement.returns_hidden = returns_hidden;
+        self.arrangement.waveform_zoom = waveform_zoom;
         self.arrangement.header_width = header_width;
         self.selected_device = stash.selected_device;
         self.revision = stash.revision.wrapping_add(1);
@@ -709,6 +762,7 @@ impl App {
     /// The window plug-in editors open over: the native handle of the app's main window (a
     /// Win32 `HWND`, an X11 window id), so they float above it (ADR 0006).
     pub fn set_editor_owner(&mut self, owner: Option<u64>) {
+        self.window = owner;
         self.projects.set_editor_owner(owner);
     }
 
@@ -876,12 +930,25 @@ impl App {
     /// selected in the Arrangement view when the setting **Play from** says so (or `selected`
     /// asks for it whatever the setting), from the play start marker otherwise.
     fn play_action(&self, selected: bool) -> Action {
-        let clip =
-            (selected || self.settings.play_from == PlayFrom::Clip).then(|| self.selected_arrangement_clip()).flatten();
+        // A clip an ARA plug-in edits plays from where its editor and a click set the position,
+        // never from the clip's start (the plug-in's timeline is where the user points).
+        // A click in the clip's body set where play starts; only a clip picked whole plays from
+        // its start.
+        let clip = (selected || self.settings.play_from == PlayFrom::Clip)
+            .then(|| self.selected_arrangement_clip())
+            .flatten()
+            .filter(|_| self.arrangement.picked_whole)
+            .filter(|(track, _)| !self.ara_track(*track));
         match clip {
             Some((_, clip)) => Action::new("transport.play", json!({ "from": "clip", "clip": clip.0 })),
             None => Action::new("transport.play", json!({})),
         }
+    }
+
+    /// Whether `track` has a plug-in that edits its clips (ARA, ADR 0028): the play-from-clip
+    /// rules give way there, always.
+    fn ara_track(&self, track: TrackId) -> bool {
+        self.session().is_some_and(|s| s.ara_device(track).is_some())
     }
 
     /// The clip selected in the Arrangement view, while that view is shown.
@@ -933,11 +1000,50 @@ impl App {
         }
     }
 
+    /// With tracing on, once a second: the audio's health when it went wrong since the last
+    /// look (`docs/debugging.md` › Audio dropouts): device buffers not filled in time, stretched
+    /// clips' frames not ready (they play as silence), and the engine's load when it is high.
+    fn trace_audio(&mut self) {
+        if !suhina_plugins::trace::on() {
+            return;
+        }
+        let Some(player) = self.session().and_then(Session::player) else { return };
+        let info = player.output_info();
+        let device = info.as_ref().map_or(0, |i| i.underruns);
+        let stretched = player.stretch_underruns();
+        let moves = player.stretch_moves();
+        let (misses, worst, worst_misses) = player.plugin_misses();
+        let worst_name = self
+            .session()
+            .and_then(|s| suhina_session::plugin_device_name(s.project(), worst))
+            .unwrap_or_else(|| "none".into());
+        let cpu = player.cpu_monitor().load_milli();
+        let running = player.monitor().running();
+        let (was_device, was_stretched, was_misses) = self.audio_traced;
+        if device > was_device || stretched > was_stretched || misses > was_misses || cpu >= 700 {
+            suhina_plugins::trace!(
+                "audio: device underruns {device} (+{}), stretched frames late {stretched} (+{}), edits that restarted stretched clips {moves}, plug-in blocks late {misses} (+{}, most {worst_name}: {worst_misses}), engine load {:.1} %, {}, buffer {} frames, block {}, latency {:.1} ms{}",
+                device.saturating_sub(was_device),
+                stretched.saturating_sub(was_stretched),
+                misses.saturating_sub(was_misses),
+                f64::from(cpu) / 10.0,
+                if running { "playing" } else { "stopped" },
+                info.as_ref().map_or(0, |i| i.buffer_frames),
+                info.as_ref().map_or(0, |i| i.engine_block),
+                info.as_ref().map_or(0.0, |i| i.latency_ms),
+                if info.as_ref().is_some_and(|i| i.failed) { ", the device failed" } else { "" },
+            );
+        }
+        self.audio_traced = (device, stretched, misses);
+    }
+
     /// Uses `settings` from now on, as loaded from the settings file.
     pub fn set_settings(&mut self, ctx: &egui::Context, settings: Settings) {
         self.projects.set_backup_settings(settings.backup, settings.backup_clean_up);
         motion::set_enabled(ctx, settings.animations);
         self.arrangement.headers_left = settings.track_headers == Side::Left;
+        self.arrangement.returns_hidden = settings.view.returns_hidden;
+        self.arrangement.waveform_zoom = settings.view.waveform_zoom as f32 / 100.0;
         if settings.map_window {
             self.sample_map.set_window(true, &mut self.browser);
         }
@@ -1295,17 +1401,47 @@ impl App {
     /// Saves the active project: to its own `.suhina` file, or, the first time and when `ask`,
     /// to a name and folder the user gives.
     fn save_active(&mut self, ask: bool) {
+        self.save_active_collecting(ask, false);
+    }
+
+    /// File › Collect and save: the audio the project plays from outside its folder is copied
+    /// into it, then the project is saved (asking for a name when it has no file yet).
+    fn collect_and_save(&mut self) {
+        self.save_active_collecting(false, true);
+    }
+
+    /// Copies the project's audio from outside `path`'s folder into it (`project.collect`).
+    /// Returns whether that went well.
+    fn collect_into(&mut self, path: &Path) -> bool {
+        let folder = path.parent().map_or_else(PathBuf::new, Path::to_path_buf);
+        match self.projects.execute("project.collect", &json!({ "folder": folder.display().to_string() })) {
+            Ok(_) => true,
+            Err(e) => {
+                self.status = Status::Error(e.0);
+                false
+            }
+        }
+    }
+
+    fn save_active_collecting(&mut self, ask: bool, collect: bool) {
         let Some(id) = self.projects.active() else { return };
         match self.own_file(id) {
             Some(path) if !ask => {
-                self.save_to(&path, false);
+                if !collect || self.collect_into(&path) {
+                    self.save_to(&path, false);
+                }
             }
             own => {
                 let folder =
                     own.as_deref().and_then(Path::parent).map_or_else(|| self.projects_folder(), Path::to_path_buf);
                 let name = self.projects.name(id).unwrap_or("Untitled").to_string();
-                self.save_prompt =
-                    Some(SavePrompt { template: false, name, folder: folder.display().to_string(), focus: true });
+                self.save_prompt = Some(SavePrompt {
+                    template: false,
+                    name,
+                    folder: folder.display().to_string(),
+                    focus: true,
+                    collect,
+                });
             }
         }
     }
@@ -1320,7 +1456,7 @@ impl App {
         let Some(id) = self.projects.active() else { return };
         let name = self.projects.name(id).unwrap_or("Template").to_string();
         let folder = self.templates_folder().display().to_string();
-        self.save_prompt = Some(SavePrompt { template: true, name, folder, focus: true });
+        self.save_prompt = Some(SavePrompt { template: true, name, folder, focus: true, collect: false });
     }
 
     /// Runs `project.save` on the active project; a template is a copy. Returns whether it was
@@ -1366,7 +1502,8 @@ impl App {
         if let Some(mut prompt) = self.save_prompt.take() {
             match project_dialog::show_save(ui, window, &mut prompt) {
                 Some(SaveChoice::Save(path)) => {
-                    let saved = self.save_to(&path, prompt.template);
+                    let collected = !prompt.collect || self.collect_into(&path);
+                    let saved = collected && self.save_to(&path, prompt.template);
                     if let Some(leaving) = self.save_then.take()
                         && saved
                     {
@@ -1406,14 +1543,17 @@ impl App {
             // The field sits on the clip's name, where the views drew it last frame: Enter or a
             // click elsewhere renames, Escape leaves the name as it was.
             let track = target.get("track").and_then(serde_json::Value::as_u64).unwrap_or(0);
-            // An arrangement clip by its id, a slot's clip by its track and scene.
-            let key = match target.get("clip").and_then(serde_json::Value::as_u64) {
-                Some(clip) => egui::Id::new((NAME_RECT_CLIP, clip)),
-                None => {
+            // A track by its id, an arrangement clip by its id, a slot's clip by its track and scene.
+            let renamed_track = target.get("rename_track").and_then(serde_json::Value::as_u64);
+            let key = match (renamed_track, target.get("clip").and_then(serde_json::Value::as_u64)) {
+                (Some(track), _) => egui::Id::new((NAME_RECT_TRACK, track)),
+                (None, Some(clip)) => egui::Id::new((NAME_RECT_CLIP, clip)),
+                (None, None) => {
                     let scene = target.get("scene").and_then(serde_json::Value::as_u64).unwrap_or(0);
                     egui::Id::new((NAME_RECT_SLOT, track, scene))
                 }
             };
+            let what = if renamed_track.is_some() { "Track name" } else { "Clip name" };
             let now = ui.ctx().cumulative_pass_nr();
             let place = ui
                 .ctx()
@@ -1433,9 +1573,7 @@ impl App {
                                     .font(theme::ui_font(theme::TEXT_SMALL))
                                     .desired_width(rect.width().max(120.0)),
                             );
-                            field.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Clip name")
-                            });
+                            field.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, what));
                             if !focused {
                                 field.request_focus();
                             }
@@ -1443,9 +1581,23 @@ impl App {
                             if escape {
                                 keep = false;
                             } else if field.lost_focus() && focused {
-                                let mut params = target.clone();
-                                params["name"] = json!(draft.trim());
-                                apply = Some(Action::new("clip.rename", params));
+                                let name = draft.trim();
+                                apply = match (renamed_track, target.get("clips")) {
+                                    // A track keeps a name: an empty one leaves it as it was.
+                                    (Some(_), _) if name.is_empty() => None,
+                                    (Some(track), _) => {
+                                        Some(Action::new("track.rename", json!({ "track": track, "name": name })))
+                                    }
+                                    (None, Some(clips)) => Some(Action::new(
+                                        "clip.renameMany",
+                                        json!({ "clips": clips.clone(), "name": name }),
+                                    )),
+                                    (None, None) => {
+                                        let mut params = target.clone();
+                                        params["name"] = json!(name);
+                                        Some(Action::new("clip.rename", params))
+                                    }
+                                };
                                 keep = false;
                             }
                         });
@@ -1495,6 +1647,14 @@ impl App {
                 None => {}
             }
         }
+        if let Some((action, plugin)) = self.ara_prompt.take() {
+            match project_dialog::show_ara_edits(ui, window, &plugin) {
+                Some(AraEditsChoice::Keep) => self.run(&self.with_ara_edits(&action, "keep")),
+                Some(AraEditsChoice::New) => self.run(&self.with_ara_edits(&action, "new")),
+                Some(AraEditsChoice::Cancel) => {}
+                None => self.ara_prompt = Some((action, plugin)),
+            }
+        }
         if let Some(leaving) = self.unsaved_prompt.take() {
             let name = self.projects.name(leaving.project).unwrap_or("Untitled").to_string();
             let doing = match leaving.then {
@@ -1510,6 +1670,73 @@ impl App {
                 None => self.unsaved_prompt = Some(leaving),
             }
         }
+    }
+
+    /// The name of the plug-in that edits clips which `action` moves or copies to another track
+    /// (ADR 0028 step 6), so Keep edits or Copy as new is asked first; `None` otherwise, and for
+    /// a move that already says (`ara_edits`).
+    fn ara_clips_leaving(&self, action: &Action) -> Option<String> {
+        if !matches!(action.id, "clip.move" | "clip.moveMany") || !action.params["ara_edits"].is_null() {
+            return None;
+        }
+        let p = &action.params;
+        let to = p["to_track"].as_u64().and_then(|t| u32::try_from(t).ok()).map(TrackId);
+        let other_track =
+            to.is_some() || p["tracks_by"].as_i64().is_some_and(|by| by != 0) || p["to_new_track"] == true;
+        if !other_track {
+            return None;
+        }
+        let session = self.session()?;
+        let project = session.project();
+        let ids: Vec<u32> = match action.id {
+            "clip.move" => p["clip"].as_u64().and_then(|c| u32::try_from(c).ok()).into_iter().collect(),
+            _ => p["clips"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["clip"].as_u64().and_then(|c| u32::try_from(c).ok()))
+                .collect(),
+        };
+        ids.iter().find_map(|id| {
+            let lane = project.arrangement.lanes.iter().find(|l| l.clips.iter().any(|c| c.id.0 == *id))?;
+            let track = lane.track?;
+            if to == Some(track) {
+                return None;
+            }
+            let device = session.ara_device(track)?;
+            let channel = project.tracks.iter().find(|t| t.id == track)?.channel?;
+            let channel = project.channels.iter().find(|c| c.id == channel)?;
+            channel.devices.get(device).map(|d| d.name.clone())
+        })
+    }
+
+    /// `action` (a clip's move or a selection's) as `clip.moveMany` with `ara_edits` set.
+    fn with_ara_edits(&self, action: &Action, edits: &str) -> Action {
+        let mut params = action.params.clone();
+        if action.id == "clip.move" {
+            let id = params["clip"].as_u64().unwrap_or_default();
+            let start = self
+                .session()
+                .and_then(|s| {
+                    s.project()
+                        .arrangement
+                        .lanes
+                        .iter()
+                        .flat_map(|l| &l.clips)
+                        .find(|c| u64::from(c.id.0) == id)
+                        .map(|c| c.start)
+                })
+                .unwrap_or_default();
+            let beats = params["start"].as_f64().unwrap_or(start) - start;
+            if let Some(map) = params.as_object_mut() {
+                map.remove("clip");
+                map.remove("start");
+            }
+            params["clips"] = json!([{ "clip": id }]);
+            params["beats"] = json!(beats);
+        }
+        params["ara_edits"] = json!(edits);
+        Action::new("clip.moveMany", params)
     }
 
     /// The window's title: the active project, with a dot while it has unsaved changes.
@@ -1642,6 +1869,26 @@ impl App {
             self.tab_switcher = None;
             return;
         }
+        // Down and Up move through the list too, as Tab and Shift+Tab do; the keys go no further
+        // while it is open (#681).
+        let (down, up) = ctx.input_mut(|i| {
+            let mut moves = (0usize, 0usize);
+            i.events.retain(|event| match event {
+                egui::Event::Key { key: egui::Key::ArrowDown, pressed: true, .. } => {
+                    moves.0 += 1;
+                    false
+                }
+                egui::Event::Key { key: egui::Key::ArrowUp, pressed: true, .. } => {
+                    moves.1 += 1;
+                    false
+                }
+                _ => true,
+            });
+            moves
+        });
+        let count = ids.len();
+        let picked = (picked + down % count + count - up % count) % count;
+        self.tab_switcher = Some(picked);
         let mut chosen = None;
         egui::Area::new(egui::Id::new("project-switcher"))
             .order(egui::Order::Foreground)
@@ -1772,6 +2019,27 @@ impl App {
         // A critical operation is backed up first, when the settings say so.
         self.projects.back_up_before(action.id);
         let Ok(session) = self.projects.session_mut(None) else { return };
+        // An audio track armed while it hears no input gets the device's first input (a stereo
+        // pair where there are two channels), so Record has something to record and stays on
+        // (#682). Without one, recording refuses the track.
+        if action.id == "track.setArm"
+            && action.params["armed"].as_bool() == Some(true)
+            && let Some(track) = action.params["track"].as_u64().and_then(|t| u32::try_from(t).ok()).map(TrackId)
+            && session.project().tracks.iter().any(|t| {
+                t.id == track && !t.content.notes && t.audio_input.channels == suhina_engine::model::InputChannels::None
+            })
+        {
+            let inputs = session.player().and_then(suhina_session::Player::output_info).map_or(0, |i| i.input_channels);
+            let input = match inputs {
+                0 => None,
+                1 => Some("1"),
+                _ => Some("1/2"),
+            };
+            if let Some(input) = input {
+                let _ = session.execute("track.setAudioInput", &json!({ "track": track.0, "input": input }));
+            }
+        }
+        suhina_plugins::trace!("action {} {}", action.id, action.params);
         match session.execute(action.id, &action.params) {
             Ok(result) => {
                 // A clip made by a double-click is selected, ready to edit: in the Arrangement
@@ -1787,8 +2055,24 @@ impl App {
                         (None, None) => self.view.selected = Some(track),
                     }
                 }
+                // Duplicated devices: the copies are picked, so the next Ctrl+D copies them on.
+                if action.id == "device.duplicateMany"
+                    && let Some(track) = action.params["track"].as_u64().and_then(|t| u32::try_from(t).ok())
+                    && let Some(made) = result["devices"].as_array()
+                {
+                    let copies: Vec<(TrackId, usize)> = made
+                        .iter()
+                        .filter_map(|d| Some((TrackId(track), usize::try_from(d.as_u64()?).ok()?)))
+                        .collect();
+                    if let Some(last) = copies.last().copied() {
+                        self.selected_device = Some(last);
+                        self.device_picks = copies;
+                    }
+                }
                 // Duplicated clips: the copies are selected, so the next Ctrl+D copies them on.
-                if action.id == "clip.duplicate"
+                // So are the copies a Ctrl-drag made, on whichever track they landed (#692).
+                if (action.id == "clip.duplicate"
+                    || (action.id == "clip.moveMany" && action.params["copy"].as_bool() == Some(true)))
                     && let Some(made) = result["clips"].as_array()
                 {
                     let copies: Vec<(TrackId, ClipId)> = made
@@ -1815,6 +2099,15 @@ impl App {
                     self.status = Status::Done(done);
                 }
             }
+            // Recording and consolidating audio write files next to the project: an unsaved one
+            // is saved first, so the next try works (#682, #704).
+            Err(e) if e.0.starts_with("save the project first") => {
+                self.status = Status::Hint(format!(
+                    "Save the project first: {}",
+                    e.0.trim_start_matches("save the project first: ")
+                ));
+                self.save_active(false);
+            }
             Err(e) => self.status = Status::Error(e.0),
         }
     }
@@ -1834,7 +2127,20 @@ impl App {
     /// should hear about in the status bar. While the project has plug-ins, the window looks
     /// again a few times a second, so one that starts or crashes is noticed without input.
     fn poll_plugins(&mut self, ctx: &egui::Context) {
+        // A host's unasked news (Space in a plug-in's window, an ARA plug-in's transport request)
+        // wakes the window at once (#714).
+        if !self.waker_set {
+            let ctx = ctx.clone();
+            suhina_plugins::set_waker(move || ctx.request_repaint());
+            self.waker_set = true;
+        }
         self.projects.set_editor_embedding(self.settings.plugin_editors == EditorPlacement::DeviceView);
+        // Tracks keep the colour they show when others come and go (#690, #709).
+        if let Ok(session) = self.projects.session_mut(None) {
+            let palette = crate::interaction::grid::track_palette();
+            let fixed = self.settings.view.fixed_track_colour.then(|| palette[0]);
+            session.set_track_colours(palette.to_vec(), fixed);
+        }
         let notices = self.projects.poll_plugins();
         if let Some(last) = notices.last() {
             self.status = Status::Hint(last.clone());
@@ -1866,6 +2172,7 @@ impl App {
 
     /// Draws the window into `ui` and runs what the user asked for.
     pub fn ui(&mut self, ui: &mut Ui) {
+        self.frame_trace.start();
         if self.projects.active().is_some() {
             // The start panel reads its lists again when it next appears.
             self.start_lists = false;
@@ -1878,18 +2185,26 @@ impl App {
         });
         self.piano_roll.notes_replace = self.settings.view.notes_replace;
         self.arrangement.time_select_ctrl = self.settings.view.time_select_ctrl;
+        self.arrangement.name_bar_moves = !self.settings.view.clip_halves;
+        self.arrangement.grid_in_clips = self.settings.view.grid_in_clips;
         self.arrangement.stretch_alt = self.settings.view.stretch_alt;
         // Any press ends a device panel's hold on Delete and the mute key; a click on a panel
         // takes it again when the button comes up, whether or not the detail area is shown.
         if ui.input(|i| i.pointer.primary_pressed()) {
             self.device_focus = false;
         }
+        self.frame_trace.mark("input");
         self.follow_active();
+        self.frame_trace.mark("follow project");
         self.poll_scan(ui.ctx());
+        self.frame_trace.mark("plug-in scan");
         self.poll_plugins(ui.ctx());
+        self.frame_trace.mark("plug-ins");
         self.tick_backups(ui.ctx());
+        self.frame_trace.mark("backups");
         // The sample map's analysis goes on in the background; take in what it finished.
-        self.projects.poll_sound_map();
+        suhina_plugins::trace::timed("sample map analysis poll", || self.projects.poll_sound_map());
+        self.frame_trace.mark("sample map analysis");
         let dropped = self.dropped_files(ui);
         keys_for_shortcuts(ui.ctx());
         self.launch_keys(ui, &mut actions);
@@ -1898,13 +2213,16 @@ impl App {
         }
         self.shortcuts(ui, &mut actions);
         self.apply_zoom(ui.ctx());
+        self.frame_trace.mark("keys");
         self.sample_map_window(ui.ctx(), &mut actions);
+        self.frame_trace.mark("sample map window");
         let scale = if self.settings.waveform_db {
             crate::kit::waveform::Scale::Db
         } else {
             crate::kit::waveform::Scale::Linear
         };
         crate::kit::waveform::set_scale(ui.ctx(), scale);
+        self.frame_trace.mark("input");
 
         let grid = self.session().map(|s| {
             let mut grid = Grid::build(s.project(), s.player().map(|p| p.monitor()));
@@ -1932,17 +2250,44 @@ impl App {
             }
             self.ram = own.map_or(hosts, |own| Some(own.saturating_add(hosts.unwrap_or(0)))).or(hosts);
             self.next_ram = Some(ui.ctx().time() + 1.0);
+            self.trace_audio();
         }
         let ram = self.ram;
+        self.frame_trace.mark("grid");
+        // A press on the window's own controls: keys typed next are the window's, not those of an
+        // embedded plug-in editor clicked before.
+        if ui.input(|i| i.pointer.any_pressed())
+            && let Some(window) = self.window
+        {
+            suhina_plugins::take_keyboard_back(window);
+        }
         // Space pressed in a plug-in's editor window: play or stop, as Space here does.
         for _ in 0..suhina_plugins::take_transport_keys() {
             self.do_action("transport.toggle", &mut actions);
         }
+        // What an ARA plug-in asked of the transport: its play and stop buttons, a click in its
+        // timeline, in seconds of song time through the tempo map (#717).
+        for request in suhina_plugins::take_ara_playback() {
+            use suhina_plugins::protocol::AraPlayback;
+            match request {
+                AraPlayback::Start => actions.push(Action::new("transport.play", json!({}))),
+                AraPlayback::Stop => actions.push(Action::new("transport.stop", json!({}))),
+                AraPlayback::Position(seconds) => {
+                    if let Some(session) = self.session() {
+                        let beats = session.project().transport.tempo_map(1.0).beat_at(seconds);
+                        suhina_plugins::trace!("app: ara position {seconds:.3}s -> beat {beats:.3}");
+                        actions.push(Action::new("transport.setPosition", json!({ "beats": beats })));
+                    }
+                }
+            }
+        }
+        self.frame_trace.mark("plug-in requests");
 
         egui::Panel::top("menu-bar")
             .exact_size(theme::MENU_BAR)
             .frame(egui::Frame::NONE.fill(theme::panel_background()).inner_margin(egui::Margin::symmetric(4, 0)))
             .show(ui, |ui| self.menu_bar(ui, &mut actions));
+        self.frame_trace.mark("menu bar");
         if self.projects.len() >= 2 {
             egui::Panel::top("tabs")
                 .exact_size(TABS)
@@ -1953,10 +2298,12 @@ impl App {
             .exact_size(theme::CONTROL_BAR)
             .frame(egui::Frame::NONE.fill(theme::panel_background()))
             .show(ui, |ui| self.control_bar(ui, grid.as_ref(), cpu, ram, &mut actions));
+        self.frame_trace.mark("control bar");
         egui::Panel::bottom("status-bar")
             .exact_size(theme::STATUS_BAR)
             .frame(egui::Frame::NONE.fill(theme::panel_background()))
             .show(ui, |ui| self.status_bar(ui, grid.as_ref()));
+        self.frame_trace.mark("bars");
         // Samples and MIDI files from the system: dropped this frame, or still over the window.
         let system = match (self.browser.drag.is_some(), dropped.is_empty()) {
             (true, _) => None,
@@ -1986,8 +2333,13 @@ impl App {
                 && self.settings.device_layout != DeviceLayout::Stack;
             // The browser stays hidden on the start panel (nothing to drop into); its setting keeps
             // its value for when a project opens.
-            let browser_shown = self.settings.browser_open && !self.start_panel_open();
+            let browser_wanted = self.settings.browser_open && !self.start_panel_open();
+            // It slides in and out from its side, with animations on (#708).
+            self.browser_part = motion::toward(ui.ctx(), Id::new("browser-shown"), browser_wanted, BROWSER_SLIDE);
+            let browser_shown = self.browser_part > 0.001;
+            self.frame_trace.mark("bars");
             let inner = if browser_shown && !full_width { self.browser_panel(ui, inner) } else { inner };
+            self.frame_trace.mark("browser");
             let mut view_area = inner;
             self.detail_drop = None;
             self.sample_drops.clear();
@@ -2028,6 +2380,7 @@ impl App {
                     inner
                 }
             };
+            self.frame_trace.mark("detail");
             let inner = if browser_shown && full_width {
                 let rest = self.browser_panel(ui, inner);
                 view_area = Rect::from_min_max(
@@ -2038,14 +2391,25 @@ impl App {
             } else {
                 inner
             };
+            self.frame_trace.mark("browser");
             // A drag from the browser, or files from the system: the views say what is under the
             // pointer.
             let dragged = self.browser.drag.as_ref().or(system.as_ref().map(|(items, _)| items));
             let probe =
                 dragged.and_then(|items| self.drag_pointer(ui.ctx()).map(|pointer| DropProbe::new(pointer, items)));
-            // A carried clip probes the same way, for a slot or a lane only.
-            let probe = match (&self.carry, ui.ctx().pointer_latest_pos()) {
-                (Some(_), Some(pointer)) => Some(DropProbe::for_clip(pointer)),
+            // A carried clip probes the same way, for a slot or a lane only; a carried device for a
+            // track, as a dropped one does.
+            if let Some(start) = ui.ctx().data_mut(|d| {
+                let id = Id::new(drop::DEVICE_CARRY);
+                let start = d.get_temp::<(TrackId, usize)>(id);
+                d.remove::<(TrackId, usize)>(id);
+                start
+            }) {
+                self.device_carry = Some(start);
+            }
+            let probe = match (&self.carry, self.device_carry, ui.ctx().pointer_latest_pos()) {
+                (Some(_), _, Some(pointer)) => Some(DropProbe::for_clip(pointer)),
+                (None, Some(_), Some(pointer)) => Some(DropProbe::for_device(pointer)),
                 _ => probe,
             };
             self.view.can_paste = self.session().is_some_and(|s| s.copied_clip_is_audio().is_some());
@@ -2074,6 +2438,26 @@ impl App {
                 if panel.show(ui, inner, browser, projects, settings, self.revision) {
                     self.settings_changed = true;
                 }
+                // A close button at its top right, and Escape, put the views back (#710).
+                let close =
+                    Rect::from_min_size(Pos2::new(inner.right() - 28.0, inner.top() + 4.0), Vec2::new(24.0, 20.0));
+                let over =
+                    ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::new("sample-map-close")));
+                let response = widgets::button_area(ui, close, Id::new("sample-map-close"), "Close sample map")
+                    .on_hover_text("Close the sample map (Esc)");
+                let fill =
+                    motion::mix(theme::control_background(), theme::control_hover(), widgets::hover(ui, &response));
+                over.rect_filled(close, 0.0, fill);
+                let ink = theme::text_primary();
+                for (from, to) in
+                    [(Vec2::new(-4.0, -4.0), Vec2::new(4.0, 4.0)), (Vec2::new(-4.0, 4.0), Vec2::new(4.0, -4.0))]
+                {
+                    over.line_segment([close.center() + from, close.center() + to], egui::Stroke::new(1.3, ink));
+                }
+                let escape = !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(Key::Escape));
+                if response.clicked() || escape {
+                    self.close_large_map();
+                }
             } else {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| match (&grid, self.shown) {
                     // The piano roll pulled to the top over the whole window: no view.
@@ -2087,7 +2471,10 @@ impl App {
                         self.view.strip_fader = self.settings.view.strip_fader as f32;
                         self.view.double_click_does_nothing = !self.settings.view.double_click_clip;
                         self.view.device_picks = self.device_picks();
+                        self.frame_trace.mark("view setup");
                         session_view::show(ui, grid, &progress, &mut self.view, &mut actions);
+                        self.frame_trace.mark("session view");
+                        self.frame_trace.note(|| format!("session view, {} tracks", grid.columns.len()));
                         match self.view.device_event.take() {
                             Some(session_view::DeviceEvent::Pick { track, index, add, run }) => {
                                 self.pick_device(track, index, add, run);
@@ -2142,6 +2529,8 @@ impl App {
                             self.arrangement.reconcile(session.project());
                             // Clips and their notes are rebuilt only after the project changed; the
                             // playhead is read every frame.
+                            self.frame_trace.mark("view setup");
+                            let mut rebuilt = false;
                             let timeline = match self.timeline.take() {
                                 Some((revision, folds, mut timeline))
                                     if revision == self.revision && folds == self.arrangement.folds =>
@@ -2150,11 +2539,34 @@ impl App {
                                     timeline
                                 }
                                 before => {
+                                    rebuilt = true;
                                     // Stacked clips keep the sub-rows the last build gave them.
                                     let rows = before.map(|(_, _, t)| t.stack_rows).unwrap_or_default();
                                     let mut timeline = Timeline::build_after(session.project(), monitor, &rows);
                                     for lane in &mut timeline.lanes {
                                         lane.armed = session.is_armed(lane.track);
+                                    }
+                                    // A file a command put in the pool (a consolidated range)
+                                    // was never decoded by the opening or a drop: its waveform is
+                                    // made here, once, or the clip showed none and looked muted.
+                                    let made: Vec<(String, std::sync::Arc<crate::kit::waveform::Peaks>)> = timeline
+                                        .lanes
+                                        .iter()
+                                        .flat_map(|l| &l.clips)
+                                        .filter_map(|c| c.audio_view.as_ref())
+                                        .filter(|v| !self.waveforms.contains_key(&v.file))
+                                        .filter_map(|v| {
+                                            let data = session.audio().files.get(&v.file)?;
+                                            Some((
+                                                v.file.clone(),
+                                                std::sync::Arc::new(crate::kit::waveform::peaks(data)),
+                                            ))
+                                        })
+                                        .collect();
+                                    if !made.is_empty() {
+                                        let mut waveforms = (*self.waveforms).clone();
+                                        waveforms.extend(made);
+                                        self.waveforms = std::sync::Arc::new(waveforms);
                                     }
                                     timeline.waveforms = self.waveforms.clone();
                                     timeline
@@ -2164,16 +2576,46 @@ impl App {
                             // project keeps (`launcher.setQuantization`).
                             self.arrangement.grid = session.quantization();
                             let mut timeline = timeline;
+                            timeline.follow_automation(session.project());
                             timeline.midi_ports = self.projects.midi_ports().to_vec();
+                            // What ARA plug-ins found in the audio clips, as it is now (#720).
+                            timeline.ara_notes = timeline
+                                .lanes
+                                .iter()
+                                .flat_map(|l| &l.clips)
+                                .filter(|c| c.audio)
+                                .filter_map(|c| Some((c.id, session.clip_notes(c.id)?.clone())))
+                                .collect();
                             timeline.input_channels = session
                                 .player()
                                 .and_then(suhina_session::Player::output_info)
                                 .map_or(0, |i| i.input_channels);
+                            self.frame_trace.mark("timeline");
                             arrangement_view::show(ui, &timeline, &mut self.arrangement, &mut actions);
+                            self.frame_trace.mark("arrangement view");
+                            self.frame_trace.note(|| {
+                                let clips: usize = timeline.lanes.iter().map(|l| l.clips.len()).sum();
+                                format!(
+                                    "arrangement, {} lanes, {clips} clips, {} running, timeline {}",
+                                    timeline.lanes.len(),
+                                    if timeline.running { "playing" } else { "stopped" },
+                                    if rebuilt { "rebuilt" } else { "kept" },
+                                )
+                            });
                             // Clips picked while stopped, however (a click, a rectangle, Ctrl+A, a
-                            // paste): play starts from the first of them.
+                            // paste): play starts from the first of them, as the setting says (#721).
                             let picked = self.arrangement.selected_clips();
-                            if picked != self.clips_before.as_slice() {
+                            // Never for a clip an ARA plug-in edits: its editor and a click on
+                            // the clip set the position there.
+                            let ara = picked.iter().any(|(track, _)| session.ara_device(*track).is_some());
+                            // Nor for a clip picked by a click in its body: play starts where
+                            // that click put it.
+                            let body = !self.arrangement.picked_whole;
+                            if picked != self.clips_before.as_slice()
+                                && (!self.settings.view.play_from_clip || ara || body)
+                            {
+                                self.clips_before = picked.to_vec();
+                            } else if picked != self.clips_before.as_slice() {
                                 let first = picked
                                     .iter()
                                     .filter_map(|(track, id)| {
@@ -2201,6 +2643,15 @@ impl App {
                                 self.settings.track_headers = side;
                                 self.settings_changed = true;
                             }
+                            if self.arrangement.returns_hidden != self.settings.view.returns_hidden {
+                                self.settings.view.returns_hidden = self.arrangement.returns_hidden;
+                                self.settings_changed = true;
+                            }
+                            let zoom = (self.arrangement.waveform_zoom * 100.0).round() as u32;
+                            if zoom != self.settings.view.waveform_zoom {
+                                self.settings.view.waveform_zoom = zoom;
+                                self.settings_changed = true;
+                            }
                         }
                     }
                     (None, _) => self.start_panel(ui),
@@ -2209,11 +2660,14 @@ impl App {
             drop_overlay(ui, view_area);
         });
         self.browser_drag(ui);
+        self.device_drag(ui);
         if let Some((items, dropped)) = system {
             self.system_drag(ui, items, dropped);
         }
+        self.frame_trace.mark("views");
         self.carry_clip(ui);
-        self.poll_drop(ui.ctx());
+        suhina_plugins::trace::timed("drop poll", || self.poll_drop(ui.ctx()));
+        self.frame_trace.mark("drags");
 
         self.plugin_dialog(ui, window);
         self.project_dialogs(ui, window);
@@ -2223,6 +2677,9 @@ impl App {
             self.settings_dialog(ui, window);
         }
         self.update_title(ui.ctx());
+        self.frame_trace.mark("dialogs");
+        let actions: Vec<Action> = actions.into_iter().map(|action| self.remove_every_pick(action)).collect();
+        let ran = actions.len();
         for action in &actions {
             // Closing a project with unsaved changes asks first (Save, Don't save, Cancel).
             let closing = (action.id == "projects.close")
@@ -2257,6 +2714,11 @@ impl App {
                 && self.unsaved(project)
             {
                 self.unsaved_prompt = Some(Leaving { project, then: AfterLeaving::Close });
+                continue;
+            }
+            // Clips a plug-in edits, going to another track: Keep edits or Copy as new first.
+            if let Some(plugin) = self.ara_clips_leaving(action) {
+                self.ara_prompt = Some((action.clone(), plugin));
                 continue;
             }
             // What the chain was, before a removal about to run: its undo or redo later says
@@ -2310,6 +2772,8 @@ impl App {
                 ui.ctx().copy_text(format!("Suhina: {what} copied"));
             }
         }
+        self.frame_trace.mark("commands");
+        self.frame_trace.note(|| format!("{ran} commands"));
         self.guard_quit(ui.ctx());
         // The views drew before the actions and drops of this frame ran: when the project changed,
         // ask for a frame at once, so what the user just did (a moved clip, a file that landed)
@@ -2322,6 +2786,7 @@ impl App {
         }) {
             ui.ctx().request_repaint();
         }
+        self.frame_trace.finish();
     }
 
     /// File › Open recent: the recent projects the project dialog lists, newest first, each opened
@@ -2435,7 +2900,7 @@ impl App {
             session.select_ara_clip(track, Some(clip));
         }
         self.ara_told = Some((track, Some(clip)));
-        self.ara_opened = Some((track, clip));
+        self.ara_opened = None;
         let open = self.session_mut_report(track, device).is_some_and(|r| r.editor_open);
         if !open {
             self.run(&Action::new("device.openEditor", json!({ "track": track.0, "device": device })));
@@ -2526,17 +2991,26 @@ impl App {
                 }
             }
         }
+        // An editor embedded in a panel: the area opens tall enough for it, once, as it opens;
+        // after that the user sets the height and the editor is fitted to it (#689). An ARA
+        // editor in the clip's place is fitted to the room there instead.
+        let embedded: Vec<_> = reports
+            .iter()
+            .filter(|(_, r)| !r.ara && r.editor_embedded.is_some())
+            .map(|(k, r)| (k.clone(), r.editor_embedded))
+            .collect();
+        self.editor_in_chain = !embedded.is_empty();
         if !stacked {
             let scale = ui.ctx().pixels_per_point();
-            // An ARA editor in the clip's place is fitted to the room there instead.
-            let needed = reports
-                .values()
-                .filter(|r| !r.ara)
-                .filter_map(|r| r.editor_embedded)
+            let needed = embedded
+                .iter()
+                .filter(|(key, _)| !self.fitted_editors.contains(key))
+                .filter_map(|(_, embedded)| *embedded)
                 .map(|(_, height)| detail_view::row_height_with_editor(height, scale))
                 .fold(0.0, f32::max);
             self.detail_height = self.detail_height.max(needed);
         }
+        self.fitted_editors = embedded.into_iter().map(|(key, _)| key).collect();
         // A MIDI clip shows its notes in the piano roll beside its properties; under the
         // Arrangement view it can be pulled to the top.
         let mut piano = self.piano_clip(clip);
@@ -2574,24 +3048,46 @@ impl App {
             }
             self.ara_told = told;
         }
-        if let Some((t, c, device, open)) = ara
-            && self.detail_showing == detail_view::Showing::Clip
-            && self.ara_opened != Some((t, c))
-        {
-            self.ara_opened = Some((t, c));
-            if !open {
-                actions.push(Action::new("device.openEditor", json!({ "track": t.0, "device": device })));
+        // The editor opens in the clip's place on its own, and again until it is open: a plug-in
+        // that is busy or loading again misses the first ask. Closed by the user while its clip
+        // is shown, it stays closed for that clip (#719).
+        match ara.filter(|_| self.detail_showing == detail_view::Showing::Clip) {
+            Some((t, c, device, open)) => {
+                let key = (t, c);
+                if open {
+                    self.ara_was_open = Some(key);
+                } else {
+                    if self.ara_was_open == Some(key) {
+                        self.ara_opened = Some(key);
+                    }
+                    self.ara_was_open = None;
+                    if self.ara_opened.is_some_and(|closed| closed != key) {
+                        self.ara_opened = None;
+                    }
+                    let now = ui.input(|i| i.time);
+                    let due = self.ara_open_asked.is_none_or(|(asked, at)| asked != key || now - at >= 1.0);
+                    if self.ara_opened != Some(key) && due {
+                        self.ara_open_asked = Some((key, now));
+                        actions.push(Action::new("device.openEditor", json!({ "track": t.0, "device": device })));
+                        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+                    }
+                }
             }
+            // No bound plug-in shown (a reload, another view): nothing was closed by hand.
+            None => self.ara_was_open = None,
         }
         let least = self.least_detail_height();
-        let pullable = !stacked && piano.is_some() && self.shown == View::Arrangement;
+        // The piano roll, or an ARA plug-in's editor in the clip's place, can be pulled to the
+        // top, the edited track's lane above it (Melodyne as a MIDI clip's notes are).
+        let pullable = !stacked && (piano.is_some() || ara.is_some()) && self.shown == View::Arrangement;
         let pulled = pullable && self.detail_max;
         // With the switch on Devices the track's devices take the editor's place, and nothing is
         // pulled to the top (› Where it opens in `docs/spec/ui-clip-editor.md`).
         let switch = (piano.is_some() || ara.is_some()).then_some(self.detail_showing);
         let ara = ara.filter(|_| self.detail_showing == detail_view::Showing::Clip);
         let piano = piano.filter(|_| self.detail_showing == detail_view::Showing::Clip);
-        let (pullable, pulled) = (pullable && piano.is_some(), pulled && piano.is_some());
+        let edits = piano.is_some() || ara.is_some();
+        let (pullable, pulled) = (pullable && edits, pulled && edits);
         let focus = match clip {
             Some(detail_view::ClipRef::Arrangement(track, _))
                 if pulled && self.settings.piano_roll_top == PianoRollTop::Track =>
@@ -2601,6 +3097,16 @@ impl App {
             _ => None,
         };
         self.arrangement.focus = focus;
+        suhina_plugins::trace::state(
+            "detail",
+            format!(
+                "ara {:?} piano {} pullable {pullable} pulled {pulled} detail_max {} focus {focus:?} showing {:?}",
+                ara.map(|(t, c, d, open)| (t.0, c.0, d, open)),
+                piano.is_some(),
+                self.detail_max,
+                self.detail_showing,
+            ),
+        );
         let (view, splitter, detail) = if stacked {
             self.detail_width = self.detail_width.clamp(180.0, (area.width() - 240.0).max(180.0));
             let x = area.right() - self.detail_width;
@@ -2610,12 +3116,15 @@ impl App {
                 Rect::from_min_max(Pos2::new(x, area.top()), area.max),
             )
         } else {
-            // Only the chain shown: no taller than its panels.
+            // Only the chain shown: no taller than its panels, but never held under the area's
+            // default height. A chain of short panels (a plug-in whose editor is not embedded,
+            // or no devices at all) would otherwise keep the area too short to drag up.
             if piano.is_none()
                 && clip.is_none()
+                && !self.editor_in_chain
                 && let Some(cap) = self.detail_cap
             {
-                self.detail_height = self.detail_height.min(cap.max(least));
+                self.detail_height = self.detail_height.min(cap.max(least).max(DETAIL_HEIGHT));
             }
             self.detail_height = self.detail_height.clamp(least, (area.height() - MIN_VIEW).max(least));
             let y = if pulled {
@@ -2639,12 +3148,11 @@ impl App {
         let response =
             ui.interact(splitter, Id::new("detail-splitter"), Sense::click_and_drag()).on_hover_cursor(cursor);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Detail area splitter"));
-        if response.double_clicked() && pullable {
-            self.detail_max = !self.detail_max;
-        } else if response.double_clicked() {
-            // Elsewhere a double-click puts the detail area back to its default size.
-            self.detail_height = DETAIL_HEIGHT;
-            self.detail_width = detail_view::STACK_WIDTH;
+        // A double-click closes the detail area, as a double-click on a split view's divider does
+        // on macOS; a double-click on the closed splitter opens it at its default size.
+        if response.double_clicked() {
+            self.detail_max = false;
+            self.hide_editor();
         }
         if response.dragged_by(egui::PointerButton::Primary) {
             let delta = response.drag_delta();
@@ -2678,6 +3186,13 @@ impl App {
         let mut shown = self.session().map_or(detail_view::Detail::Nothing, |s| {
             detail_view::build_with(s.project(), track, clip, &mut |t, p| reports.remove(&(t, p.to_vec())), nam_lists)
         });
+        // Automated parameters show what plays, while it plays (#706).
+        if let Some(session) = self.session()
+            && let Some(monitor) = session.player().map(suhina_session::Player::monitor)
+            && monitor.running()
+        {
+            shown.follow_automation(session.project(), monitor.beat());
+        }
         if let Some(session) = self.session() {
             for channel in session.project().channels.iter().filter(|channel| {
                 session
@@ -2795,7 +3310,7 @@ impl App {
         let piano_roll = &mut self.piano_roll;
         let picked = ui.scope_builder(egui::UiBuilder::new().max_rect(detail), |ui| {
             if let (Some(piano), detail_view::Detail::Clip(info, _)) = (&piano, &shown) {
-                let (mut rest, picked) = detail_view::show_clip_column(ui, info, stacked);
+                let (mut rest, picked) = detail_view::show_clip_column(ui, info, stacked, actions);
                 let picked = detail_view::Picked { showing: picked.showing, ..detail_view::Picked::default() };
                 // The MIDI tools column, between the clip's properties and the note grid. With the
                 // detail area stacked there is no room beside the notes, so it is not drawn there
@@ -2813,7 +3328,7 @@ impl App {
                 piano_roll::show(ui, rest, piano, piano_roll, cx, actions);
                 picked
             } else if let (Some((_, _, device, _)), detail_view::Detail::Clip(info, chain)) = (ara, &shown) {
-                let (rest, picked) = detail_view::show_clip_column(ui, info, stacked);
+                let (rest, picked) = detail_view::show_clip_column(ui, info, stacked, actions);
                 detail_view::show_ara_editor(ui, rest, chain, device, actions, &mut places);
                 picked
             } else if stacked {
@@ -2874,6 +3389,11 @@ impl App {
             .interact(splitter, Id::new("detail-splitter"), Sense::click_and_drag())
             .on_hover_cursor(egui::CursorIcon::ResizeVertical);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Detail area splitter"));
+        if response.double_clicked() {
+            self.show_editor();
+            self.detail_height = DETAIL_HEIGHT;
+            self.detail_width = detail_view::STACK_WIDTH;
+        }
         if response.dragged_by(egui::PointerButton::Primary) {
             let height = self.detail_drag.unwrap_or(0.0) - response.drag_delta().y;
             self.detail_drag = Some(height);
@@ -3023,7 +3543,24 @@ impl App {
 
     /// Tells the active project where the panel shows its embedded plug-in editors this frame
     /// (none: they are hidden).
+    /// Whether something drawn over the whole window is open (Settings or a dialog): an embedded
+    /// plug-in editor is a native window egui cannot draw over, so it is hidden meanwhile (#723).
+    fn over_the_window(&self) -> bool {
+        self.settings_open
+            || self.about_open
+            || self.updates.open
+            || self.project_dialog.is_some()
+            || self.save_prompt.is_some()
+            || self.unsaved_prompt.is_some()
+            || self.recovery_open.is_some()
+            || !self.recovery.is_empty()
+            || !self.agent_asks.is_empty()
+    }
+
     fn place_editors(&mut self, places: &[detail_view::EditorPlace]) {
+        // One placement a frame: with something over the window the editors are told to hide,
+        // never shown first and hidden after (which left them over Settings).
+        let places = if self.over_the_window() { &[][..] } else { places };
         let Ok(session) = self.projects.session_mut(None) else { return };
         let shown: Vec<_> = places.iter().map(|p| (p.track, p.device, p.placement)).collect();
         session.place_editors(&shown);
@@ -3181,6 +3718,7 @@ impl App {
                     | PluginRequest::RemoveFolder(..)
                     | PluginRequest::SetFolderEnabled(..)
                     | PluginRequest::SetEnabled(..)
+                    | PluginRequest::SetEnabledMany(..)
             )
         {
             self.status =
@@ -3223,6 +3761,23 @@ impl App {
                     }
                     Err(e) => self.status = Status::Error(e.0),
                 }
+                self.plugins_read = false;
+            }
+            PluginRequest::SetEnabledMany(specs, enabled) => {
+                let mut done = 0;
+                for spec in &specs {
+                    match self.projects.execute("plugins.setEnabled", &json!({ "plugin": spec, "enabled": enabled })) {
+                        Ok(_) => done += 1,
+                        Err(e) => {
+                            self.status = Status::Error(e.0);
+                            break;
+                        }
+                    }
+                }
+                if done == specs.len() {
+                    self.status = Status::Done(format!("{done} plug-ins are {}", if enabled { "on" } else { "off" }));
+                }
+                self.browser.relist();
                 self.plugins_read = false;
             }
             PluginRequest::ScanFile(file) => {
@@ -3507,6 +4062,8 @@ impl App {
             self.projects.set_backup_settings(self.settings.backup, self.settings.backup_clean_up);
             motion::set_enabled(ui.ctx(), self.settings.animations);
             self.arrangement.headers_left = self.settings.track_headers == Side::Left;
+            self.arrangement.returns_hidden = self.settings.view.returns_hidden;
+            self.arrangement.waveform_zoom = self.settings.view.waveform_zoom as f32 / 100.0;
             self.settings_changed = true;
         }
         if outcome.close {
@@ -3545,6 +4102,13 @@ impl App {
                     .clicked()
                 {
                     self.save_active(true);
+                }
+                if ui
+                    .add_enabled(has_project, egui::Button::new("Collect and save"))
+                    .on_hover_text("Copy the audio the project plays from other folders into its own folder, then save")
+                    .clicked()
+                {
+                    self.collect_and_save();
                 }
                 if ui
                     .add_enabled(
@@ -3803,7 +4367,11 @@ impl App {
             || self.about_open
             || !self.agent_asks.is_empty()
             || self.updates.open;
-        if ui.ctx().egui_wants_keyboard_input() || dialog || (self.settings_open && self.page.capture.is_some()) {
+        if ui.ctx().egui_wants_keyboard_input()
+            || dialog
+            || (self.settings_open && self.page.capture.is_some())
+            || widgets::value_active(ui.ctx())
+        {
             return;
         }
         // The piano roll's own keys only while it has the keyboard; the selected slot's keys
@@ -3840,10 +4408,7 @@ impl App {
                 if self.shown == View::Arrangement && self.arrangement.time_selection().is_some() =>
             {
                 if let Some(s) = self.arrangement.time_selection() {
-                    actions.push(Action::new(
-                        "transport.setLoop",
-                        json!({ "start": s.start, "end": s.end, "enabled": true }),
-                    ));
+                    actions.push(self.loop_or_unloop(s.start, s.end));
                 }
             }
             "transport.setLoopEnabled"
@@ -3868,8 +4433,7 @@ impl App {
                         Some(span.map_or((start, end), |(s, e)| (s.min(start), e.max(end))))
                     });
                 if let Some((start, end)) = span.filter(|(s, e)| e > s) {
-                    actions
-                        .push(Action::new("transport.setLoop", json!({ "start": start, "end": end, "enabled": true })));
+                    actions.push(self.loop_or_unloop(start, end));
                 }
             }
             "file.open" => self.open_project_dialog(true),
@@ -3884,6 +4448,11 @@ impl App {
             }
             "view.sampleMapWindow" => self.toggle_map_window(),
             "view.zoomIn" => self.step_zoom(1),
+            "view.waveformZoomIn" | "view.waveformZoomOut" => {
+                let steps = if action == "view.waveformZoomIn" { 1 } else { -1 };
+                self.arrangement.waveform_zoom =
+                    crate::arrangement::arrangement_view::waveform_zoom_step(self.arrangement.waveform_zoom, steps);
+            }
             "view.zoomOut" => self.step_zoom(-1),
             "view.zoomReset" => {
                 if self.settings.zoom != crate::settings::ZOOM {
@@ -3896,7 +4465,13 @@ impl App {
                     self.toggle_browser();
                 }
                 self.settings_open = false;
+                // Ctrl+F searches everything: All is chosen, and what the field says is selected
+                // so typing replaces it. To search one kind, choose it and click the field.
+                self.browser.place = None;
+                self.browser.category = suhina_session::Category::All;
+                self.browser.scroll = 0.0;
                 self.browser.focus_search = true;
+                self.browser.select_search = true;
             }
             _ if !has_project => {}
             "file.save" => self.save_active(false),
@@ -3922,8 +4497,15 @@ impl App {
             "view.araEditor" => self.open_ara_editor(),
             "view.plugin" => self.toggle_plugin_editor(),
             "view.mappingMode" => self.toggle_mapping_mode(),
-            "track.addAudio" => actions.push(Action::new("track.add", json!({ "kind": "audio" }))),
-            "track.addMidi" => actions.push(Action::new("track.add", json!({ "kind": "midi" }))),
+            "track.addAudio" | "track.addMidi" => {
+                let kind = if action == "track.addAudio" { "audio" } else { "midi" };
+                let mut params = json!({ "kind": kind });
+                // Below the selected track, in its group, as the track menu's Insert does.
+                if let Some(after) = self.add_track_after() {
+                    params["after"] = json!(after.0);
+                }
+                actions.push(Action::new("track.add", params));
+            }
             "view.automation" => {
                 if let Some((_, _, timeline)) = self.timeline.as_ref() {
                     let tracks: Vec<TrackId> = timeline.lanes.iter().map(|l| l.track).collect();
@@ -4007,6 +4589,13 @@ impl App {
                 let after = picks.iter().map(|(_, i)| *i).max().unwrap_or(0) + 1;
                 actions.push(Action::new("device.paste", json!({ "track": track.0, "position": after })));
             }
+            // Ctrl+D copies the picked devices right after the last of them (#685).
+            "selection.duplicate" if self.device_focus && self.selected_device.is_some() => {
+                let picks = self.device_picks();
+                let Some((track, _)) = picks.first().copied() else { return };
+                let devices: Vec<usize> = picks.iter().map(|(_, i)| *i).collect();
+                actions.push(Action::new("device.duplicateMany", json!({ "track": track.0, "devices": devices })));
+            }
             "selection.copy" | "selection.paste" if self.shown == View::Session => {
                 let Some((track, scene)) = self.view.selected_slot else {
                     self.status = Status::Hint("Click a clip slot first".into());
@@ -4062,11 +4651,25 @@ impl App {
                                 l.clips.iter().any(|c| c.start < span.end && c.start + c.length > span.start)
                             })
                         };
+                        // In one row of a stack: that row's clips only, the other rows left be.
+                        let in_row = |track: u32| -> Option<Vec<serde_json::Value>> {
+                            let (row, rows) = span.row?;
+                            let lane = timeline?.lanes.iter().find(|l| l.track.0 == track)?;
+                            Some(
+                                lane.clips
+                                    .iter()
+                                    .filter(|c| c.row == row && c.rows == rows)
+                                    .filter(|c| c.start < span.end && c.start + c.length > span.start)
+                                    .map(|c| json!(c.id.0))
+                                    .collect(),
+                            )
+                        };
                         for track in tracks.into_iter().filter(|t| playing(*t)) {
-                            actions.push(Action::new(
-                                "clip.consolidate",
-                                json!({ "track": track, "start": span.start, "end": span.end }),
-                            ));
+                            let mut params = json!({ "track": track, "start": span.start, "end": span.end });
+                            if let Some(clips) = in_row(track) {
+                                params["clips"] = json!(clips);
+                            }
+                            actions.push(Action::new("clip.consolidate", params));
                         }
                     }
                 }
@@ -4103,6 +4706,26 @@ impl App {
                         actions.push(Action::new("device.remove", json!({ "track": track.0, "device": index })));
                     }
                     return;
+                }
+                // A track header clicked last: Delete removes the selected tracks (#690).
+                if action == "selection.delete" {
+                    let tracks: Vec<TrackId> = match self.shown {
+                        View::Arrangement if self.arrangement.track_focus => self.arrangement.selected_tracks.clone(),
+                        View::Session if self.view.track_focus && self.view.selected_slot.is_none() => {
+                            self.view.selected.into_iter().collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    if !tracks.is_empty() {
+                        self.arrangement.selected_tracks.clear();
+                        self.arrangement.track_focus = false;
+                        self.view.track_focus = false;
+                        self.view.selected = None;
+                        for track in tracks {
+                            actions.push(Action::new("track.delete", json!({ "track": track.0 })));
+                        }
+                        return;
+                    }
                 }
                 // The Session view: Delete takes the selected slot's clip off its slot, and the
                 // detail area falls back to the track's devices.
@@ -4144,6 +4767,37 @@ impl App {
                 actions.push(Action::new(id, params));
             }
             "selection.rename" => {
+                // A track header clicked last: the track's name, in its header (#696).
+                let focused_track = match self.shown {
+                    View::Arrangement if self.arrangement.track_focus => {
+                        self.arrangement.selected_tracks.first().copied()
+                    }
+                    View::Session if self.view.track_focus => self.view.selected,
+                    _ => None,
+                };
+                if let Some(track) = focused_track {
+                    let name = self
+                        .session()
+                        .and_then(|s| s.project().tracks.iter().find(|t| t.id == track))
+                        .map(|t| t.name.clone())
+                        .unwrap_or_default();
+                    self.rename = Some((json!({ "rename_track": track.0 }), name, false));
+                    return;
+                }
+                // Several clips selected, with the setting on: every one of them (#693).
+                let selected = self.arrangement.selected_clips().to_vec();
+                if self.shown == View::Arrangement && selected.len() > 1 && self.settings.view.rename_selected {
+                    let (_, id) = self.arrangement.selected_clip().unwrap_or(selected[0]);
+                    let name = self
+                        .timeline
+                        .as_ref()
+                        .and_then(|(_, _, t)| t.lanes.iter().flat_map(|l| &l.clips).find(|c| c.id == id))
+                        .map(|c| c.name.clone())
+                        .unwrap_or_default();
+                    let clips: Vec<serde_json::Value> = selected.iter().map(|(_, c)| json!({ "clip": c.0 })).collect();
+                    self.rename = Some((json!({ "clip": id.0, "clips": clips }), name, false));
+                    return;
+                }
                 // The selected clip: the Arrangement's, or the Session view's slot.
                 let target = match self.shown {
                     View::Arrangement => self.arrangement.selected_clip().map(|(track, id)| {
@@ -4352,6 +5006,24 @@ impl App {
         }
     }
 
+    /// The X on one of several picked devices removes every picked device, as Delete does
+    /// (#686): its `device.remove` becomes `device.removeMany` of the picks, and the picks go.
+    fn remove_every_pick(&mut self, action: Action) -> Action {
+        if action.id != "device.remove" || self.device_picks.len() < 2 {
+            return action;
+        }
+        let track = action.params["track"].as_u64().and_then(|t| u32::try_from(t).ok()).map(TrackId);
+        let index = action.params["device"].as_u64().and_then(|i| usize::try_from(i).ok());
+        let (Some(track), Some(index)) = (track, index) else { return action };
+        if !self.device_picks.contains(&(track, index)) || self.device_picks.iter().any(|(t, _)| *t != track) {
+            return action;
+        }
+        let devices: Vec<usize> = self.device_picks.iter().map(|(_, i)| *i).collect();
+        self.selected_device = None;
+        self.device_picks.clear();
+        Action::new("device.removeMany", json!({ "track": track.0, "devices": devices }))
+    }
+
     /// Whether a clip of this kind (audio, or notes) leaves the clips it lands on as they are:
     /// Options › Settings › sample stacking for audio, MIDI stacking for notes.
     fn stacks(&self, audio: bool) -> bool {
@@ -4440,6 +5112,41 @@ impl App {
     }
 
     /// The track selected in the view shown.
+    /// Ctrl+L over a span: loops it, or, when the loop is on over that very span already, turns
+    /// looping off, so the same key takes the loop away again.
+    fn loop_or_unloop(&self, start: f64, end: f64) -> Action {
+        let looping = self.session().is_some_and(|s| {
+            let transport = &s.project().transport;
+            transport.loop_enabled
+                && transport.loop_range.is_some_and(|r| (r.start - start).abs() < 1e-6 && (r.end - end).abs() < 1e-6)
+        });
+        if looping {
+            Action::new("transport.setLoopEnabled", json!({ "enabled": false }))
+        } else {
+            Action::new("transport.setLoop", json!({ "start": start, "end": end, "enabled": true }))
+        }
+    }
+
+    /// Where a track added from the keyboard goes: after the lowest selected track that is not a
+    /// return track; `None` (after the last regular track) without one.
+    fn add_track_after(&self) -> Option<TrackId> {
+        let project = self.session()?.project();
+        let selected: Vec<TrackId> = match self.shown {
+            View::Session => self.view.selected.into_iter().collect(),
+            View::Arrangement => self.arrangement.selected_tracks.clone(),
+        };
+        project
+            .tracks
+            .iter()
+            .rev()
+            .filter(|t| selected.contains(&t.id))
+            .find(|t| {
+                let role = project.channels.iter().find(|c| Some(c.id) == t.channel).map(|c| c.role);
+                role != Some(suhina_engine::model::ChannelRole::Effect)
+            })
+            .map(|t| t.id)
+    }
+
     fn selected_track(&self) -> Option<TrackId> {
         match self.shown {
             View::Session => self.view.selected,
@@ -4454,23 +5161,37 @@ impl App {
         let widest = (high as f32).min(area.width() * crate::settings::BROWSER_SHARE).max(low as f32);
         let width = (self.settings.browser_width as f32).clamp(low as f32, widest);
         let left = self.settings.browser_side == Side::Left;
+        // While it slides (#708) only `part` of it shows: it moves in from its side whole, not
+        // squeezed, and its handle takes hold only once it is all there.
+        let part = self.browser_part.clamp(0.0, 1.0);
+        let (shown, handle_width) = (width * part, BROWSER_HANDLE * part);
         let (panel, handle, rest) = if left {
-            let panel = Rect::from_min_max(area.min, Pos2::new(area.left() + width, area.bottom()));
+            let panel = Rect::from_min_max(
+                Pos2::new(area.left() + shown - width, area.top()),
+                Pos2::new(area.left() + shown, area.bottom()),
+            );
             let handle = Rect::from_min_max(
                 Pos2::new(panel.right(), area.top()),
-                Pos2::new(panel.right() + BROWSER_HANDLE, area.bottom()),
+                Pos2::new(panel.right() + handle_width, area.bottom()),
             );
             (panel, handle, Rect::from_min_max(Pos2::new(handle.right(), area.top()), area.max))
         } else {
-            let panel = Rect::from_min_max(Pos2::new(area.right() - width, area.top()), area.max);
+            let panel = Rect::from_min_max(
+                Pos2::new(area.right() - shown, area.top()),
+                Pos2::new(area.right() - shown + width, area.bottom()),
+            );
             let handle = Rect::from_min_max(
-                Pos2::new(panel.left() - BROWSER_HANDLE, area.top()),
+                Pos2::new(panel.left() - handle_width, area.top()),
                 Pos2::new(panel.left(), area.bottom()),
             );
             (panel, handle, Rect::from_min_max(area.min, Pos2::new(handle.left(), area.bottom())))
         };
         let default_width = crate::settings::Settings::default().browser_width;
-        let (resized, done) = browser_view::resize_handle(ui, handle, width, left, default_width as f32);
+        let (resized, done) = if part >= 1.0 {
+            browser_view::resize_handle(ui, handle, width, left, default_width as f32)
+        } else {
+            (None, false)
+        };
         if let Some(new) = resized {
             let new = new.round().clamp(low as f32, widest) as u32;
             self.settings.browser_width = new;
@@ -4486,10 +5207,13 @@ impl App {
         let mut map_settings = self.settings.clone();
         let map_panel = &mut self.sample_map;
         let mut draw_map = |ui: &mut Ui, rect: Rect, state: &mut BrowserState, projects: &mut Projects| {
-            map_panel.show(ui, rect, state, projects, &mut map_settings, revision);
+            suhina_plugins::trace::timed("sample map", || {
+                map_panel.show(ui, rect, state, projects, &mut map_settings, revision)
+            });
         };
         let out = ui
             .scope_builder(egui::UiBuilder::new().max_rect(panel), |ui| {
+                ui.set_clip_rect(panel.intersect(area).intersect(ui.clip_rect()));
                 let cx = browser_view::Context {
                     projects: &mut self.projects,
                     settings: &self.settings,
@@ -4717,7 +5441,7 @@ impl App {
             (None, View::Arrangement) => DropTarget::NewTracks { beat: Some(0.0), scene: None },
             (None, View::Session) => DropTarget::NewTracks { beat: None, scene: Some(0) },
         };
-        self.drop_items(&items, target, false);
+        suhina_plugins::trace::timed("adding to a track", || self.drop_items(&items, target, false));
     }
 
     /// While items are dragged from the browser: the label beside the pointer, Escape to stop,
@@ -4752,6 +5476,67 @@ impl App {
                 browser_view::stop_preview(&mut self.browser, &mut self.projects);
                 self.drop_items(&items, target, separate);
             }
+        }
+    }
+
+    /// While a device is carried from a chain or a strip's list: the label beside the pointer,
+    /// Escape to stop, and on another track's column, header or lane when the button is let go
+    /// the device moves there, or with Ctrl held is copied (#688).
+    fn device_drag(&mut self, ui: &Ui) {
+        let Some((from, index)) = self.device_carry else { return };
+        let (released, escape, copy, pointer) = ui.input(|i| {
+            (!i.pointer.primary_down(), i.key_pressed(Key::Escape), i.modifiers.command, i.pointer.latest_pos())
+        });
+        if escape {
+            self.device_carry = None;
+            return;
+        }
+        let target = match self.shown {
+            View::Session => self.view.drop.as_ref().and_then(|p| p.target),
+            View::Arrangement => self.arrangement.drop.as_ref().and_then(|p| p.target),
+        };
+        let to = match target {
+            Some(DropTarget::Track(t) | DropTarget::Lane { track: t, .. } | DropTarget::Slot { track: t, .. }) => {
+                Some(t).filter(|t| *t != from)
+            }
+            _ => None,
+        };
+        let session = self.session();
+        let name = |track: TrackId| {
+            session
+                .and_then(|s| s.project().tracks.iter().find(|t| t.id == track))
+                .map_or_else(String::new, |t| t.name.clone())
+        };
+        let device = session
+            .and_then(|s| {
+                let p = s.project();
+                let channel = p.tracks.iter().find(|t| t.id == from)?.channel?;
+                p.channels.iter().find(|c| c.id == channel)?.devices.get(index).map(|d| d.name.clone())
+            })
+            .unwrap_or_default();
+        if !released {
+            if let Some(pointer) = pointer {
+                let text = match to {
+                    Some(to) if copy => format!("Copy {device} to {}", name(to)),
+                    Some(to) => format!("Move {device} to {}", name(to)),
+                    None => device.clone(),
+                };
+                drag_label(ui.ctx(), pointer, &text, to.is_some());
+            }
+            return;
+        }
+        self.device_carry = None;
+        self.view.drop = None;
+        self.arrangement.drop = None;
+        if let Some(to) = to {
+            if !copy {
+                self.selected_device = None;
+                self.device_picks.clear();
+            }
+            self.run(&Action::new(
+                "device.moveToTrack",
+                json!({ "track": from.0, "device": index, "to_track": to.0, "copy": copy }),
+            ));
         }
     }
 
@@ -5797,6 +6582,8 @@ fn ram_text(bytes: u64) -> String {
 pub(crate) const NAME_RECT_CLIP: &str = "clip-name-rect";
 /// Where a clip slot's name is drawn, by (track, scene from 1).
 pub(crate) const NAME_RECT_SLOT: &str = "slot-name-rect";
+/// Where a track's name is drawn in its header, by track id, in the view shown (#696).
+pub(crate) const NAME_RECT_TRACK: &str = "track-name-rect";
 
 /// One menu of the menu bar. While another of the bar's menus is open, the pointer over this
 /// one's title opens it, as system menu bars do.
@@ -6048,6 +6835,123 @@ mod tests {
         assert_eq!(plan.commands[0].0, "clip.addFiles");
         app.run_drop(vec![("device.add", json!({"track":1,"id":"sampler"}))]);
         assert!(app.plan_drop(&[sample], DropTarget::Track(TrackId(1)), false).is_none());
+    }
+
+    #[test]
+    fn the_browser_slides_out_and_in_with_animations_on() {
+        let mut app = App::new();
+        app.set_session(suhina_session::Session::new(crate::demo::demo_project()), &[]);
+        app.set_browser_open(true);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(Vec2::new(1280.0, 800.0))
+            .with_step_dt(1.0 / 60.0)
+            .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
+        harness.run();
+        assert_eq!(harness.state().browser_part, 1.0);
+        harness.state_mut().set_browser_open(false);
+        harness.step();
+        harness.step();
+        let part = harness.state().browser_part;
+        assert!(part > 0.0 && part < 1.0, "half way out: {part}");
+        harness.run_steps(30);
+        assert_eq!(harness.state().browser_part, 0.0, "all the way out");
+    }
+
+    #[test]
+    fn the_large_sample_map_closes_with_its_button_and_with_escape() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = App::new();
+        app.set_session(suhina_session::Session::new(crate::demo::demo_project()), &[]);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(Vec2::new(1280.0, 800.0))
+            .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
+        harness.run();
+        // Stepped while the map shows: it asks for frames while it lays out the files, which on
+        // a slow machine outlasts what `run` waits for.
+        harness.state_mut().do_action("view.sampleMap", &mut Vec::new());
+        harness.run_steps(3);
+        assert!(harness.state().sample_map.view.large);
+        harness.get_by_label("Close sample map").click();
+        harness.run_steps(3);
+        assert!(!harness.state().sample_map.view.large, "the button closes it");
+        harness.state_mut().do_action("view.sampleMap", &mut Vec::new());
+        harness.run_steps(3);
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(3);
+        assert!(!harness.state().sample_map.view.large, "Escape closes it");
+    }
+
+    #[test]
+    fn a_ctrl_drag_copy_to_another_track_selects_the_copy() {
+        let mut app = App::new();
+        app.set_session(suhina_session::Session::new(crate::demo::demo_project()), &[]);
+        let project = app.session().unwrap().project().clone();
+        let lanes: Vec<_> = project.arrangement.lanes.iter().filter(|l| l.track.is_some()).collect();
+        let from = lanes.iter().find(|l| !l.clips.is_empty()).expect("the demo has an arrangement clip");
+        let (track, clip) = (from.track.unwrap(), from.clips[0].id);
+        let notes = |t: TrackId| project.tracks.iter().any(|x| x.id == t && x.content.notes);
+        let to = lanes
+            .iter()
+            .filter_map(|l| l.track)
+            .find(|t| *t != track && notes(*t) == notes(track))
+            .expect("another track of the same kind");
+        app.arrangement.select_clip(track, clip);
+        let params = json!({ "clips": [{ "clip": clip.0 }], "beats": 64.0, "copy": true, "to_track": to.0 });
+        app.run(&Action::new("clip.moveMany", params));
+        let picked = app.arrangement.selected_clips();
+        assert_eq!(picked.len(), 1, "{picked:?}");
+        assert_eq!(picked[0].0, to, "the copy on the other track is selected");
+        assert_ne!(picked[0].1, clip);
+    }
+
+    #[test]
+    fn delete_after_a_header_click_removes_the_track_not_a_clip() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = App::new();
+        app.set_session(suhina_session::Session::new(crate::demo::demo_project()), &[]);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(Vec2::new(1280.0, 800.0))
+            .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
+        harness.run();
+        let count = |h: &egui_kittest::Harness<'_, App>| h.state().session().map_or(0, |s| s.project().tracks.len());
+        let clips = |h: &egui_kittest::Harness<'_, App>| {
+            h.state().session().map_or(0, |s| {
+                s.project().launcher.columns.iter().flat_map(|c| &c.slots).filter(|s| s.clip.is_some()).count()
+            })
+        };
+        let (tracks, slots) = (count(&harness), clips(&harness));
+        harness.get_by_label("Track Keys").click();
+        harness.run();
+        harness.key_press(egui::Key::Delete);
+        harness.run();
+        assert_eq!(count(&harness), tracks - 1);
+        assert!(harness.state().session().unwrap().project().tracks.iter().all(|t| t.name != "Keys"));
+        assert!(clips(&harness) < slots, "the track's clips went with it, no other clip did");
+    }
+
+    #[test]
+    fn a_device_dropped_on_a_return_column_goes_on_the_return() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = App::new();
+        app.set_session(suhina_session::Session::new(crate::demo::demo_project()), &[]);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(Vec2::new(1280.0, 800.0))
+            .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
+        harness.run();
+        let at = harness.get_by_label("A Reverb channel strip").rect().center();
+        let delay = BrowserItem {
+            key: "device:delay".into(),
+            name: "Delay".into(),
+            kind: crate::interaction::drop::ItemKind::AudioEffect,
+            plugin: false,
+        };
+        harness.state_mut().browser.drag = Some(vec![delay]);
+        harness.hover_at(at);
+        harness.run();
+        let project = harness.state().session().map(|s| s.project().clone()).unwrap();
+        let channel = project.tracks.iter().find(|t| t.name == "A Reverb").and_then(|t| t.channel).unwrap();
+        let devices = &project.channels.iter().find(|c| c.id == channel).unwrap().devices;
+        assert!(devices.iter().any(|d| d.name == "Delay"), "{devices:?}");
     }
 
     #[test]

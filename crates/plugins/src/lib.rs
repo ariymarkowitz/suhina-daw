@@ -24,6 +24,7 @@ pub mod offline;
 pub mod protocol;
 pub mod scan;
 pub mod scan_pool;
+pub mod trace;
 pub mod vst2;
 
 use std::collections::BTreeMap;
@@ -42,7 +43,7 @@ use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerNonblockingMode, ListenerOptions, Name, NameType, Stream, ToFsName,
     ToNsName,
 };
-pub use suhina_ipc::{AudioSource, Event, EventKind, MAX_EVENTS, Outcome};
+pub use suhina_ipc::{AudioSource, Event, EventKind, MAX_EVENTS, Outcome, take_keyboard_back};
 use suhina_ipc::{IpcError, Link};
 
 use protocol::{AraDocument, MAX_LINE, Message, VERSION};
@@ -282,8 +283,38 @@ fn try_lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
 /// A running host process and its control connection.
 struct HostProcess {
     child: Child,
-    control: Stream,
+    /// Behind a lock of its own, held only while a line is written: an editor's placement
+    /// ([`EditorPlacer`]) goes out while another request waits for its answer.
+    control: std::sync::Arc<Mutex<Stream>>,
     replies: Receiver<Message>,
+}
+
+/// Sends an embedded editor's placement and size to its host, without the plug-in's control
+/// half and without waiting for any request the host is busy with: the editor follows the
+/// window at once, also while the plug-in is being edited or opened.
+#[derive(Clone)]
+pub struct EditorPlacer {
+    writer: std::sync::Arc<Mutex<Stream>>,
+    instance: u32,
+}
+
+impl EditorPlacer {
+    fn send(&self, message: &Message) -> bool {
+        let mut line = message.encode();
+        line.push('\n');
+        let mut writer = lock(&self.writer);
+        writer.write_all(line.as_bytes()).and_then(|()| writer.flush()).is_ok()
+    }
+
+    /// Puts the embedded editor where `placement` says; `false` when the host is gone.
+    pub fn place(&self, placement: Placement) -> bool {
+        self.send(&Message::PlaceEditor { instance: self.instance, placement })
+    }
+
+    /// Asks the embedded editor to take `width` × `height` pixels; `false` when the host is gone.
+    pub fn fit(&self, width: u32, height: u32) -> bool {
+        self.send(&Message::FitEditor { instance: self.instance, width, height })
+    }
 }
 
 impl HostProcess {
@@ -296,6 +327,8 @@ impl HostProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .spawn()?;
+        let began = Instant::now();
+        crate::trace!("host process started");
         let deadline = Instant::now() + launch.timeout;
         let control = loop {
             match listener.accept() {
@@ -317,9 +350,10 @@ impl HostProcess {
             }
             thread::sleep(Duration::from_millis(1));
         };
+        crate::trace!("host process connected after {:?}", began.elapsed());
         control.set_nonblocking(false)?;
         let replies = read_lines(control.try_clone()?);
-        Ok(Self { child, control, replies })
+        Ok(Self { child, control: std::sync::Arc::new(Mutex::new(control)), replies })
     }
 
     fn alive(&mut self) -> bool {
@@ -329,8 +363,9 @@ impl HostProcess {
     fn send(&mut self, message: &Message) -> Result<(), PluginError> {
         let mut line = message.encode();
         line.push('\n');
-        self.control.write_all(line.as_bytes())?;
-        self.control.flush()?;
+        let mut control = lock(&self.control);
+        control.write_all(line.as_bytes())?;
+        control.flush()?;
         Ok(())
     }
 
@@ -365,6 +400,9 @@ struct Group {
     resized_editors: Vec<(u32, (u32, u32))>,
     /// Instances whose plug-in reported another latency (the latest), not yet taken in.
     latencies: Vec<(u32, u32)>,
+    /// The notes ARA plug-ins found in their regions (the latest per instance and region), not
+    /// yet taken in (#720).
+    ara_notes: Vec<(u32, String, Vec<protocol::AraNote>)>,
     /// The process's resident memory, in bytes, the host last reported; gone once the
     /// process ends, so a dead host is never counted.
     ram: Option<u64>,
@@ -379,6 +417,7 @@ impl Group {
             closed_editors: Vec::new(),
             resized_editors: Vec::new(),
             latencies: Vec::new(),
+            ara_notes: Vec::new(),
             ram: None,
             next_ping: 0,
         }
@@ -396,6 +435,7 @@ impl Group {
         self.closed_editors.clear();
         self.resized_editors.clear();
         self.latencies.clear();
+        self.ara_notes.clear();
         self.ram = None;
     }
 
@@ -440,9 +480,13 @@ impl Group {
                     self.latencies.push((*instance, *latency));
                 }
             }
-            Message::TransportKey => {
-                TRANSPORT_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Message::AraNotes { instance, region, notes, .. } => {
+                self.ara_notes.retain(|(i, r, _)| !(i == instance && r == region));
+                if self.ara_notes.len() < protocol::MAX_ARA_OBJECTS {
+                    self.ara_notes.push((*instance, region.clone(), notes.clone()));
+                }
             }
+            Message::TransportKey | Message::AraPlayback(_) => take_in_transport(message),
             Message::Memory { bytes } => {
                 // Only a process that is still there reports; the host sends it once a second,
                 // so the latest is what the control bar adds.
@@ -476,6 +520,19 @@ impl Group {
     fn take_resized(&mut self, instance: u32) -> Option<(u32, u32)> {
         let at = self.resized_editors.iter().position(|(i, _)| *i == instance)?;
         Some(self.resized_editors.swap_remove(at).1)
+    }
+
+    /// The notes the host sent for `instance`'s regions since the last call (and forgets them).
+    fn take_ara_notes(&mut self, instance: u32) -> Vec<(String, Vec<protocol::AraNote>)> {
+        let mut taken = Vec::new();
+        self.ara_notes.retain_mut(|(i, region, notes)| {
+            if *i != instance {
+                return true;
+            }
+            taken.push((std::mem::take(region), std::mem::take(notes)));
+            false
+        });
+        taken
     }
 
     /// The latency the host said `instance`'s plug-in now has, if any (and forgets it).
@@ -681,6 +738,18 @@ impl Plugin {
         self.latency
     }
 
+    /// The notes the ARA plug-in found in its regions since the last call, by region id
+    /// (`clip-<id>`): each the region's notes as they are now, empty when it has none (#720).
+    /// Never waits: while the process is busy with another request, nothing yet.
+    pub fn take_ara_notes(&mut self) -> Vec<(String, Vec<protocol::AraNote>)> {
+        let Some(mut group) = try_lock(&self.group) else { return Vec::new() };
+        if group.generation != self.generation {
+            return Vec::new();
+        }
+        group.drain();
+        group.take_ara_notes(self.instance)
+    }
+
     /// The host process's id (0 when it has none running), for tests and diagnostics.
     pub fn process_id(&self) -> u32 {
         lock(&self.group).process.as_ref().map_or(0, |p| p.child.id())
@@ -843,6 +912,17 @@ impl Plugin {
     /// Puts an embedded editor at `placement` in the engine's window. Never waits for the
     /// host, and not for the process either: while it is busy with another request the
     /// placement is not sent, and this returns `false` so the caller sends it again later.
+    /// What sends this instance's embedded editor its placement and size without the control
+    /// half ([`EditorPlacer`]). `None` while the process is busy with another request, or gone.
+    pub fn placer(&mut self) -> Option<EditorPlacer> {
+        let group = try_lock(&self.group)?;
+        if group.generation != self.generation {
+            return None;
+        }
+        let process = group.process.as_ref()?;
+        Some(EditorPlacer { writer: process.control.clone(), instance: self.instance })
+    }
+
     pub fn place_editor(&mut self, placement: Placement) -> Result<bool, PluginError> {
         let Some(mut group) = try_lock(&self.group) else { return Ok(false) };
         if group.generation != self.generation {
@@ -875,6 +955,45 @@ impl Plugin {
             "ara_update",
             |m| matches!(m, Message::AraUpdated { instance: i } if *i == instance),
         )?;
+        Ok(())
+    }
+
+    /// The edits of one modification (`content-<id>`) of a plug-in bound to an ARA document and
+    /// its source (the pool key), stored on their own to give another track's plug-in (ADR 0028
+    /// step 6): the plug-in's document archive id and the bytes. Waits for the answer.
+    pub fn ara_export(&mut self, modification: &str, source: &str) -> Result<(String, Vec<u8>), PluginError> {
+        let instance = self.instance;
+        let reply = self.request(
+            &Message::AraExport { instance, modification: modification.to_string(), source: source.to_string() },
+            "ara_export",
+            |m| matches!(m, Message::AraExported { instance: i, .. } if *i == instance),
+        )?;
+        match reply {
+            Message::AraExported { archive_id, data, .. } => Ok((archive_id, data)),
+            _ => Err(PluginError::Protocol("expected the exported edits".into())),
+        }
+    }
+
+    /// Gives a plug-in bound to an ARA document edits another track's stored with
+    /// [`Plugin::ara_export`], for its modification `to` (it was `from` there) of `source`.
+    /// Fails while its document has no `to` yet. Waits for the answer.
+    pub fn ara_import(
+        &mut self,
+        (archive_id, data): (&str, &[u8]),
+        from: &str,
+        to: &str,
+        source: &str,
+    ) -> Result<(), PluginError> {
+        let instance = self.instance;
+        let message = Message::AraImport {
+            instance,
+            archive_id: archive_id.to_string(),
+            data: data.to_vec(),
+            from: from.to_string(),
+            to: to.to_string(),
+            source: source.to_string(),
+        };
+        self.request(&message, "ara_import", |m| matches!(m, Message::AraImported { instance: i } if *i == instance))?;
         Ok(())
     }
 
@@ -1037,6 +1156,10 @@ pub fn host_command(host: &std::path::Path) -> Command {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    // A traced run's hosts trace to the same file (`docs/debugging.md`).
+    if let Some(path) = trace::path() {
+        command.env(trace::VARIABLE, path);
+    }
     command
 }
 
@@ -1065,6 +1188,17 @@ pub fn parse_address(address: &str) -> Result<(String, Name<'static>), PluginErr
     Ok((address.to_string(), name))
 }
 
+/// What ARA plug-ins asked of the transport and the window has not taken yet (#717).
+static ARA_PLAYBACK: Mutex<Vec<protocol::AraPlayback>> = Mutex::new(Vec::new());
+const MAX_ARA_PLAYBACK: usize = 16;
+
+/// What ARA plug-ins asked of the transport since the last call, oldest first: play, stop, or a
+/// play position in seconds. Takes in what the hosts sent without waiting for any of them.
+pub fn take_ara_playback() -> Vec<protocol::AraPlayback> {
+    drain_groups();
+    std::mem::take(&mut *lock(&ARA_PLAYBACK))
+}
+
 /// Space presses the hosts' editor windows sent and the window has not taken yet.
 static TRANSPORT_KEYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -1072,14 +1206,18 @@ static TRANSPORT_KEYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU
 /// plays or stops that many times, as Space in its own window does. Takes in what the hosts sent
 /// without waiting for any of them.
 pub fn take_transport_keys() -> u32 {
+    drain_groups();
+    TRANSPORT_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Takes in what every host sent, without waiting for a group that is busy.
+fn drain_groups() {
     let groups = lock(&GROUPS);
     for group in groups.values().filter_map(Weak::upgrade) {
         if let Some(mut group) = try_lock(&group) {
             group.drain();
         }
     }
-    drop(groups);
-    TRANSPORT_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The resident memory, in bytes, of every host process that has reported it and still runs,
@@ -1108,6 +1246,47 @@ pub fn host_memory() -> Vec<u64> {
         .collect()
 }
 
+/// What wakes the window when a host sends something it shows unasked (#714): Space in a
+/// plug-in's window, an ARA plug-in's transport request or notes, an editor closed by hand.
+type Waker = std::sync::Arc<dyn Fn() + Send + Sync>;
+static WAKER: Mutex<Option<Waker>> = Mutex::new(None);
+
+/// Sets what wakes the window when a host sends something it shows unasked, so it answers at
+/// once rather than on its next frame. The window gives its repaint request.
+pub fn set_waker(waker: impl Fn() + Send + Sync + 'static) {
+    *lock(&WAKER) = Some(std::sync::Arc::new(waker));
+}
+
+/// Takes in a transport request a host sent unasked: Space in an editor window, or an ARA
+/// plug-in's play, stop or position. Done on the reader thread as the line comes, before the
+/// window is woken, so the frame it wakes plays or moves at once: left in the replies until a
+/// request read them, a click in the plug-in's timeline waited a frame or more, and the plug-in
+/// drew the old position meanwhile.
+fn take_in_transport(message: &Message) {
+    match message {
+        Message::TransportKey => {
+            TRANSPORT_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Message::AraPlayback(request) => {
+            let mut requests = lock(&ARA_PLAYBACK);
+            // A newer position replaces one not taken yet; a few starts and stops are kept.
+            if let protocol::AraPlayback::Position(_) = request {
+                requests.retain(|r| !matches!(r, protocol::AraPlayback::Position(_)));
+            }
+            if requests.len() < MAX_ARA_PLAYBACK {
+                requests.push(*request);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn wake() {
+    if let Some(waker) = lock(&WAKER).clone() {
+        waker();
+    }
+}
+
 /// Reads messages from `stream` on a thread of its own, so replies can be waited for with a
 /// timeout. Unknown lines are skipped; the channel closes when the stream ends.
 pub fn read_lines(stream: Stream) -> Receiver<Message> {
@@ -1120,10 +1299,26 @@ pub fn read_lines(stream: Stream) -> Receiver<Message> {
             match (&mut reader).take(MAX_LINE as u64 + 1).read_line(&mut line) {
                 Ok(0) | Err(_) => return,
                 Ok(_) => {
-                    if let Some(message) = Message::decode(line.trim_end())
-                        && sender.send(message).is_err()
-                    {
-                        return;
+                    if let Some(message) = Message::decode(line.trim_end()) {
+                        let shown = matches!(
+                            message,
+                            Message::TransportKey
+                                | Message::AraPlayback(_)
+                                | Message::AraNotes { .. }
+                                | Message::EditorClosed { .. }
+                        );
+                        if matches!(message, Message::TransportKey | Message::AraPlayback(_)) {
+                            take_in_transport(&message);
+                            wake();
+                            continue;
+                        }
+                        if sender.send(message).is_err() {
+                            return;
+                        }
+                        // After it is queued, so the frame it wakes takes it in.
+                        if shown {
+                            wake();
+                        }
                     }
                 }
             }
@@ -1175,7 +1370,7 @@ mod tests {
         }
         let child = child.stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
         let (feed, replies) = mpsc::channel();
-        (HostProcess { child, control, replies }, feed)
+        (HostProcess { child, control: std::sync::Arc::new(Mutex::new(control)), replies }, feed)
     }
 
     #[test]

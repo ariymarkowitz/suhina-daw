@@ -3,7 +3,7 @@ description: Functional spec of the main window and the Session view: regions, c
 read_when: Session view, main window layout, clip slot behaviour, scene launch, launch keys, mapping mode, Map button, Ctrl+M, mixer section, browser structure
 type: spec
 status: draft
-last_verified: 2026-10-19
+last_verified: 2026-10-20
 covers:
   - crates/ui/src/session/session_view.rs
   - crates/ui/src/session/mixer_strip.rs
@@ -38,7 +38,10 @@ From top to bottom:
 2. **Control bar**, left to right:
    - external sync and tempo: sync toggle, tap tempo, tempo field, nudge, time signature
    - groove amount, metronome, global launch quantisation (in Suhina also the Arrangement
-     view's grid: [arrangement editing](arrangement-editing.md) › The grid)
+     view's grid: [arrangement editing](arrangement-editing.md) › The grid). **Suhina:** the
+     metronome's button, here and in the main strip, is held and dragged for its level: a
+     slider opens above it, or below where there is no room above, and the pointer's height on
+     it is the level (−60 to +6 dB), so the whole range is one drag
    - key and scale
    - transport: arrangement position, play, stop, record, overdub, automation arm, loop region
      start, punch, loop, loop length. **Suhina:** play starts from the play start marker, or
@@ -274,7 +277,7 @@ knob marks a send before the fader. Behaviour and commands: [sends and returns](
 
 Per track, top to bottom: pan, volume with numeric field and meter ([level
 meters](level-meters.md)), track on/off (shows the
-track number), solo, cue (**C**: the track is also heard on the cue output, headphones,
+track number), solo, cue (headphones: the track is also heard on the cue output, headphones,
 `track.setCue`; [spec](cue-output.md)), arm (MIDI and audio tracks). Pan and volume are dragged
 up or down and double-clicked to reset; the change is heard while dragging, and one drag is one
 undo step (`track.setPan`, `track.setVolume` with `continue`). The Arrangement view's track
@@ -402,8 +405,9 @@ MIDI / return track), Ctrl+I (insert scene), Ctrl+Shift+I (capture and insert sc
 (play/stop), Enter (launch selected), arrow keys (move selection), 0 (deactivate) **(to observe:
 full list)**.
 
-**Suhina:** its keys and how to change them are in [shortcuts](../shortcuts.md); Ctrl+T there
-opens New or open, not a new track.
+**Suhina:** its keys and how to change them are in [shortcuts](../shortcuts.md); Ctrl+T and
+Ctrl+Shift+T add an audio or a MIDI track below the selected track, in its group (after the last
+regular track when none is selected).
 
 ## Open
 

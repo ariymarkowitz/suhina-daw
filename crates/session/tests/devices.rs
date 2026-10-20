@@ -133,7 +133,6 @@ fn bad_device_edits_are_refused_and_change_nothing() {
     let before = session.project().clone();
     for (id, params) in [
         ("device.add", json!({ "track": 1, "id": "no-such-device" })),
-        ("device.add", json!({ "track": 1, "id": "fm-synth" })),
         ("device.add", json!({ "track": 1, "id": "utility", "position": 0 })),
         ("device.add", json!({ "track": 1, "id": "utility", "position": 5 })),
         ("device.add", json!({ "track": 9, "id": "utility" })),
@@ -851,4 +850,88 @@ fn devices_are_copied_pasted_and_removed_together_in_one_step_each() {
     run(&mut session, "edit.undo", json!({})).unwrap();
     assert_eq!(names(&session), before, "one undo step");
     assert!(run(&mut session, "device.removeMany", json!({ "track": "Keys", "devices": [7] })).is_err());
+}
+
+#[test]
+fn picked_devices_are_duplicated_after_the_last_in_one_step_and_the_clipboard_stays() {
+    let mut session = Session::new(project());
+    for id in ["utility", "overdrive", "delay"] {
+        run(&mut session, "device.add", json!({ "track": "Keys", "id": id })).unwrap();
+    }
+    let names = |s: &Session| {
+        let p = s.project();
+        let channel = p.tracks.iter().find(|t| t.name == "Keys").and_then(|t| t.channel).unwrap();
+        p.channels.iter().find(|c| c.id == channel).unwrap().devices.iter().map(|d| d.name.clone()).collect::<Vec<_>>()
+    };
+    let before = names(&session);
+    run(&mut session, "device.copy", json!({ "track": "Keys", "devices": [2] })).unwrap();
+    let made = run(&mut session, "device.duplicateMany", json!({ "track": "Keys", "devices": [1, 0] })).unwrap();
+    assert_eq!(made["devices"], json!([2, 3]));
+    let after = names(&session);
+    assert_eq!(after, [&before[0], &before[1], &before[0], &before[1], &before[2]].map(String::clone));
+    assert_eq!(session.copied_devices(), 1, "the clipboard is as it was");
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    assert_eq!(names(&session), before, "one undo step");
+}
+
+#[test]
+fn a_device_moves_or_copies_to_another_track_in_one_step() {
+    let mut session = Session::new(project());
+    run(&mut session, "device.add", json!({ "track": "Keys", "id": "delay" })).unwrap();
+    let chain = |s: &Session, name: &str| {
+        let p = s.project();
+        let channel = p.tracks.iter().find(|t| t.name == name).and_then(|t| t.channel).unwrap();
+        p.channels.iter().find(|c| c.id == channel).unwrap().devices.iter().map(|d| d.name.clone()).collect::<Vec<_>>()
+    };
+    run(&mut session, "track.add", json!({ "kind": "audio", "name": "Bus" })).unwrap();
+    let other = "Bus".to_string();
+    let (keys, there) = (chain(&session, "Keys"), chain(&session, &other));
+    let at = keys.len() - 1;
+    run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": at, "to_track": other, "copy": true }))
+        .unwrap();
+    assert_eq!(chain(&session, "Keys"), keys, "a copy leaves it");
+    assert_eq!(chain(&session, &other).len(), there.len() + 1);
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": at, "to_track": other })).unwrap();
+    assert_eq!(chain(&session, "Keys").len(), keys.len() - 1, "moved away");
+    assert_eq!(chain(&session, &other).last().map(String::as_str), keys.last().map(String::as_str));
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    assert_eq!((chain(&session, "Keys"), chain(&session, &other)), (keys, there), "one step");
+    assert!(
+        run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": 0, "to_track": "Keys" })).is_err()
+    );
+}
+
+/// A track plays one instrument: one added to a track that has one takes its place, with the
+/// effects after it kept, as one undo step; built-in and plug-in instruments alike.
+#[test]
+fn an_added_instrument_replaces_the_one_on_the_track() {
+    let names = |session: &Session| -> Vec<String> {
+        session.project().channels[0].devices.iter().map(|d| d.name.clone()).collect()
+    };
+    let mut session = Session::new(project());
+    session.set_plugin_env(plugin_env());
+    run(&mut session, "device.add", json!({ "track": 1, "id": "pitch" })).unwrap();
+    run(&mut session, "device.add", json!({ "track": 1, "id": "sampler" })).unwrap();
+    run(&mut session, "device.add", json!({ "track": 1, "id": "utility" })).unwrap();
+    assert_eq!(names(&session), ["Pitch", "Sampler", "Utility"]);
+
+    let synth = run(&mut session, "device.addPlugin", json!({ "track": 1, "plugin": "Synth" })).unwrap();
+    assert_eq!((synth["device"].as_u64(), synth["replaced"].as_str()), (Some(1), Some("Sampler")));
+    assert_eq!(names(&session), ["Pitch", "Synth", "Utility"]);
+
+    let fm = run(&mut session, "device.add", json!({ "track": 1, "id": "fm-synth" })).unwrap();
+    assert_eq!(fm["replaced"], "Synth");
+    assert_eq!(names(&session), ["Pitch", "FM Synth", "Utility"]);
+
+    // An effect replaces nothing.
+    let verb = run(&mut session, "device.addPlugin", json!({ "track": 1, "plugin": "Verb" })).unwrap();
+    assert!(verb["replaced"].is_null());
+    assert_eq!(names(&session), ["Pitch", "FM Synth", "Utility", "Verb"]);
+
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    assert_eq!(names(&session), ["Pitch", "Synth", "Utility"]);
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    assert_eq!(names(&session), ["Pitch", "Sampler", "Utility"]);
 }

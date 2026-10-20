@@ -165,6 +165,8 @@ pub struct SavePrompt {
     pub folder: String,
     /// The name field takes the keys when the prompt appears.
     pub focus: bool,
+    /// Collect and save: the audio from outside the folder is copied into it first.
+    pub collect: bool,
 }
 
 /// What the user did with the save prompt.
@@ -365,6 +367,66 @@ fn draw_unsaved(ui: &mut Ui, area: Rect, name: &str, doing: &str) -> Option<Unsa
     closed
 }
 
+/// What the user answered when clips a plug-in edits go to another track (ADR 0028 step 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AraEditsChoice {
+    /// Their edits go along; the plug-in is put on that track when it has none.
+    Keep,
+    /// They start there without the edits.
+    New,
+    Cancel,
+}
+
+/// Asks whether clips `plugin` edits keep their edits on the track they go to, over `area`.
+pub fn show_ara_edits(ui: &Ui, area: Rect, plugin: &str) -> Option<AraEditsChoice> {
+    egui::Area::new(Id::new("ara-edits-prompt"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(area.min)
+        .show(ui.ctx(), |ui| {
+            ui.set_min_size(area.size());
+            draw_ara_edits(ui, area, plugin)
+        })
+        .inner
+}
+
+fn draw_ara_edits(ui: &mut Ui, area: Rect, plugin: &str) -> Option<AraEditsChoice> {
+    let mut closed: Option<AraEditsChoice> = None;
+    let panel =
+        panel(ui, area, Vec2::new(SAVE_WIDTH, ROW + 2.0 * LINE + BUTTON.y + 3.0 * PAD), "Another track", &mut closed);
+    let painter = ui.painter_at(area);
+    for (i, line) in [
+        format!("Keep the {plugin} edits on the track the clips go to?"),
+        format!("Keep edits puts {plugin} on that track when it has none."),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let at = Rect::from_min_size(
+            Pos2::new(panel.left() + PAD, panel.top() + ROW + PAD + i as f32 * LINE),
+            Vec2::new(panel.width() - 2.0 * PAD, LINE),
+        );
+        let color = if i == 0 { theme::text_primary() } else { theme::text_secondary() };
+        widgets::text_in(&painter, at, Align2::LEFT_CENTER, line, theme::ui_font(theme::TEXT), color);
+    }
+    let keep = Rect::from_min_size(Pos2::new(panel.right() - PAD - BUTTON.x, panel.bottom() - PAD - BUTTON.y), BUTTON);
+    let new = Rect::from_min_size(Pos2::new(keep.left() - 4.0 - BUTTON.x, keep.top()), BUTTON);
+    let cancel = Rect::from_min_size(Pos2::new(new.left() - 4.0 - BUTTON.x, keep.top()), BUTTON);
+    if button(ui, &painter, keep, "Keep edits", "Keep the clips' edits on that track")
+        || ui.input(|i| i.key_pressed(Key::Enter))
+    {
+        return Some(AraEditsChoice::Keep);
+    }
+    if button(ui, &painter, new, "Copy as new", "Start the clips there without their edits") {
+        return Some(AraEditsChoice::New);
+    }
+    if button(ui, &painter, cancel, "Cancel", "Leave the clips where they are")
+        || ui.input(|i| i.key_pressed(Key::Escape))
+    {
+        return Some(AraEditsChoice::Cancel);
+    }
+    closed
+}
+
 /// What the user chose for a backup offered on start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryChoice {
@@ -554,6 +616,12 @@ impl CloseChoice for UnsavedChoice {
     }
 }
 
+impl CloseChoice for AraEditsChoice {
+    fn close() -> Self {
+        AraEditsChoice::Cancel
+    }
+}
+
 pub(crate) fn heading(painter: &egui::Painter, at: Rect, text: &str) {
     let r = Rect::from_min_size(at.min, Vec2::new(at.width(), LINE));
     widgets::text_in(painter, r, Align2::LEFT_CENTER, text, theme::ui_font(theme::TEXT_SMALL), theme::text_hint());
@@ -661,7 +729,8 @@ mod tests {
 
     #[test]
     fn the_save_prompt_makes_the_path_from_name_and_folder() {
-        let prompt = SavePrompt { template: false, name: String::new(), folder: "songs".into(), focus: true };
+        let prompt =
+            SavePrompt { template: false, name: String::new(), folder: "songs".into(), focus: true, collect: false };
         let mut harness = Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
             |ui, (prompt, chosen): &mut (SavePrompt, Option<SaveChoice>)| {
                 let area = ui.max_rect();

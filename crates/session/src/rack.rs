@@ -618,6 +618,32 @@ enum Done {
     Stopped(Option<SavedState>),
     /// Its ARA document was brought in line with its track's clips.
     AraUpdated(Result<(), String>),
+    /// The edits of a clip carried to another track were stored ([`Carry`], by its number).
+    AraExported(u64, Result<(String, Vec<u8>), String>),
+    /// They were given to the other track's plug-in, or not yet.
+    AraImported(u64, Result<(), String>),
+}
+
+/// How long a clip's edits wait for the other track's plug-in to run with the clip.
+const CARRY_FOR: Duration = Duration::from_secs(60);
+
+/// A clip's ARA edits on their way from one track's plug-in to another's (ADR 0028 step 6): a
+/// clip moved or copied there with its edits kept. Stored from the first (`from_key`) at once,
+/// then given to the plug-in that edits clips on `to_track` once it runs with the clip.
+pub(crate) struct Carry {
+    pub(crate) number: u64,
+    pub(crate) from_key: u64,
+    pub(crate) to_track: suhina_model::TrackId,
+    /// The modifications' persistent ids there and here (`content-<id>`), the source's (the
+    /// pool key), and the clip's region here (`clip-<id>`), which says the clip has arrived.
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) source: String,
+    pub(crate) region: String,
+    pub(crate) archive: Option<(String, Vec<u8>)>,
+    /// Out to a plug-in now (stored or given): nothing more is asked until it answers.
+    pub(crate) busy: bool,
+    pub(crate) since: Instant,
 }
 
 /// A control half back from a thread, or (stopped) only what it left.
@@ -631,6 +657,9 @@ struct Returned {
 struct Instance {
     status: PluginStatus,
     plugin: Option<(String, String, &'static str)>,
+    /// The plug-in it runs ([`PluginInfo::spec`](suhina_plugins::scan::PluginInfo::spec)), empty
+    /// before one is found.
+    spec: String,
     info: PluginSlotInfo,
     /// `None` while it starts, or while a thread of its own talks to it.
     control: Option<Plugin>,
@@ -646,6 +675,12 @@ struct Instance {
     /// Where the window wants the embedded editor, and what the host was last told.
     placement_wanted: Option<Placement>,
     placement_sent: Option<Placement>,
+    /// Sends the embedded editor's placement and size even while the control half is lent out
+    /// (an ARA edit, an editor opening), so the editor never lags behind the window.
+    placer: Option<suhina_plugins::EditorPlacer>,
+    /// An editor asked open (`true`) or closed while the control half was out: done when it is
+    /// back, rather than refused as busy.
+    editor_wanted: Option<bool>,
     /// The room in pixels the window has for its embedded editor, where the editor is asked to
     /// fit it (an ARA editor in the clip's place), and what the host was last asked.
     fit_wanted: Option<(u32, u32)>,
@@ -684,6 +719,7 @@ impl Instance {
         Self {
             status,
             plugin,
+            spec: String::new(),
             info: PluginSlotInfo::default(),
             ranges: None,
             control: None,
@@ -694,6 +730,8 @@ impl Instance {
             editor_size: None,
             placement_wanted: None,
             placement_sent: None,
+            placer: None,
+            editor_wanted: None,
             fit_wanted: None,
             fit_sent: None,
             reopen_editor: false,
@@ -706,6 +744,40 @@ impl Instance {
             ara_float: false,
             ara_selection_sent: None,
         }
+    }
+
+    /// The sender of the embedded editor's placement, taken from the control half the first time
+    /// it is here; kept while the control half is lent out.
+    fn placer(&mut self) -> Option<&suhina_plugins::EditorPlacer> {
+        if self.placer.is_none() {
+            self.placer = self.control.as_mut().and_then(suhina_plugins::Plugin::placer);
+        }
+        self.placer.as_ref()
+    }
+
+    /// Sends the embedded editor its placement now; `false` when it could not be sent (the
+    /// host gone: the placer is let go, and taken again from the next control half).
+    fn send_placement(&mut self, placement: Placement) -> bool {
+        let Some(placer) = self.placer() else {
+            suhina_plugins::trace!("placement waits (no placer): {placement:?}");
+            return false;
+        };
+        let sent = placer.place(placement);
+        suhina_plugins::trace!("placement sent {sent}: {placement:?}");
+        if !sent {
+            self.placer = None;
+        }
+        sent
+    }
+
+    /// Asks the embedded editor to take `fit` pixels now, as [`Instance::send_placement`].
+    fn send_fit(&mut self, (width, height): (u32, u32)) -> bool {
+        let Some(placer) = self.placer() else { return false };
+        let sent = placer.fit(width, height);
+        if !sent {
+            self.placer = None;
+        }
+        sent
     }
 
     /// The editor is closed (or gone with its process).
@@ -751,9 +823,21 @@ pub struct Rack {
     /// not say so (a scan that missed it): they are loaded again with their track's clips, and
     /// from then on as plug-ins that edit clips.
     ara_found: std::collections::HashSet<u64>,
+    /// The plug-ins (by spec) found that way: the next device of one starts with its clips at
+    /// once, rather than loading twice. Taken by [`Rack::take_ara_learned`] for the catalog.
+    ara_plugins: std::collections::HashSet<String>,
+    ara_learned: Vec<String>,
     /// The region each plug-in that edits clips should show as selected (`clip-<id>`), by
     /// plug-in device key; told to it whenever it runs ([`Rack::select_ara`]).
     ara_selection: HashMap<u64, Option<String>>,
+    /// The notes ARA plug-ins found in the clips they edit, by clip (#720); none for a plug-in
+    /// that is bypassed or not running.
+    ara_notes: HashMap<suhina_model::ClipId, crate::ara::ClipNotes>,
+    /// Of those, the clips whose plug-in is bypassed: kept, not shown (ADR 0028).
+    ara_notes_hidden: std::collections::HashSet<suhina_model::ClipId>,
+    /// Clips' edits on their way to another track's plug-in ([`Rack::carry`]).
+    carries: Vec<Carry>,
+    next_carry: u64,
 }
 
 impl Default for Rack {
@@ -779,7 +863,13 @@ impl Default for Rack {
             rebinding: std::collections::HashSet::new(),
             reopen_after_rebind: std::collections::HashSet::new(),
             ara_selection: HashMap::new(),
+            ara_notes: HashMap::new(),
+            ara_notes_hidden: std::collections::HashSet::new(),
             ara_found: std::collections::HashSet::new(),
+            ara_plugins: std::collections::HashSet::new(),
+            ara_learned: Vec::new(),
+            carries: Vec::new(),
+            next_carry: 0,
         }
     }
 }
@@ -795,6 +885,12 @@ impl Rack {
         self.env = Some(env);
     }
 
+    /// The plug-ins (by spec) found to edit clips over ARA since the last call, although the
+    /// catalog did not say so: for the catalog to remember.
+    pub fn take_ara_learned(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.ara_learned)
+    }
+
     pub fn env(&self) -> Option<&PluginEnv> {
         self.env.as_deref()
     }
@@ -806,6 +902,12 @@ impl Rack {
     /// gave, and a stopped one the state it left.
     pub(crate) fn current_states(&mut self) -> HashMap<u64, SavedState> {
         self.read_states();
+        self.known_states()
+    }
+
+    /// The plug-ins' states as last read (every [`SAVE_EVERY`] and at each save), without asking
+    /// them now: for a backup, which must not hold the window up while a busy plug-in answers.
+    pub(crate) fn known_states(&self) -> HashMap<u64, SavedState> {
         let mut states = self.kept.clone();
         for (key, instance) in &self.instances {
             if let Some(state) = instance.control.as_ref().and_then(Plugin::last_state) {
@@ -873,9 +975,12 @@ impl Rack {
     /// back to be kept for when the device's plug-in starts again.
     fn stop(&self, key: u64, mut control: Plugin) {
         let sender = self.returned_sender.clone();
+        suhina_plugins::trace!("rack stops key {key}");
         let _detached = std::thread::Builder::new().name("suhina-plugin-stop".into()).spawn(move || {
             let state = (control.health() == Health::Running).then(|| control.save_state().ok()).flatten();
+            suhina_plugins::trace!("rack stop key {key}: state {}", state.is_some());
             drop(control);
+            suhina_plugins::trace!("rack stop key {key}: let go");
             let _gone = sender.send(Returned { key, generation: 0, control: None, done: Done::Stopped(state) });
         });
     }
@@ -911,6 +1016,12 @@ impl Rack {
                 }
                 continue;
             }
+            // A clip's edits on their way: stored, or given to the other track's plug-in.
+            match &done {
+                Done::AraExported(number, result) => self.exported(*number, result.clone(), notices),
+                Done::AraImported(number, result) => self.imported(*number, result.clone(), notices),
+                _ => {}
+            }
             let Some(control) = control else { continue };
             let mut reopen = false;
             let mut fall_back = false;
@@ -941,7 +1052,7 @@ impl Rack {
                                 notices.push(format!("{name}: its editor did not close ({why})"));
                             }
                         }
-                        Done::AraUpdated(Ok(())) => {}
+                        Done::AraUpdated(Ok(())) | Done::AraExported(..) | Done::AraImported(..) => {}
                         Done::AraUpdated(Err(why)) => {
                             notices.push(format!(
                                 "{name}: its clips could not be updated ({why}); it loads again with them"
@@ -959,6 +1070,18 @@ impl Rack {
                 && let Err(e) = self.open_editor(key)
             {
                 notices.push(format!("the editor did not open again: {}", e.0));
+            }
+            // An open or close asked meanwhile, now that the control half is back.
+            let wanted = self.instances.get_mut(&key).and_then(|i| i.editor_wanted.take());
+            let result = match wanted {
+                Some(true) if !self.instances.get(&key).is_some_and(|i| i.editor_open) => {
+                    self.open_editor(key).map(|_| ())
+                }
+                Some(false) if self.instances.get(&key).is_some_and(|i| i.editor_open) => self.close_editor(key),
+                _ => Ok(()),
+            };
+            if let Err(e) = result {
+                notices.push(e.0);
             }
         }
     }
@@ -978,21 +1101,16 @@ impl Rack {
             }
         }
         for instance in self.instances.values_mut() {
-            if let (Some(fit), Some(control)) = (instance.fit_wanted, instance.control.as_mut())
+            if let Some(fit) = instance.fit_wanted
                 && instance.fit_sent != Some(fit)
-                && control.fit_editor(fit.0, fit.1).unwrap_or(false)
+                && instance.send_fit(fit)
             {
                 instance.fit_sent = Some(fit);
             }
         }
         for instance in self.instances.values_mut() {
-            let (Some(wanted), Some(control)) = (instance.placement_wanted, instance.control.as_mut()) else {
-                continue;
-            };
-            if instance.placement_sent == Some(wanted) {
-                continue;
-            }
-            if control.place_editor(wanted).unwrap_or(false) {
+            let Some(wanted) = instance.placement_wanted else { continue };
+            if instance.placement_sent != Some(wanted) && instance.send_placement(wanted) {
                 instance.placement_sent = Some(wanted);
             }
         }
@@ -1080,6 +1198,7 @@ impl Rack {
             }
         }
         changed |= self.follow_clips(project, audio, &devices);
+        self.move_carries(&devices, &mut notices);
         // New ones.
         let mut missing = Vec::new();
         for found in &devices {
@@ -1102,7 +1221,9 @@ impl Rack {
             };
             let state = self.kept.remove(&found.key).or_else(|| saved_state(device));
             // A plug-in that edits clips gets its track's audio clips (ADR 0028).
-            let edits_clips = matched.plugin.ara || self.ara_found.contains(&found.key);
+            let spec = matched.plugin.spec();
+            let edits_clips =
+                matched.plugin.ara || self.ara_found.contains(&found.key) || self.ara_plugins.contains(&spec);
             let layout = found.track.filter(|_| edits_clips).map(|t| crate::ara::Layout::of(project, audio, t));
             let ara = layout.as_ref().and_then(|l| l.document(audio));
             let (ara, ara_sources) = ara.map_or((None, Vec::new()), |(document, sources)| (Some(document), sources));
@@ -1120,6 +1241,7 @@ impl Rack {
             let generation = self.next_generation;
             let plugin = Some((matched.plugin.name.clone(), matched.plugin.vendor.clone(), matched.how.name()));
             let mut instance = Instance::new(PluginStatus::Loading, plugin, generation);
+            instance.spec = spec;
             instance.info = PluginSlotInfo { instrument, latency: 0 };
             instance.ara_layout = layout;
             instance.ara_sources = ara_sources;
@@ -1132,6 +1254,7 @@ impl Rack {
         changed |= self.receive(player, &mut notices);
         self.take_returned(&mut notices);
         changed |= self.follow_latencies();
+        self.follow_notes(project, &devices);
         self.send_placements();
         self.watch(&mut notices);
         if changed {
@@ -1141,6 +1264,132 @@ impl Rack {
             }
         }
         notices
+    }
+
+    /// Carries a clip's edits from the plug-in `from_key` to the one that edits clips on
+    /// `to_track` (ADR 0028 step 6): its modification `from` there becomes `to` here, of
+    /// `source`; it arrives as region `region`. Done over the next syncs; a notice when it
+    /// cannot be.
+    pub(crate) fn carry(
+        &mut self,
+        from_key: u64,
+        to_track: suhina_model::TrackId,
+        (from, to): (String, String),
+        source: String,
+        region: String,
+    ) {
+        self.next_carry += 1;
+        self.carries.push(Carry {
+            number: self.next_carry,
+            from_key,
+            to_track,
+            from,
+            to,
+            source,
+            region,
+            archive: None,
+            busy: false,
+            since: Instant::now(),
+        });
+    }
+
+    /// The clips' edits on their way: whether any is still waiting.
+    pub(crate) fn carrying(&self) -> bool {
+        !self.carries.is_empty()
+    }
+
+    /// Takes each carried clip's edits a step on: stored from its first plug-in when that one is
+    /// free, given to the other track's plug-in once it runs with the clip there.
+    fn move_carries(&mut self, devices: &[suhina_engine::PluginDevice], notices: &mut Vec<String>) {
+        let mut gone = Vec::new();
+        let mut lend: Vec<(u64, u64, bool)> = Vec::new();
+        for carry in &mut self.carries {
+            if carry.since.elapsed() >= CARRY_FOR {
+                gone.push(carry.number);
+                notices
+                    .push(format!("a clip's edits did not reach its new track's plug-in in {} s", CARRY_FOR.as_secs()));
+                continue;
+            }
+            if carry.busy {
+                continue;
+            }
+            match &carry.archive {
+                None => {
+                    let ready = self.instances.get(&carry.from_key).is_some_and(|i| i.control.is_some());
+                    if ready {
+                        lend.push((carry.number, carry.from_key, true));
+                    }
+                }
+                Some(_) => {
+                    // The plug-in that edits clips on the track, running with the clip there.
+                    let target = devices.iter().filter(|d| d.track == Some(carry.to_track)).find(|d| {
+                        self.instances.get(&d.key).is_some_and(|i| {
+                            i.status == PluginStatus::Running
+                                && i.control.is_some()
+                                && i.ara_layout.as_ref().is_some_and(|l| l.has_region(&carry.region))
+                        })
+                    });
+                    if let Some(target) = target {
+                        lend.push((carry.number, target.key, false));
+                    }
+                }
+            }
+        }
+        self.carries.retain(|c| !gone.contains(&c.number));
+        for (number, key, export) in lend {
+            let Some(carry) = self.carries.iter_mut().find(|c| c.number == number) else { continue };
+            let lent = if export {
+                let (modification, source) = (carry.from.clone(), carry.source.clone());
+                carry.busy = true;
+                self.lend(key, move |control| {
+                    Done::AraExported(number, control.ara_export(&modification, &source).map_err(|e| e.to_string()))
+                })
+            } else {
+                let Some((id, bytes)) = carry.archive.clone() else { continue };
+                let (from, to, source) = (carry.from.clone(), carry.to.clone(), carry.source.clone());
+                carry.busy = true;
+                self.lend(key, move |control| {
+                    let imported = control.ara_import((&id, &bytes), &from, &to, &source);
+                    Done::AraImported(number, imported.map_err(|e| e.to_string()))
+                })
+            };
+            if lent.is_err()
+                && let Some(carry) = self.carries.iter_mut().find(|c| c.number == number)
+            {
+                carry.busy = false;
+            }
+        }
+    }
+
+    fn exported(&mut self, number: u64, result: Result<(String, Vec<u8>), String>, notices: &mut Vec<String>) {
+        let Some(at) = self.carries.iter().position(|c| c.number == number) else { return };
+        match result {
+            Ok(archive) => {
+                suhina_plugins::trace!("rack carries edits {number}: stored, {} bytes", archive.1.len());
+                self.carries[at].archive = Some(archive);
+                self.carries[at].busy = false;
+            }
+            Err(why) => {
+                self.carries.remove(at);
+                notices.push(format!("a clip's edits could not be taken along ({why})"));
+            }
+        }
+    }
+
+    fn imported(&mut self, number: u64, result: Result<(), String>, notices: &mut Vec<String>) {
+        let Some(at) = self.carries.iter().position(|c| c.number == number) else { return };
+        match result {
+            Ok(()) => {
+                suhina_plugins::trace!("rack carries edits {number}: given to the new track's plug-in");
+                self.carries.remove(at);
+            }
+            // The clip has not reached that document yet: asked again at a later sync.
+            Err(why) if why.contains("yet") => self.carries[at].busy = false,
+            Err(why) => {
+                self.carries.remove(at);
+                notices.push(format!("a clip's edits could not be given to its new track's plug-in ({why})"));
+            }
+        }
     }
 
     /// Notices plug-ins that edit clips whose track's clips changed (moved, cut, added or
@@ -1184,8 +1433,12 @@ impl Rack {
             // Bound to a document: the change goes to it at once, as an edit (ADR 0028
             // decision 3). Moved and trimmed clips change in place; nothing reloads.
             if !instance.ara_sources.is_empty()
-                && let Some(document) = now.document_with(audio, &mut instance.ara_sources)
+                && let Some(mut document) = now.document_with(audio, &mut instance.ara_sources)
             {
+                // A clip that got its own content starts with the edits of the one it copies.
+                for (region, origin) in document.regions.iter_mut().zip(now.clone_origins(layout)) {
+                    region.clone_of = origin;
+                }
                 instance.ara_layout = Some(now);
                 // The regions may be new: the editor is told the selection again.
                 instance.ara_selection_sent = None;
@@ -1207,6 +1460,7 @@ impl Rack {
             }
         }
         for key in &rebind {
+            suhina_plugins::trace!("rack rebinds key {key}");
             let Some(instance) = self.instances.remove(key) else { continue };
             if instance.editor_open {
                 self.reopen_after_rebind.insert(*key);
@@ -1255,13 +1509,23 @@ impl Rack {
                     // The host found it supports ARA where the catalog did not say so: it is
                     // loaded again with its track's clips ([`Rack::follow_clips`]).
                     if control.edits_clips() && instance.ara_layout.is_none() && self.ara_found.insert(started.key) {
+                        if !instance.spec.is_empty() && self.ara_plugins.insert(instance.spec.clone()) {
+                            self.ara_learned.push(instance.spec.clone());
+                        }
                         notices
                             .push(format!("{name} edits clips (ARA): it is loaded again with its track's audio clips"));
                     }
+                    // A restarted plug-in has a new instance number: placements go to it, again.
+                    instance.placer = None;
+                    instance.placement_sent = None;
+                    instance.fit_sent = None;
                     instance.control = Some(control);
                     // Loaded again with its track's new clips: its editor was open, so it opens
                     // again where it was.
-                    if self.reopen_after_rebind.remove(&started.key) && instance.status == PluginStatus::Running {
+                    let wanted = instance.editor_wanted.take() == Some(true);
+                    if (self.reopen_after_rebind.remove(&started.key) || wanted)
+                        && instance.status == PluginStatus::Running
+                    {
                         reopen.push(started.key);
                     }
                 }
@@ -1296,6 +1560,67 @@ impl Rack {
             }
         }
         changed
+    }
+
+    /// Takes in the notes ARA plug-ins found in their clips, and forgets those of clips no
+    /// running, enabled plug-in edits any more (moved off its track, deleted, the device bypassed
+    /// or removed).
+    fn follow_notes(&mut self, project: &Project, devices: &[suhina_engine::PluginDevice]) {
+        let enabled = |key: u64| {
+            devices.iter().find(|d| d.key == key).is_some_and(|found| {
+                project
+                    .channels
+                    .iter()
+                    .find(|c| c.id == found.channel)
+                    .and_then(|c| suhina_model::device_at(&c.devices, &found.path))
+                    .is_some_and(|d| d.enabled)
+            })
+        };
+        // Taken in from a bypassed plug-in too, only not shown: the host sends notes when they
+        // change, so they are there when it is switched on again.
+        let (mut live, mut shown): (Vec<&crate::ara::Layout>, Vec<&crate::ara::Layout>) = (Vec::new(), Vec::new());
+        for (key, instance) in &mut self.instances {
+            if instance.status != PluginStatus::Running {
+                continue;
+            }
+            let Some(layout) = &instance.ara_layout else { continue };
+            // The notes it has are kept while its control half is lent out (an edit of its clips
+            // going to it, an editor opening): the host sends notes only when they change, so
+            // ones let go of then would not come back. New ones are taken in when it is home.
+            live.push(layout);
+            if enabled(*key) {
+                shown.push(layout);
+            }
+            let Some(control) = instance.control.as_mut() else { continue };
+            for (region, notes) in control.take_ara_notes() {
+                let Some(clip) = region.strip_prefix("clip-").and_then(|n| n.parse().ok()).map(suhina_model::ClipId)
+                else {
+                    continue;
+                };
+                if !layout.has_region(&region) {
+                    continue;
+                }
+                suhina_plugins::trace!("app gets ara notes for {region}: {}", notes.len());
+                match crate::ara::ClipNotes::new(notes) {
+                    Some(notes) => self.ara_notes.insert(clip, notes),
+                    None => self.ara_notes.remove(&clip),
+                };
+            }
+        }
+        let has = |layouts: &[&crate::ara::Layout], clip: &suhina_model::ClipId| {
+            let region = format!("clip-{}", clip.0);
+            layouts.iter().any(|l| l.has_region(&region))
+        };
+        self.ara_notes.retain(|clip, _| has(&live, clip));
+        self.ara_notes_hidden = self.ara_notes.keys().filter(|clip| !has(&shown, clip)).copied().collect();
+    }
+
+    /// The notes an ARA plug-in found in `clip`, if any (#720).
+    pub(crate) fn clip_notes(&self, clip: suhina_model::ClipId) -> Option<&crate::ara::ClipNotes> {
+        if self.ara_notes_hidden.contains(&clip) {
+            return None;
+        }
+        self.ara_notes.get(&clip)
     }
 
     /// Notices plug-ins that crashed or hung, and now and then reads each one's state.
@@ -1446,6 +1771,9 @@ impl Rack {
     }
 
     pub fn open_editor(&mut self, key: u64) -> Result<Option<(u32, u32)>, CommandError> {
+        if self.lent_out(key, true) {
+            return Ok(None);
+        }
         self.running(key)?;
         match self.owner {
             Some(owner) => {
@@ -1518,9 +1846,7 @@ impl Rack {
             if instance.placement_sent == Some(placement) {
                 continue;
             }
-            if let Some(control) = instance.control.as_mut()
-                && control.place_editor(placement).unwrap_or(false)
-            {
+            if instance.send_placement(placement) {
                 instance.placement_sent = Some(placement);
             }
         }
@@ -1529,11 +1855,39 @@ impl Rack {
     /// Closes the editor of the plug-in device `key`; with an owner window, on a thread of
     /// its own, like opening it.
     pub fn close_editor(&mut self, key: u64) -> Result<(), CommandError> {
+        if self.lent_out(key, false) {
+            return Ok(());
+        }
         self.running(key)?;
         if self.owner.is_some() {
             return self.lend(key, |control| Done::Closed(control.close_editor().map_err(|e| e.to_string())));
         }
         self.running(key)?.close_editor().map_err(|e| CommandError(e.to_string()))
+    }
+
+    /// Whether plug-in `key` cannot take the editor's opening or closing now: its control half
+    /// is out on a thread of its own, it is still starting, or it is being loaded again with its
+    /// track's clips. The editor `open` (or closed) is then remembered and done when it can be
+    /// ([`Rack::take_returned`], [`Rack::receive`]), so a click then never says it is busy or
+    /// still starting.
+    fn lent_out(&mut self, key: u64, open: bool) -> bool {
+        // Being loaded again with its track's clips: its editor opens (or stays shut) once it is.
+        if self.rebinding.contains(&key) && !self.instances.contains_key(&key) {
+            if open {
+                self.reopen_after_rebind.insert(key);
+            } else {
+                self.reopen_after_rebind.remove(&key);
+            }
+            return true;
+        }
+        let Some(instance) = self.instances.get_mut(&key) else { return false };
+        // Still starting, or busy on another thread: the editor follows when it is free.
+        let out = instance.status == PluginStatus::Loading
+            || (instance.status == PluginStatus::Running && instance.control.is_none());
+        if out {
+            instance.editor_wanted = Some(open);
+        }
+        out
     }
 
     fn running(&mut self, key: u64) -> Result<&mut Plugin, CommandError> {
@@ -1601,8 +1955,14 @@ fn read_state(control: &mut Plugin) -> Done {
 /// Starts a plug-in on a thread of its own and sends the result.
 fn spawn_start(sender: Sender<Started>, key: u64, generation: u64, launch: Launch, state: Option<SavedState>) {
     let fallback = sender.clone();
+    suhina_plugins::trace!(
+        "rack starts key {key} generation {generation} ara {} (regions {})",
+        launch.ara.is_some(),
+        launch.ara.as_ref().map_or(0, |a| a.regions.len())
+    );
     let spawned = std::thread::Builder::new().name("suhina-plugin-start".into()).spawn(move || {
         let mut result = start(launch, state).map_err(|e| e.to_string());
+        suhina_plugins::trace!("rack started key {key} generation {generation}: {:?}", result.as_ref().map(|_| ()));
         let first_state = result.as_mut().ok().and_then(|(plugin, _, _)| plugin.save_state().ok());
         let _gone = sender.send(Started { key, generation, result, first_state });
     });

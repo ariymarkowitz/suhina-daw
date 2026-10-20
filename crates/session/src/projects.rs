@@ -4,6 +4,8 @@
 //! Several open projects, one of them active, like tabs. Commands go to the active project
 //! unless a caller names another; only the active project plays (ADR 0007).
 
+use std::path::{Path, PathBuf};
+
 use serde_json::{Value, json};
 
 use suhina_plugins::library::Library;
@@ -65,6 +67,8 @@ pub struct Projects {
     pub(crate) backups: crate::backup::Backups,
     /// The MIDI input ports and where they send their notes (ADR 0017).
     midi: crate::midi::MidiInputs,
+    /// Projects opened read their audio wherever it is on a local disk ([`Projects::read_local_audio`]).
+    local_audio: bool,
     /// With no project open, the empty session previews play in, with a player of its own
     /// (ADR 0011); made on the first preview and dropped before a project opens its output.
     preview: Option<Session>,
@@ -266,6 +270,11 @@ impl Projects {
             .or_else(|| session.source().and_then(|s| s.file_stem()).map(|s| s.to_string_lossy().into_owned()))
             .unwrap_or_else(|| format!("Untitled {}", id.0));
         self.close_preview_output();
+        let mut session = session;
+        if session.trusted() == &suhina_media::Trusted::default() {
+            let source = session.source().map(Path::to_path_buf);
+            session.set_trusted(self.trusted_audio_for(source.as_deref()));
+        }
         self.open.push(Open { id, name, session });
         self.activate(id);
         Ok(id)
@@ -421,6 +430,35 @@ impl Projects {
         &mut self.files
     }
 
+    /// Lets the projects opened from now on read their audio wherever it is on a local disk, as
+    /// the desktop app does (`docs/spec/missing-files.md` › Project file boundaries); off, only
+    /// the trusted files and folders outside a project's folder are read (the CLI, the MCP
+    /// server).
+    pub fn read_local_audio(&mut self, on: bool) {
+        self.local_audio = on;
+    }
+
+    /// The audio outside a project's folder that opening it may read: the files the person
+    /// loaded into a project and saved it with, and the browser's library folders
+    /// (`docs/spec/missing-files.md` › Project file boundaries).
+    pub fn trusted_audio(&mut self) -> suhina_media::Trusted {
+        self.trusted_audio_for(None)
+    }
+
+    /// [`Projects::trusted_audio`] for the project saved as `project`: with the folders outside
+    /// it that its audio was loaded from (kept on this machine, not in the project).
+    pub fn trusted_audio_for(&mut self, project: Option<&Path>) -> suhina_media::Trusted {
+        let mut folders: Vec<PathBuf> = self.files.folders().into_iter().map(|f| f.path).collect();
+        if let Some(project) = project {
+            folders.extend(self.files.project_folders(&std::path::absolute(project).unwrap_or_default()));
+        }
+        suhina_media::Trusted {
+            folders,
+            files: self.files.trusted_audio().into_iter().collect(),
+            local: self.local_audio,
+        }
+    }
+
     /// The window plug-in editors open over (a Win32 `HWND`, an X11 window id): the desktop
     /// app's main window, so editors float above it. `None` gives them windows of their own.
     pub fn set_editor_owner(&mut self, owner: Option<u64>) {
@@ -511,7 +549,16 @@ impl Projects {
         session.set_plugin_env(env);
         session.set_editor_owner(owner);
         session.set_editor_embedding(embed);
-        session.sync_plugins()
+        let notices = session.sync_plugins();
+        // A plug-in that turned out to edit clips is remembered, so it starts with them from
+        // now on (in every project) instead of loading twice.
+        let learned = session.take_ara_learned();
+        for spec in learned {
+            if let Ok(true) = self.library.mark_ara(&spec) {
+                self.plugin_env = None;
+            }
+        }
+        notices
     }
 
     /// Runs command `id`: a `projects.*` or `plugins.*` command on the open projects (and the
@@ -567,6 +614,35 @@ impl Projects {
                 open.name = stem.to_string_lossy().into_owned();
             }
             self.backups_after_save(target);
+        }
+        // The audio a saved project plays is the person's own choice: it opens with it again,
+        // even from outside the project's folder.
+        if id == "project.save"
+            && result.is_ok()
+            && let Some(session) = target.and_then(|t| self.get(t))
+        {
+            let files = session.loaded_audio_paths();
+            let source = session.source().and_then(|s| std::path::absolute(s).ok());
+            // The folders the audio came from outside the project's own, kept for this project.
+            let own = source.as_deref().and_then(Path::parent).map(Path::to_path_buf);
+            let mut folders: Vec<PathBuf> = Vec::new();
+            for folder in files.iter().filter_map(|f| f.parent()) {
+                if own.as_deref().is_none_or(|own| !folder.starts_with(own)) && !folders.iter().any(|f| f == folder) {
+                    folders.push(folder.to_path_buf());
+                }
+            }
+            if let Err(e) = self.files.trust_audio(files) {
+                suhina_plugins::trace!("trusted audio not kept: {e}");
+            }
+            if let Some(source) = &source
+                && let Err(e) = self.files.add_project_folders(source, folders)
+            {
+                suhina_plugins::trace!("project folders not kept: {e}");
+            }
+            let trusted = self.trusted_audio_for(source.as_deref());
+            if let Some(session) = target.and_then(|t| self.get_mut(t)) {
+                session.set_trusted(trusted);
+            }
         }
         result
     }

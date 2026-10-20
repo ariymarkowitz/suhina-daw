@@ -46,8 +46,29 @@ pub struct ViewSettings {
     /// Ctrl+drag over a clip selects time; off (the default), a drag from a clip's upper half
     /// does.
     pub time_select_ctrl: bool,
+    /// Mirror: a clip's lower half moves it and its upper half selects time; off (the
+    /// default), its name bar moves it and its body selects time.
+    pub clip_halves: bool,
+    /// The grid shows through the clips in the Arrangement view (on by default).
+    pub grid_in_clips: bool,
+    /// The Arrangement's waveform zoom in percent, 100 … 1600 (×1 … ×16): audio clips drawn
+    /// larger, never louder. Saved as the factor.
+    pub waveform_zoom: u32,
     /// Alt held while an audio clip's edge is dragged stretches its audio (on by default).
     pub stretch_alt: bool,
+    /// Ctrl+R with several clips selected renames them all at once (on by default, #693).
+    pub rename_selected: bool,
+    /// Clips picked while stopped move the play start marker to the first one's start (on by
+    /// default, #721).
+    pub play_from_clip: bool,
+    /// New tracks all get the palette's first colour, instead of the next one in turn (off by
+    /// default, #709).
+    pub fixed_track_colour: bool,
+    /// The browser shows Recent's kinds as chips over its list rather than as items indented
+    /// under it in the sidebar (#711).
+    pub recent_chips: bool,
+    /// The Arrangement view leaves out the return tracks' rows (its "Hide returns" button).
+    pub returns_hidden: bool,
 }
 
 impl Default for ViewSettings {
@@ -60,7 +81,15 @@ impl Default for ViewSettings {
             menu_name_field: false,
             notes_replace: true,
             time_select_ctrl: false,
+            clip_halves: false,
+            grid_in_clips: true,
+            waveform_zoom: 100,
             stretch_alt: true,
+            rename_selected: true,
+            play_from_clip: true,
+            fixed_track_colour: false,
+            recent_chips: false,
+            returns_hidden: false,
         }
     }
 }
@@ -69,7 +98,7 @@ impl ViewSettings {
     /// The lines this module adds to the settings file.
     pub fn to_text(&self) -> String {
         format!(
-            "session_mixer_height = {}\nsession_strip_fader = {}\ndetail_layout = {}\ndouble_click_clip = {}\nmenu_name_field = {}\nnotes_replace = {}\ntime_select = {}\nstretch_alt_drag = {}\n",
+            "session_mixer_height = {}\nsession_strip_fader = {}\ndetail_layout = {}\ndouble_click_clip = {}\nmenu_name_field = {}\nnotes_replace = {}\ntime_select = {}\nstretch_alt_drag = {}\nrename_selected_clips = {}\nplay_from_selected_clip = {}\nnew_track_colour = {}\nbrowser_recent = {}\narrangement_returns = {}\nclip_drag = {}\nclip_grid = {}\nwaveform_zoom = {}\n",
             self.mixer_height,
             self.strip_fader,
             self.detail_layout.param(),
@@ -78,6 +107,14 @@ impl ViewSettings {
             if self.notes_replace { "on" } else { "off" },
             if self.time_select_ctrl { "ctrl_drag" } else { "clip_lower_half" },
             if self.stretch_alt { "on" } else { "off" },
+            if self.rename_selected { "on" } else { "off" },
+            if self.play_from_clip { "on" } else { "off" },
+            if self.fixed_track_colour { "fixed" } else { "alternating" },
+            if self.recent_chips { "chips" } else { "indented" },
+            if self.returns_hidden { "hidden" } else { "shown" },
+            if self.clip_halves { "halves" } else { "name_bar" },
+            if self.grid_in_clips { "on" } else { "off" },
+            f64::from(self.waveform_zoom) / 100.0,
         )
     }
 
@@ -100,6 +137,17 @@ impl ViewSettings {
             ("notes_replace", "on" | "off") => self.notes_replace = value == "on",
             ("time_select", "ctrl_drag" | "clip_lower_half") => self.time_select_ctrl = value == "ctrl_drag",
             ("stretch_alt_drag", "on" | "off") => self.stretch_alt = value == "on",
+            ("rename_selected_clips", "on" | "off") => self.rename_selected = value == "on",
+            ("play_from_selected_clip", "on" | "off") => self.play_from_clip = value == "on",
+            ("new_track_colour", "fixed" | "alternating") => self.fixed_track_colour = value == "fixed",
+            ("browser_recent", "chips" | "indented") => self.recent_chips = value == "chips",
+            ("arrangement_returns", "hidden" | "shown") => self.returns_hidden = value == "hidden",
+            ("clip_drag", "halves" | "name_bar") => self.clip_halves = value == "halves",
+            ("clip_grid", "on" | "off") => self.grid_in_clips = value == "on",
+            ("waveform_zoom", zoom) => match zoom.parse::<f32>() {
+                Ok(zoom) if zoom.is_finite() => self.waveform_zoom = (zoom.clamp(1.0, 16.0) * 100.0).round() as u32,
+                _ => return false,
+            },
             _ => return false,
         }
         true
@@ -121,7 +169,15 @@ mod tests {
             menu_name_field: true,
             notes_replace: false,
             time_select_ctrl: true,
+            clip_halves: true,
+            grid_in_clips: false,
+            waveform_zoom: 400,
             stretch_alt: false,
+            rename_selected: false,
+            play_from_clip: false,
+            fixed_track_colour: true,
+            recent_chips: true,
+            returns_hidden: true,
         };
         let settings = Settings { view, ..Settings::default() };
         let (read, warnings) = Settings::from_text(&settings.to_text());

@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{OsStr, c_void};
 use std::path::{Path, PathBuf};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -343,21 +343,25 @@ fn blank<T: Copy>() -> T {
 }
 
 /// A module shared by every instance made from it in this process: the file is loaded, and
-/// its `InitDll`/`ModuleEntry` and `ExitDll`/`ModuleExit` run, once however many instances
-/// use it, as the module API asks.
+/// its `InitDll`/`ModuleEntry` runs, once however many instances use it, as the module API
+/// asks.
 type Module = Rc<ModuleFile>;
 
 thread_local! {
-    /// The modules loaded, by their binary's path (or `test:vst3`), while anything uses them.
-    /// Plug-ins are loaded on the host's main thread only.
-    static MODULES: RefCell<HashMap<PathBuf, Weak<ModuleFile>>> = RefCell::new(HashMap::new());
+    /// The modules loaded, by their binary's path (or `test:vst3`). Once loaded a module stays
+    /// for the process's life and is never unloaded, its `ExitDll` never run: some plug-ins
+    /// wait in it for threads that are still starting (Melodyne, let go of a second after it
+    /// loaded to be loaded again as ARA, held the host for minutes), and the same plug-in is
+    /// often loaded again soon (a device moved, a plug-in found to edit clips). The process
+    /// ending frees them. Plug-ins are loaded on the host's main thread only.
+    static MODULES: RefCell<HashMap<PathBuf, std::mem::ManuallyDrop<Module>>> = RefCell::new(HashMap::new());
 }
 
 /// The module loaded from `key`, or a new one `open` loads (and keeps for the next asker).
 fn shared_module(key: PathBuf, open: impl FnOnce() -> Result<ModuleFile, String>) -> Result<Module, String> {
     let cached = MODULES.with(|modules| {
         let modules = modules.try_borrow().ok()?;
-        modules.get(&key).and_then(Weak::upgrade)
+        modules.get(&key).map(|module| Module::clone(module))
     });
     if let Some(module) = cached {
         return Ok(module);
@@ -365,8 +369,7 @@ fn shared_module(key: PathBuf, open: impl FnOnce() -> Result<ModuleFile, String>
     let module = Rc::new(open()?);
     MODULES.with(|modules| {
         if let Ok(mut modules) = modules.try_borrow_mut() {
-            modules.retain(|_, module| module.strong_count() > 0);
-            modules.insert(key, Rc::downgrade(&module));
+            modules.insert(key, std::mem::ManuallyDrop::new(module.clone()));
         }
     });
     Ok(module)
@@ -607,6 +610,8 @@ pub(crate) struct Vst3Plugin {
     component: ComPtr<IComponent>,
     _handler: ComWrapper<ComponentHandler>,
     _host: ComWrapper<HostApplication>,
+    /// When it was loaded: let go of soon after, it is released later (`Loaded::unload`).
+    loaded_at: std::time::Instant,
     module: Module,
 }
 
@@ -679,6 +684,7 @@ impl Vst3Plugin {
             component,
             _handler: handler,
             _host: host,
+            loaded_at: std::time::Instant::now(),
             module,
         };
         plugin.connect();
@@ -730,12 +736,13 @@ impl Vst3Plugin {
         let pending = self.pending.clone();
         let mapping = MidiMapping::of(self.controller.as_ref());
         let (buses, sample_rate, instance) = (self.buses.clone(), self.sample_rate, self.instance);
+        let bound = self.ara.is_some();
         let audio = AudioSide(processor);
         let thread = thread::Builder::new()
             .name("plug-in audio".into())
             .spawn(move || {
                 let _realtime = crate::real_time_thread();
-                serve(instance, audio, served, buses, sample_rate, (pending, mapping), (&stop, &flush))
+                serve(instance, audio, served, buses, sample_rate, (pending, mapping), (&stop, &flush), bound)
             })
             .map_err(|e| e.to_string())?;
         self.audio = Some(thread);
@@ -861,6 +868,11 @@ impl Vst3Plugin {
         (in_channels, out_channels)
     }
 
+    /// How long ago it was loaded.
+    pub(crate) fn age(&self) -> std::time::Duration {
+        self.loaded_at.elapsed()
+    }
+
     /// Asks the audio thread to stop and waits up to `wait` for it; whether it stopped.
     pub(crate) fn stop_audio(&mut self, wait: std::time::Duration) -> bool {
         crate::audio_stopped(&self.stop, self.audio.as_ref(), wait)
@@ -948,6 +960,28 @@ impl Vst3Plugin {
     /// Moved or trimmed clips change in place while it plays; adding or taking out regions
     /// needs its renderers changed, which ARA allows only while it does not render, so its
     /// processing stops for that and starts again, as for a latency change.
+    /// Between messages: lets a bound ARA document send its queued model changes (#718).
+    pub(crate) fn tick(&self) {
+        if let Some(ara) = &self.ara {
+            ara.tick();
+        }
+    }
+
+    /// The notes a bound ARA document read since the last call (#720).
+    pub(crate) fn take_ara_notes(&self) -> Vec<(String, Vec<suhina_plugins::protocol::AraNote>, bool)> {
+        self.ara.as_ref().map(|ara| ara.take_notes()).unwrap_or_default()
+    }
+
+    /// The edits of one modification and its source, stored on their own (ADR 0028 step 6).
+    pub(crate) fn ara_export(&self, modification: &str, source: &str) -> Result<(String, Vec<u8>), String> {
+        self.ara.as_ref().ok_or("the plug-in is not bound to an ARA document")?.export(modification, source)
+    }
+
+    /// Gives the bound document edits another track's stored for one of its modifications.
+    pub(crate) fn ara_import(&self, id: &str, bytes: &[u8], from: &str, to: &str, source: &str) -> Result<(), String> {
+        self.ara.as_ref().ok_or("the plug-in is not bound to an ARA document")?.import(id, bytes, from, to, source)
+    }
+
     pub(crate) fn ara_update(&mut self, document: &suhina_plugins::protocol::AraDocument) -> Result<(), String> {
         let edited = self.ara.as_mut().ok_or("the plug-in is not bound to an ARA document")?.edit(document)?;
         if edited.changes_renderers() {
@@ -1123,12 +1157,16 @@ impl Drop for Vst3Plugin {
     fn drop(&mut self) {
         self.close_editor();
         self.stop.store(true, Ordering::Release);
+        suhina_plugins::trace!("vst3 drop: joining the audio thread");
         if let Some(audio) = self.audio.take() {
             let _ = audio.join();
         }
+        suhina_plugins::trace!("vst3 drop: setActive(0)");
         // SAFETY: a live component; processing has stopped.
         let _ = unsafe { self.component.setActive(0) };
+        suhina_plugins::trace!("vst3 drop: ARA document");
         self.ara = None;
+        suhina_plugins::trace!("vst3 drop: disconnect, controller");
         if let Some((a, b)) = self.connections.take() {
             // SAFETY: the two connection points connected in `connect`.
             let _ = unsafe { a.disconnect(b.as_ptr()) };
@@ -1142,13 +1180,17 @@ impl Drop for Vst3Plugin {
         if self.separate_controller
             && let Some(controller) = self.controller.take()
         {
+            suhina_plugins::trace!("vst3 drop: controller terminate");
             // SAFETY: a live controller, terminated once before it is released.
             let _ = unsafe { controller.terminate() };
         }
+        suhina_plugins::trace!("vst3 drop: controller release");
         self.controller = None;
+        suhina_plugins::trace!("vst3 drop: component terminate");
         // SAFETY: a live component, terminated once; it is released when `self` is dropped,
         // before the module (declared last) unloads the code.
         let _ = unsafe { self.component.terminate() };
+        suhina_plugins::trace!("vst3 drop: terminated; releasing");
         let _ = &self.module;
     }
 }
@@ -1158,6 +1200,7 @@ impl Drop for Vst3Plugin {
 /// link back. When `flush` is set by then, the parameter values still waiting go to the
 /// processor first, in a block of no samples (the SDK's way of passing parameters without
 /// audio).
+#[allow(clippy::too_many_arguments)]
 fn serve(
     instance: u32,
     audio: AudioSide,
@@ -1166,18 +1209,24 @@ fn serve(
     sample_rate: f64,
     (pending, mapping): (Pending, MidiMapping),
     (stop, flush): (&AtomicBool, &AtomicBool),
+    ara_bound: bool,
 ) -> Served {
     let processor = audio.0;
     let waiting = pending.clone();
     // SAFETY: a live, active processor, on the audio thread.
     let _ = unsafe { processor.setProcessing(1) };
-    let block = Vst3Block::new(processor, &served, buses, sample_rate, (pending, mapping));
+    let mut block = Vst3Block::new(processor, &served, buses, sample_rate, (pending, mapping));
+    if ara_bound && suhina_plugins::trace::on() {
+        block.watch = Some(Watch { instance, frames: 0, peak: 0.0 });
+    }
     if let Some(mut block) = crate::audio::serve(instance, block, &mut served, stop) {
         if flush.load(Ordering::Acquire) && waiting.lock().is_ok_and(|w| !w.is_empty()) {
             block.flush();
         }
+        suhina_plugins::trace!("vst3 audio: setProcessing(0)");
         // SAFETY: as above.
         let _ = unsafe { block.processor.setProcessing(0) };
+        suhina_plugins::trace!("vst3 audio: stopped");
     }
     served
 }
@@ -1200,6 +1249,16 @@ struct Vst3Block {
     inputs: Vec<AudioBusBuffers>,
     outputs: Vec<AudioBusBuffers>,
     context: ProcessContext,
+    /// With a trace, an ARA-bound plug-in's output summed up once a second (`docs/debugging.md`).
+    watch: Option<Watch>,
+}
+
+/// What an ARA-bound plug-in played since the last trace line: its instance, the frames and the
+/// loudest sample.
+struct Watch {
+    instance: u32,
+    frames: u64,
+    peak: f32,
 }
 
 // SAFETY: the block is used by one audio thread at a time (behind its lock, `crate::audio`),
@@ -1256,6 +1315,7 @@ impl Vst3Block {
             inputs,
             outputs,
             context,
+            watch: None,
         }
     }
 }
@@ -1294,7 +1354,8 @@ fn follow_song(context: &mut ProcessContext, events: &[suhina_ipc::Event]) {
     for event in events {
         match event.kind {
             EventKind::Transport { playing, position } => {
-                context.projectTimeSamples = i64::try_from(position).unwrap_or(i64::MAX);
+                let position = i64::try_from(position).unwrap_or(i64::MAX);
+                context.projectTimeSamples = crate::ara::shown_position(position, context.sampleRate, playing);
                 let playing_flag = bits(Flags::kPlaying);
                 context.state = if playing { context.state | playing_flag } else { context.state & !playing_flag };
             }
@@ -1308,6 +1369,33 @@ fn follow_song(context: &mut ProcessContext, events: &[suhina_ipc::Event]) {
     if context.sampleRate > 0.0 && context.tempo > 0.0 {
         context.projectTimeMusic = context.projectTimeSamples as f64 / context.sampleRate * context.tempo / 60.0;
         context.state |= bits(Flags::kProjectTimeMusicValid);
+    }
+}
+
+impl Vst3Block {
+    /// Sums up an ARA-bound plug-in's `output` of `frames` frames and traces it once a second:
+    /// the song's place it was told, whether it plays, the loudest sample (a silent ARA track
+    /// says here whether the plug-in played nothing or was not asked to).
+    fn watch_output(&mut self, output: &[f32], frames: usize) {
+        let rate = self.context.sampleRate;
+        let Some(watch) = self.watch.as_mut() else { return };
+        watch.peak = output.iter().fold(watch.peak, |peak, s| peak.max(s.abs()));
+        watch.frames += frames as u64;
+        if rate <= 0.0 || (watch.frames as f64) < rate {
+            return;
+        }
+        use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_ as Flags;
+        #[allow(clippy::unnecessary_cast, reason = "the flags are signed on Windows")]
+        let playing = self.context.state & (Flags::kPlaying as u32) != 0;
+        suhina_plugins::trace!(
+            "ara audio {}: {}, song at {:.2} s, peak {:.4}",
+            watch.instance,
+            if playing { "playing" } else { "stopped" },
+            self.context.projectTimeSamples as f64 / rate,
+            watch.peak
+        );
+        watch.frames = 0;
+        watch.peak = 0.0;
     }
 }
 
@@ -1364,6 +1452,7 @@ impl crate::audio::Block for Vst3Block {
                 }
             }
         }
+        self.watch_output(output, frames);
     }
 }
 
@@ -1372,16 +1461,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_module_is_loaded_once_while_anything_uses_it() {
+    fn a_module_is_loaded_once_and_kept() {
         let (first, _) = open("test:vst3").unwrap();
         let (second, _) = open("test:vst3").unwrap();
         assert!(Rc::ptr_eq(&first, &second));
         let weak = Rc::downgrade(&first);
         drop((first, second));
-        // Once nothing uses it, it is let go of, and the next open loads it again.
-        assert!(weak.upgrade().is_none());
+        // Nothing uses it, and it stays loaded: the next open gets the same module, and its
+        // `ExitDll` never runs while the process lives.
         let (third, _) = open("test:vst3").unwrap();
-        assert_eq!(Rc::strong_count(&third), 1);
+        assert!(weak.upgrade().is_some_and(|kept| Rc::ptr_eq(&kept, &third)));
     }
 
     #[test]

@@ -124,6 +124,42 @@ const AUDIO_HEADROOM: f32 = 4.0;
 const NO_COLUMN: u32 = u32::MAX;
 /// Project frames rendered per stretch-voice call.
 const STRETCH_BLOCK: usize = 1024;
+/// What a block's plug-ins leave of the time its queued frames play ([`Renderer::set_render_lead`]),
+/// for the engine itself and the scheduling around it, in seconds.
+const LEAD_MARGIN_SECONDS: f64 = 0.003;
+/// The device index of a parameter message that moves a track's volume fader
+/// ([`Controller::set_device_param`]): the value is the channel's new linear volume, and the
+/// playing graph takes it without a new graph where the track's chain can.
+pub const MIXER_VOLUME: usize = usize::MAX;
+
+/// What the last graph's build took, part by part, for the trace (`docs/debugging.md`): an
+/// edit to a large project held the window up for over a second there.
+pub mod build_report {
+    use std::sync::Mutex;
+
+    static LAST: Mutex<String> = Mutex::new(String::new());
+
+    pub(crate) fn set(report: String) {
+        if let Ok(mut last) = LAST.lock() {
+            *last = report;
+        }
+    }
+
+    pub(crate) fn add(part: &str) {
+        if let Ok(mut last) = LAST.lock() {
+            last.push_str(", ");
+            last.push_str(part);
+        }
+    }
+
+    /// The parts of the last graph built and sent.
+    pub fn last() -> String {
+        LAST.lock().map(|l| l.clone()).unwrap_or_default()
+    }
+}
+/// How long a start waits at most for the stretched clips at the marker to be rendered ahead,
+/// in seconds; it rolls then whatever they have.
+const START_WAIT_SECONDS: f64 = 0.3;
 /// Release time after note-off, in seconds.
 const RELEASE_SECONDS: f64 = 0.05;
 /// Attack time, in seconds; long enough to avoid a click at note-on.
@@ -279,6 +315,10 @@ pub struct Renderer {
     sample_rate: u32,
     graph: Box<Graph>,
     next_event: usize,
+    /// The transport started or jumped: the notes that span the playhead start on the next
+    /// frame, as if their beginning were there (`docs/spec/arrangement-editing.md` › Play
+    /// position).
+    chase: bool,
     voices: [Voice; MAX_VOICES],
     next_audio: usize,
     /// Indices into the graph's `audio_events` that are playing; the first `active_audio_count`
@@ -287,6 +327,10 @@ pub struct Renderer {
     active_audio_count: usize,
     /// The stretch voices are at their first frame and nothing has played them since.
     stretch_fresh: bool,
+    /// A start waiting for the stretched clips at the marker to be rendered, with the frames
+    /// waited so far: the transport rolls once they are, so their beginnings are heard (a
+    /// locate waits for the read-ahead in OSS hosts too), or after [`START_WAIT_SECONDS`].
+    start_waiting: Option<u64>,
     stretch_scratch: Vec<f32>,
     /// Frames rendered since the renderer was built.
     position: u64,
@@ -310,6 +354,9 @@ pub struct Renderer {
     block_frame: usize,
     /// Rendering offline: plug-ins are waited for without a real-time deadline (ADR 0006).
     offline: bool,
+    /// What the device has queued ahead of the next block and how much it takes at once, in
+    /// frames ([`Renderer::set_render_lead`]): how long the block's plug-ins may take.
+    render_lead: Option<(usize, usize)>,
     /// What is known about the project's plug-in devices, for the graphs built after edits.
     plugin_info: HashMap<u64, PluginSlotInfo>,
     /// The browser's preview voice (ADR 0011).
@@ -387,11 +434,13 @@ impl Renderer {
             sample_rate,
             graph,
             next_event: 0,
+            chase: false,
             voices: [Voice::default(); MAX_VOICES],
             next_audio: 0,
             active_audio: [0; MAX_AUDIO_VOICES],
             active_audio_count: 0,
             stretch_fresh: true,
+            start_waiting: None,
             stretch_scratch: vec![0.0; STRETCH_BLOCK * 2],
             position: 0,
             origin: 0,
@@ -405,6 +454,7 @@ impl Renderer {
             metronome: metronome::Metronome::new(sample_rate),
             block_frame: 0,
             offline: false,
+            render_lead: None,
             plugin_info: plugins.info,
             preview: preview::Preview::new(sample_rate),
             cue: cue::Cue::new(),
@@ -540,6 +590,16 @@ impl Renderer {
     /// blocks and one block more leaves every note a frame in the block after it, so notes keep
     /// the spacing they were played with. Call it before every [`Renderer::process`]; without
     /// it, every note plays at the first frame of the next block. Never allocates.
+    /// How far the output is ahead of the device as the next block starts: `queued` frames are
+    /// waiting to be played before it, and the device takes `device` frames at once. The block's
+    /// plug-ins may take the time those queued frames play, less the device's buffer and a
+    /// margin, instead of a fixed share of the block: a return's plug-ins, which run after every
+    /// track that sends to them, missed the share left to them in a large project and crackled.
+    /// Call it before every [`Renderer::process`] while a device plays. Never allocates.
+    pub fn set_render_lead(&mut self, queued: usize, device: usize) {
+        self.render_lead = Some((queued, device));
+    }
+
     pub fn set_live_clock(&mut self, now: u64, delay: u32) {
         self.live.set_clock(now, delay, self.position);
     }
@@ -560,6 +620,51 @@ impl Renderer {
 
     pub fn stretch_underruns(&self) -> u64 {
         self.underruns_before + self.graph.ahead.underruns()
+    }
+
+    /// Publishes the plug-in blocks missed so far and the plug-in that missed most. Never
+    /// allocates.
+    fn publish_plugin_misses(&mut self) {
+        let (mut total, mut worst) = (0u64, (0u64, 0u64));
+        for chain in &mut self.graph.chains {
+            for slot in chain.plugin_slots() {
+                total += slot.missed;
+                if slot.missed > worst.1 {
+                    worst = (slot.key, slot.missed);
+                }
+            }
+        }
+        let monitor = &self.graph.launcher.monitor;
+        monitor.plugin_misses.store(total, std::sync::atomic::Ordering::Relaxed);
+        monitor.worst_plugin.store(worst.0, std::sync::atomic::Ordering::Relaxed);
+        monitor.worst_misses.store(worst.1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Starts the notes that began before arrangement frame `time` and still sound there, at
+    /// frame `frame` of the block, each ending where it would have: a start or a jump inside a
+    /// note plays it (from its attack, as an instrument cannot start a sound part-way). Never
+    /// allocates.
+    fn chase_notes(&mut self, frame: usize, time: u64) {
+        for index in 0..self.next_event.min(self.graph.events.len()) {
+            let Some(event) = self.graph.events.get(index).copied() else { break };
+            if event.end <= time || self.graph.launcher.overrides(event.column) {
+                continue;
+            }
+            let end = self.position + (event.end - time);
+            let start = NoteStart {
+                frequency: event.frequency,
+                key: event.key,
+                velocity: event.velocity,
+                track: event.track,
+                gains: (event.gain_left, event.gain_right),
+                column: event.column,
+                bus: event.bus,
+                meter: event.meter,
+                scale: event.scale,
+            };
+            let Self { voices, graph, position, sample_rate, .. } = self;
+            start_note(voices, &mut graph.chains, frame, *position, *sample_rate, end, start);
+        }
     }
 
     /// Renders the next `out.len() / 2` frames of interleaved stereo into `out`, overwriting it.
@@ -606,6 +711,7 @@ impl Renderer {
             self.process_block(rest, cue_rest);
         }
         self.publish_position();
+        self.publish_plugin_misses();
         self.publish_count_in();
         if let Some(started) = measured {
             self.cpu.measured(started, Instant::now());
@@ -623,6 +729,7 @@ impl Renderer {
             // A count-in that has counted its beats starts the transport on this frame.
             self.end_count_in();
             let frames = (out.len() / 2).min(MAX_BLOCK);
+            self.wait_to_start(frames as u64);
             let frames = self.frames_to_loop_end().map_or(frames, |to_end| frames.min(to_end.max(1)));
             let frames = self.frames_to_count_in_end().map_or(frames, |to_end| frames.min(to_end.max(1)));
             let (chunk, rest) = std::mem::take(&mut out).split_at_mut(frames * 2);
@@ -640,7 +747,17 @@ impl Renderer {
         if self.offline {
             return None;
         }
-        let seconds = frames as f64 / f64::from(self.sample_rate) * DEADLINE_SHARE;
+        let rate = f64::from(self.sample_rate.max(1));
+        let block = frames as f64 / rate;
+        let seconds = match self.render_lead {
+            // What is queued plays while this block is made; the device's own buffer and a
+            // margin are kept for it. Never less than a quarter of the block, never past it.
+            Some((queued, device)) => {
+                let room = (queued as f64 - device as f64) / rate - LEAD_MARGIN_SECONDS;
+                room.clamp(block * 0.25, block * 0.95)
+            }
+            None => block * DEADLINE_SHARE,
+        };
         Some(Instant::now() + Duration::from_secs_f64(seconds))
     }
 
@@ -729,6 +846,10 @@ impl Renderer {
                 + self.count_in_frame();
             let (launched_left, launched_right) = self.launcher_frame();
             let time = self.time();
+            if self.running && self.chase {
+                self.chase = false;
+                self.chase_notes(frame, time);
+            }
             while self.running
                 && let Some(event) = self.graph.events.get(self.next_event)
             {
@@ -845,6 +966,8 @@ impl Renderer {
         let scratch = &mut self.stretch_scratch;
         let launcher = &self.graph.launcher;
         let ahead = &mut self.graph.ahead;
+        // Which voices the worker renders first: the ones due from here.
+        ahead.set_playhead(time_start);
         let chains = &mut self.graph.chains;
         let levels = &mut self.graph.levels;
         self.stretch_fresh = false;
@@ -995,14 +1118,18 @@ pub(crate) fn start_note(
 }
 
 /// Where a track's sound goes: its bus (0 for the output, 1 + the chain's index when the track
-/// has devices) and the gains its sources are mixed at; `None` when the track is silent. A track
-/// with a chain is mixed at a centred unity gain, and its own gains apply after the chain.
+/// has a chain) and the gains its sources are mixed at; `None` when the track is silent and has no
+/// chain. A track with a chain is mixed at a centred unity gain, and its own gains apply after
+/// the chain.
 pub(crate) fn route(project: &Project, chains: &[Chain], track: TrackId) -> Option<(u32, (f32, f32))> {
-    let gains = track_gains(project, track)?;
-    match chains.iter().position(|c| c.track == track) {
-        Some(index) => Some((u32::try_from(index + 1).ok()?, (CHAIN_INPUT_GAIN, CHAIN_INPUT_GAIN))),
-        None => Some((0, gains)),
+    // A track with a chain plays into it even while it is not heard (muted, or another track
+    // soloed): the chain's gains are zero then, and its instrument keeps its notes, so a note
+    // held through an unmute or a solo sounds at once, as a mute is only a gain in OSS hosts
+    // too; leaving the notes out made it wait for the next note.
+    if let Some(index) = chains.iter().position(|c| c.track == track) {
+        return Some((u32::try_from(index + 1).ok()?, (CHAIN_INPUT_GAIN, CHAIN_INPUT_GAIN)));
     }
+    Some((0, track_gains(project, track)?))
 }
 
 impl Graph {
@@ -1018,6 +1145,7 @@ impl Graph {
         if !(8_000..=384_000).contains(&sample_rate) {
             return Err(RenderError::InvalidSampleRate(sample_rate));
         }
+        let build_began = std::time::Instant::now();
         let bpm = project.transport.tempo_bpm;
         if !bpm.is_finite() || !(1.0..=999.0).contains(&bpm) {
             return Err(RenderError::InvalidTempo(bpm));
@@ -1044,11 +1172,23 @@ impl Graph {
         };
         // Device chains, group buses and latency compensation: every track is heard as late as
         // the path whose devices delay it most.
+        // The tempo map as a number, for the stretch voices' keys: a voice on another map plays
+        // other frames.
+        let tempo_key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            format!("{:?}", *tempo).hash(&mut hasher);
+            hasher.finish()
+        };
+        let chains_began = std::time::Instant::now();
         let (chains, latency) = buses::build(project, audio, sample_rate, plugins, column_of, assets);
+        let chains_took = chains_began.elapsed();
+        let mut voices_took = std::time::Duration::ZERO;
         let mut events = Vec::new();
         let mut audio_events = Vec::new();
         let mut stretch_events = Vec::new();
         let mut stretch_voices = Vec::new();
+        let mut stretch_heard = Vec::new();
         for (lane_index, lane) in project.arrangement.lanes.iter().enumerate() {
             for (clip_index, clip) in lane.clips.iter().enumerate().filter(|(_, c)| c.enabled) {
                 let Some(content) = project.content(clip.content) else { continue };
@@ -1071,15 +1211,19 @@ impl Graph {
                             let gains = (gain_left * AUDIO_HEADROOM, gain_right * AUDIO_HEADROOM);
                             // Warped clips are time-stretched as they play; the rest, and clips
                             // the stretcher cannot handle, are re-pitched.
-                            if region.warped
-                                && region.stretch != suhina_model::StretchMode::Repitch
-                                && let Some(voice) =
-                                    StretchVoice::on_map(clip, region, data.clone(), &tempo, sample_rate)
-                            {
+                            let voice_began = std::time::Instant::now();
+                            let voice = (region.warped && region.stretch != suhina_model::StretchMode::Repitch)
+                                .then(|| StretchVoice::on_map(clip, region, data.clone(), &tempo, sample_rate))
+                                .flatten();
+                            voices_took += voice_began.elapsed();
+                            if let Some(voice) = voice {
                                 let gain = if region.gain.is_finite() { region.gain.max(0.0) as f32 } else { 0.0 };
                                 let to_frame = |beats: f64| tempo::frame_of(&tempo, beats);
                                 let (start, end) = (to_frame(clip.start), to_frame(clip.start + clip.length));
-                                stretch_voices.push((voice, start, end.saturating_sub(start)));
+                                let length = end.saturating_sub(start);
+                                let key = ahead::voice_key(clip, region, data, (start, length), tempo_key);
+                                stretch_voices.push((voice, start, length, key));
+                                stretch_heard.push(track_gains(project, track).is_some());
                                 stretch_events.push(StretchEvent {
                                     start,
                                     end,
@@ -1146,15 +1290,37 @@ impl Graph {
                 Some(input::InputRoute { track: t.id, left, right, monitor: t.audio_input.monitor, bus, gains })
             })
             .collect();
+        let rings_began = std::time::Instant::now();
+        let voices = stretch_voices.len();
+        let mut ahead = AheadReader::new(stretch_voices, sample_rate);
+        ahead.set_heard(&stretch_heard);
+        let rings_took = rings_began.elapsed();
+        let launcher_began = std::time::Instant::now();
+        let launcher = Launcher::new(project, audio, sample_rate, &chains, Arc::clone(&tempo));
+        let launcher_took = launcher_began.elapsed();
+        let levels_began = std::time::Instant::now();
+        let levels = meters::Levels::build(project, &chains);
+        let levels_took = levels_began.elapsed();
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+        build_report::set(format!(
+            "graph {:.1} ms: before the chains {:.1} ms, device chains {:.1} ms, {voices} stretch voices {:.1} ms, their rings {:.1} ms, launcher {:.1} ms, levels {:.1} ms",
+            ms(build_began.elapsed()),
+            ms(chains_began.duration_since(build_began)),
+            ms(chains_took),
+            ms(voices_took),
+            ms(rings_took),
+            ms(launcher_took),
+            ms(levels_took),
+        ));
         Ok(Box::new(Graph {
             inputs_heard: vec![false; inputs.len()],
             inputs,
             events,
             audio_events,
             stretch_events,
-            ahead: AheadReader::new(stretch_voices, sample_rate),
+            ahead,
             length,
-            launcher: Launcher::new(project, audio, sample_rate, &chains, Arc::clone(&tempo)),
+            launcher,
             tempo,
             loop_beats: project.transport.looping().map(|r| (r.start, r.end)),
             routes: project
@@ -1165,7 +1331,7 @@ impl Graph {
                     (t.id, bus, gains)
                 })
                 .collect(),
-            levels: meters::Levels::build(project, &chains),
+            levels,
             chains,
             latency,
             direct_delay: Delay::new(latency as usize),
@@ -1919,9 +2085,16 @@ mod tests {
         assert!(renderer.stretch_underruns() > 0);
         let stalled = &out[2 * 441 * 70..2 * 441 * 100];
         assert!(stalled.iter().all(|s| *s == 0.0), "a stalled worker plays silence");
-        // Once it catches up the clip plays where it should, not where it left off.
-        let tail = 2 * 441 * 110;
-        assert_eq!(max_diff(&reference[tail..], &out[tail..]), 0.0);
+        // Once it catches up the clip plays where it should, not where it left off: the voice
+        // jumped ahead of the playhead rather than rendering the second it missed, so it sounds
+        // again within a few blocks, as loud as the clip is there. Its stretcher started again
+        // at the jump, so the samples are not the reference's to the bit.
+        let rms = |s: &[f32]| (s.iter().map(|x| x * x).sum::<f32>() / s.len().max(1) as f32).sqrt();
+        let block = |samples: &[f32], i: usize| samples[2 * 441 * i..2 * 441 * (i + 1)].to_vec();
+        for i in 115..200 {
+            let (heard, wanted) = (rms(&block(&out, i)), rms(&block(&reference, i)));
+            assert!((heard - wanted).abs() <= wanted * 0.1 + 1e-3, "block {i}: {heard} against {wanted}");
+        }
     }
 
     #[test]
@@ -2097,6 +2270,54 @@ mod tests {
         assert_eq!(renderer.stretch_underruns(), 0);
         let at = swap_frame(50);
         assert!(rms(&out, at, at + 4_800) > 0.9 * rms(&out, at - 4_800, at));
+    }
+
+    #[test]
+    fn a_stretched_clip_keeps_its_voice_through_an_edit_that_leaves_it_alone() {
+        // An edit elsewhere (a solo, a fader) sends a new graph: the clip's voice carries over to
+        // it, stretcher and ring, so what plays is the same to the sample (#743).
+        let (project, pool) = stretched_project(440.0, 4.0, 8.0, 110.0, StretchMode::Smooth);
+        let mut offline = Renderer::with_audio(&project, &pool, SR).unwrap();
+        let reference = blocks(&mut offline, 150, 480, |_| {});
+        let mut renderer = Renderer::with_audio(&project, &pool, SR).unwrap();
+        let mut controller = renderer.controller();
+        controller.run_stretch_worker(&mut renderer).unwrap();
+        let pace = |_| std::thread::sleep(std::time::Duration::from_millis(10));
+        let mut out = blocks(&mut renderer, 50, 480, pace);
+        controller.update(&project).unwrap();
+        out.extend(blocks(&mut renderer, 100, 480, pace));
+        assert_eq!(renderer.stretch_underruns(), 0);
+        assert_eq!(controller.stretch_moves(), 0);
+        assert_eq!(max_diff(&reference, &out), 0.0, "the voice went on as it was");
+    }
+
+    #[test]
+    fn an_edit_refused_by_a_full_queue_leaves_the_playing_voices_alone() {
+        // Edits faster than the audio thread takes them (a fader drag) fill the swap queue; the
+        // one refused must not hand the playing clip's voice to a graph that is then dropped.
+        let (project, pool) = stretched_project(440.0, 4.0, 8.0, 110.0, StretchMode::Smooth);
+        let mut offline = Renderer::with_audio(&project, &pool, SR).unwrap();
+        let reference = blocks(&mut offline, 150, 480, |_| {});
+        let mut renderer = Renderer::with_audio(&project, &pool, SR).unwrap();
+        let mut controller = renderer.controller();
+        controller.run_stretch_worker(&mut renderer).unwrap();
+        let pace = |_| std::thread::sleep(std::time::Duration::from_millis(10));
+        let mut out = blocks(&mut renderer, 50, 480, pace);
+        let mut refused = false;
+        for _ in 0..64 {
+            // A frame apart, as a drag sends them: the stretch thread takes each worker in.
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            if controller.update(&project).is_err() {
+                refused = true;
+                // Time for the stretch thread to act on anything it was handed.
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                break;
+            }
+        }
+        assert!(refused, "the queue filled up");
+        out.extend(blocks(&mut renderer, 100, 480, pace));
+        assert_eq!(renderer.stretch_underruns(), 0);
+        assert_eq!(max_diff(&reference, &out), 0.0, "the voice went on as it was");
     }
 
     #[test]

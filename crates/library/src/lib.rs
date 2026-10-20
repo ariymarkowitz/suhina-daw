@@ -106,6 +106,23 @@ pub struct IndexedFile {
     pub modified: u64,
 }
 
+/// Every file of `kind` (or of every kind) in an [`Library::index_snapshot`].
+pub fn files_in(
+    snapshot: &[(PathBuf, Arc<FolderIndex>)],
+    kind: Option<FileKind>,
+) -> impl Iterator<Item = IndexedFile> + '_ {
+    snapshot.iter().flat_map(move |(folder, index)| {
+        index.files.iter().filter(move |(_, e)| kind.is_none_or(|k| k == e.kind)).map(move |(rel, e)| IndexedFile {
+            folder: folder.clone(),
+            path: index::path_of(folder, rel),
+            rel: rel.clone(),
+            kind: e.kind,
+            size: e.size,
+            modified: e.modified,
+        })
+    })
+}
+
 impl IndexedFile {
     /// The file's name.
     pub fn name(&self) -> &str {
@@ -423,6 +440,13 @@ impl Library {
         Ok(())
     }
 
+    /// Each folder with its index as it is now, shared: to list its files on another thread
+    /// ([`files_in`]) without copying them here.
+    pub fn index_snapshot(&mut self) -> Vec<(PathBuf, Arc<FolderIndex>)> {
+        self.load();
+        self.folders.iter().map(|f| (f.path.clone(), Arc::clone(&f.index))).collect()
+    }
+
     /// Every indexed file, of `kind` or of every kind.
     pub fn files(&mut self, kind: Option<FileKind>) -> impl Iterator<Item = IndexedFile> + '_ {
         self.load();
@@ -530,6 +554,62 @@ impl Library {
         }
         out.sort_by(|a, b| b.kind.is_none().cmp(&a.kind.is_none()).then(natural_cmp(&a.name, &b.name)));
         Ok(out)
+    }
+
+    /// The audio files outside projects' folders that opening a project may read.
+    pub fn trusted_audio(&mut self) -> Vec<PathBuf> {
+        self.load();
+        self.store.trusted_audio.clone()
+    }
+
+    /// Keeps `files` (absolute paths) as trusted audio, newest first, and saves when that
+    /// changed anything. Returns whether it did.
+    pub fn trust_audio(&mut self, files: Vec<PathBuf>) -> Result<bool, String> {
+        self.load();
+        let trusted = &mut self.store.trusted_audio;
+        let before = trusted.clone();
+        for file in files.into_iter().filter(|f| f.is_absolute()) {
+            trusted.retain(|t| *t != file);
+            trusted.insert(0, file);
+        }
+        trusted.truncate(store::MAX_TRUSTED_AUDIO);
+        if *trusted == before {
+            return Ok(false);
+        }
+        self.save()?;
+        Ok(true)
+    }
+
+    /// The folders outside `project` (its project file) that its audio was loaded from.
+    pub fn project_folders(&mut self, project: &Path) -> Vec<PathBuf> {
+        self.load();
+        self.store.project_folders.get(&project.display().to_string()).cloned().unwrap_or_default()
+    }
+
+    /// Adds `folders` (absolute paths) to `project`'s source folders, newest first, and saves
+    /// when that changed anything. Returns whether it did.
+    pub fn add_project_folders(&mut self, project: &Path, folders: Vec<PathBuf>) -> Result<bool, String> {
+        self.load();
+        let key = project.display().to_string();
+        let mut list = self.store.project_folders.get(&key).cloned().unwrap_or_default();
+        let before = list.clone();
+        for folder in folders.into_iter().filter(|f| f.is_absolute()) {
+            list.retain(|f| *f != folder);
+            list.insert(0, folder);
+        }
+        list.truncate(store::MAX_PROJECT_FOLDERS);
+        if list == before {
+            return Ok(false);
+        }
+        if !self.store.project_folders.contains_key(&key)
+            && self.store.project_folders.len() >= store::MAX_PROJECTS_WITH_FOLDERS
+            && let Some(oldest) = self.store.project_folders.keys().next().cloned()
+        {
+            self.store.project_folders.remove(&oldest);
+        }
+        self.store.project_folders.insert(key, list);
+        self.save()?;
+        Ok(true)
     }
 
     pub fn pinned(&mut self) -> Vec<String> {

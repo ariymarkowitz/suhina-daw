@@ -3,7 +3,7 @@ description: Backups (autosave) of open projects - when they are written (an int
 read_when: backup, backups, autosave, auto save, recovery, crash, lost work, .backup folder, project.autosave, critical operation, clean-up, power cut
 type: spec
 status: draft
-last_verified: 2026-10-18
+last_verified: 2026-10-20
 covers:
   - crates/session/src/backup.rs
   - crates/ui/src/app/project_dialog.rs
@@ -88,9 +88,9 @@ undo or risky is added there and to this list.
 
 ## How a backup is written
 
-- The project is copied, with the plug-ins' state taken as `project.save` takes it: each running
-  host is asked and the backup waits at most one second; a plug-in that has not answered is backed
-  up with the state it last gave, rather than holding the window.
+- The project is copied with each plug-in's state as it was last read (every 30 seconds while it
+  runs, and at each save), without asking the plug-ins again: asking waited up to a second for a
+  busy plug-in on the window's thread at every backup. A save still asks every running plug-in.
 - The copy is turned into JSON and written on a background thread (`suhina-backup`), never on
   the window's thread or the audio thread. It is written to a temporary file beside the backup
   (`… .suhina.saving`) that is then renamed to the backup's name, so a crash while writing leaves

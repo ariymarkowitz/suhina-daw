@@ -77,3 +77,52 @@ fn a_clips_colour_survives_saving() {
     assert_eq!(lane.clips[0].color, Some(Rgb(1, 2, 3)));
     assert_eq!(lane.clips[1].color, None);
 }
+
+#[test]
+fn tracks_keep_the_colour_they_show_when_tracks_come_and_go() {
+    let palette = vec![Rgb(1, 0, 0), Rgb(0, 2, 0), Rgb(0, 0, 3), Rgb(4, 4, 0)];
+    let mut session = Session::new(blank_project());
+    session.set_track_colours(palette.clone(), None);
+    for _ in 0..3 {
+        run(&mut session, "track.add", json!({ "kind": "audio" })).unwrap();
+    }
+    let shown = |s: &Session| {
+        s.project()
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(place, t)| (t.id, t.color.unwrap_or(palette[place % palette.len()])))
+            .collect::<Vec<_>>()
+    };
+    let before = shown(&session);
+    // A track taken out of the middle: the others keep the colour they showed.
+    let middle = before[before.len() / 2].0;
+    run(&mut session, "track.delete", json!({ "track": middle.0 })).unwrap();
+    let after: Vec<_> = before.iter().filter(|(id, _)| *id != middle).copied().collect();
+    assert_eq!(shown(&session), after);
+    // A new one added: the same, and the new one keeps its own from then on.
+    run(&mut session, "track.add", json!({ "kind": "midi" })).unwrap();
+    let now = shown(&session);
+    assert!(after.iter().all(|kept| now.contains(kept)), "{after:?} in {now:?}");
+    assert!(session.project().tracks.iter().all(|t| t.color.is_some()), "every colour is stored");
+    // One undo step each: the delete's undo brings the colours back as they were.
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    assert_eq!(shown(&session), before);
+}
+
+#[test]
+fn with_a_fixed_colour_new_tracks_take_it_and_the_others_keep_theirs() {
+    let palette = vec![Rgb(1, 0, 0), Rgb(0, 2, 0), Rgb(0, 0, 3), Rgb(4, 4, 0)];
+    let mut session = Session::new(blank_project());
+    session.set_track_colours(palette.clone(), Some(Rgb(9, 9, 9)));
+    let before: Vec<_> = session.project().tracks.iter().map(|t| t.id).collect();
+    run(&mut session, "track.add", json!({ "kind": "audio" })).unwrap();
+    run(&mut session, "track.add", json!({ "kind": "midi" })).unwrap();
+    let p = session.project();
+    let new: Vec<_> = p.tracks.iter().filter(|t| !before.contains(&t.id)).map(|t| t.color).collect();
+    assert_eq!(new, [Some(Rgb(9, 9, 9)), Some(Rgb(9, 9, 9))]);
+    for (place, track) in p.tracks.iter().enumerate().filter(|(_, t)| before.contains(&t.id)) {
+        assert!(track.color.is_some(), "{place}: stored as it showed");
+    }
+}

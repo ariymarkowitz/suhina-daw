@@ -97,6 +97,12 @@ pub(crate) struct Chain {
     pub(crate) delay: Delay,
     /// The track's gains after the chain.
     post: (f32, f32),
+    /// The channel's volume `post` was built with, when a live volume may scale it: `None` for
+    /// a bus or an automated volume (those take a new graph).
+    pub(crate) built_volume: Option<f64>,
+    /// A fader move since the graph was built, as a factor on `post`, its cue and its post-fader
+    /// sends, smoothed like a fader in OSS hosts (a one-pole low pass at about 25 Hz).
+    pub(crate) live: LiveVolume,
     /// The lanes of its built-in devices' parameters.
     device_lanes: DeviceLanes,
     /// The lanes of the track's mixer, which scale `post` frame by frame (#395).
@@ -385,6 +391,8 @@ impl Chain {
             held: [NOT_HELD; 128],
             next_off: NOT_HELD,
             scale: None,
+            built_volume: None,
+            live: LiveVolume::default(),
         })
     }
 
@@ -428,6 +436,19 @@ impl Chain {
             held: [NOT_HELD; 128],
             next_off: NOT_HELD,
             scale: None,
+            built_volume: None,
+            live: LiveVolume::default(),
+        }
+    }
+
+    /// Takes a fader move to `volume` (the channel's linear volume) from the next block, smoothed;
+    /// ignored without a [`Chain::built_volume`]. Never allocates.
+    pub(crate) fn set_live_volume(&mut self, volume: f64) {
+        if let Some(built) = self.built_volume
+            && volume.is_finite()
+            && volume >= 0.0
+        {
+            self.live.target = (volume / built) as f32;
         }
     }
 
@@ -882,6 +903,7 @@ impl Chain {
     /// Runs the devices over the rest of a block of `frames` frames; [`Chain::mix`] then adds
     /// the result to where the track plays into, and the sends read it before that.
     pub(crate) fn complete(&mut self, frames: usize, context: &ProcessContext) {
+        self.live.plan(frames, self.sample_rate);
         self.context = *context;
         self.run(frames);
     }
@@ -890,28 +912,42 @@ impl Chain {
     /// track's gains, to `out`, and, when its cue is on, at its cue gains to `cue`.
     pub(crate) fn mix(&mut self, out: &mut [f32], cue: &mut [f32], frames: usize) {
         let (gain_left, gain_right) = self.post;
+        let live = self.live;
         let Some(buffer) = self.buffer.get_mut(..frames.min(MAX_BLOCK) * 2) else { return };
         self.delay.run(buffer);
         let pairs = out.as_chunks_mut::<2>().0.iter_mut().zip(buffer.as_chunks::<2>().0);
         match &self.mix {
-            None => {
+            None if live.steady() => {
+                let fader = live.at(0);
                 for ([l, r], [cl, cr]) in pairs {
-                    *l += cl * gain_left;
-                    *r += cr * gain_right;
+                    *l += cl * gain_left * fader;
+                    *r += cr * gain_right * fader;
                 }
             }
+            None => {
+                for (frame, ([l, r], [cl, cr])) in pairs.enumerate() {
+                    let fader = live.at(frame);
+                    *l += cl * gain_left * fader;
+                    *r += cr * gain_right * fader;
+                }
+            }
+            // A pan or mute lane alone leaves the volume to the fader, which still moves live.
             Some(mix) => {
                 for (frame, ([l, r], [cl, cr])) in pairs.enumerate() {
                     let (left, right) = mix.gains(frame);
-                    *l += cl * gain_left * left;
-                    *r += cr * gain_right * right;
+                    let fader = live.at(frame);
+                    *l += cl * gain_left * left * fader;
+                    *r += cr * gain_right * right * fader;
                 }
             }
         }
         if let Some((cue_left, cue_right)) = self.cue {
-            for ([l, r], [cl, cr]) in cue.as_chunks_mut::<2>().0.iter_mut().zip(buffer.as_chunks::<2>().0) {
-                *l += cl * cue_left;
-                *r += cr * cue_right;
+            for (frame, ([l, r], [cl, cr])) in
+                cue.as_chunks_mut::<2>().0.iter_mut().zip(buffer.as_chunks::<2>().0).enumerate()
+            {
+                let fader = live.at(frame);
+                *l += cl * cue_left * fader;
+                *r += cr * cue_right * fader;
             }
         }
     }
@@ -1423,9 +1459,87 @@ fn process(device: &mut Box<dyn Device>, buffer: &mut [f32], from: usize, to: us
     device.process(context, span);
 }
 
+/// A live fader factor over one block: from `from` at its first frame to `to` at its last, the
+/// one-pole low pass a fader is smoothed with in OSS hosts (about 25 Hz), worked out per block.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LiveVolume {
+    pub(crate) target: f32,
+    now: f32,
+    from: f32,
+    to: f32,
+    frames: usize,
+}
+
+impl Default for LiveVolume {
+    fn default() -> Self {
+        Self { target: 1.0, now: 1.0, from: 1.0, to: 1.0, frames: 1 }
+    }
+}
+
+impl LiveVolume {
+    /// Plans the next block of `frames` frames at `sample_rate`.
+    fn plan(&mut self, frames: usize, sample_rate: f64) {
+        self.from = self.now;
+        let coefficient = (156.825 / sample_rate.max(1.0)).min(1.0);
+        let left = (1.0 - coefficient).powi(i32::try_from(frames).unwrap_or(i32::MAX));
+        let to = self.target + (self.now - self.target) * left as f32;
+        self.to = if (to - self.target).abs() < 1e-5 { self.target } else { to };
+        self.now = self.to;
+        self.frames = frames.max(1);
+    }
+
+    /// The factor at frame `frame` of the block.
+    pub(crate) fn at(&self, frame: usize) -> f32 {
+        self.from + (self.to - self.from) * (frame as f32 / self.frames as f32)
+    }
+
+    /// Whether it stays the same through the block.
+    fn steady(&self) -> bool {
+        self.from == self.to
+    }
+}
+
 #[cfg(test)]
 #[path = "chain_wait_tests.rs"]
 mod wait_tests;
+
+#[cfg(test)]
+mod live_volume_tests {
+    use super::*;
+    use suhina_model::{AutomationLane, AutomationPoint, Channel, ChannelId};
+
+    /// The left output of a passthrough chain fed ones, after a fader move to `volume` has
+    /// settled, with a pan lane at the centre when `pan_lane`.
+    fn settled(volume: f64, pan_lane: bool) -> f32 {
+        let mut chain = Chain::passthrough(TrackId(1), 0);
+        if pan_lane {
+            let mut channel = Channel::new(ChannelId(1), "C1");
+            channel.automation.push(AutomationLane {
+                param: suhina_model::automation::PAN.into(),
+                points: vec![AutomationPoint::new(0.0, 0.0)],
+                enabled: true,
+            });
+            chain.mix = MixLanes::new(&channel, 24_000.0, true);
+            assert!(chain.mix.is_some());
+        }
+        chain.built_volume = Some(1.0);
+        chain.set_live_volume(volume);
+        let mut out = vec![0.0; 256 * 2];
+        for _ in 0..200 {
+            chain.buffer.fill(1.0);
+            chain.complete(256, &ProcessContext::default());
+            out.fill(0.0);
+            chain.mix(&mut out, &mut [], 256);
+        }
+        out.get(255 * 2).copied().unwrap_or_default()
+    }
+
+    #[test]
+    fn a_fader_move_is_heard_with_and_without_a_pan_lane() {
+        assert!((settled(0.5, false) - 0.5).abs() < 1e-3);
+        assert!((settled(0.5, true) - 0.5).abs() < 1e-3, "{}", settled(0.5, true));
+    }
+}
 
 #[cfg(test)]
 mod sd_tests {

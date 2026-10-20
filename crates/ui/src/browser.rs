@@ -29,7 +29,8 @@ use crate::kit::waveform::{Peaks, peaks};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Place {
     Pinned,
-    Recent(Group),
+    /// The recent items: of one group, or of every group (`None`, #711).
+    Recent(Option<Group>),
     Folder(PathBuf),
 }
 
@@ -38,7 +39,8 @@ impl Place {
     pub fn param(&self) -> String {
         match self {
             Self::Pinned => "pinned".into(),
-            Self::Recent(group) => format!("recent:{}", group.name()),
+            Self::Recent(Some(group)) => format!("recent:{}", group.name()),
+            Self::Recent(None) => "recent:all".into(),
             Self::Folder(path) => path.display().to_string(),
         }
     }
@@ -50,13 +52,13 @@ impl Place {
     /// kind (the pins, a folder, the recent projects).
     pub fn category(&self) -> Option<Category> {
         match self {
-            Self::Recent(Group::Samples) => Some(Category::Samples),
-            Self::Recent(Group::Midi) => Some(Category::Midi),
-            Self::Recent(Group::Instruments) => Some(Category::Instruments),
-            Self::Recent(Group::Effects) => Some(Category::Effects),
-            Self::Recent(Group::Plugins) => Some(Category::Plugins),
-            Self::Recent(Group::Presets) => Some(Category::Presets),
-            Self::Recent(Group::Projects) | Self::Pinned | Self::Folder(_) => None,
+            Self::Recent(Some(Group::Samples)) => Some(Category::Samples),
+            Self::Recent(Some(Group::Midi)) => Some(Category::Midi),
+            Self::Recent(Some(Group::Instruments)) => Some(Category::Instruments),
+            Self::Recent(Some(Group::Effects)) => Some(Category::Effects),
+            Self::Recent(Some(Group::Plugins)) => Some(Category::Plugins),
+            Self::Recent(Some(Group::Presets)) => Some(Category::Presets),
+            Self::Recent(Some(Group::Projects) | None) | Self::Pinned | Self::Folder(_) => None,
         }
     }
 }
@@ -249,6 +251,8 @@ pub struct BrowserState {
     pub plugin_sort: (u8, bool),
     /// Put the cursor in the search field on the next frame.
     pub focus_search: bool,
+    /// And select what it says, so typing replaces it (Ctrl+F).
+    pub select_search: bool,
     /// The search field had the keyboard last frame.
     pub search_focused: bool,
     /// Escape in the search field asked for the preview to stop.
@@ -295,6 +299,7 @@ impl Default for BrowserState {
             tag_counts: None,
             plugin_sort: (0, false),
             focus_search: false,
+            select_search: false,
             search_focused: false,
             stop_preview: false,
             new_folder: None,
@@ -610,7 +615,10 @@ impl BrowserState {
         let listing = match self.listings.get(folder) {
             Some(listing) => Arc::clone(listing),
             None => {
-                let listing = Arc::new(projects.file_library_mut().list(folder).unwrap_or_default());
+                let listing = Arc::new(
+                    suhina_plugins::trace::timed("library folder listing", || projects.file_library_mut().list(folder))
+                        .unwrap_or_default(),
+                );
                 self.listings.insert(folder.to_path_buf(), Arc::clone(&listing));
                 listing
             }

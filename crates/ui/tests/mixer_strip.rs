@@ -307,6 +307,22 @@ fn the_detail_area_sits_beside_the_browser_or_spans_the_full_width() {
     assert!(harness.query_by_label("Device Utility").is_some(), "the chain still shows");
 }
 
+/// A double-click on the detail area's splitter closes the area; one on the closed splitter opens
+/// it again at its default size.
+#[test]
+fn a_double_click_on_the_splitter_closes_the_detail_area_and_opens_it_again() {
+    let mut harness = window_with(Settings::default(), false);
+    harness.get_by_label("Track Drums").click();
+    harness.run();
+    assert!(harness.query_by_label("Device Utility").is_some(), "the chain shows");
+    let splitter = harness.get_by_label("Detail area splitter").rect().center();
+    double_click_at(&mut harness, splitter);
+    assert!(harness.query_by_label("Device Utility").is_none(), "closed");
+    let closed = harness.get_by_label("Detail area splitter").rect().center();
+    double_click_at(&mut harness, closed);
+    assert!(harness.query_by_label("Device Utility").is_some(), "open again");
+}
+
 /// A double-click at `at`, after a second without clicks.
 fn double_click_at(harness: &mut Harness<'static, App>, at: Pos2) {
     harness.hover_at(at);
@@ -501,4 +517,74 @@ fn ctrl_g_groups_the_picked_devices_and_the_group_panel_edits_its_branches() {
     harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::G);
     harness.run();
     assert_eq!(drums_devices(&harness), before, "ungrouped, the chain is as it was");
+}
+
+/// The devices on `track`'s channel, by name.
+fn chain_of(harness: &Harness<'static, App>, track: &str) -> Vec<String> {
+    let project = harness.state().session().unwrap().project();
+    let channel = project.tracks.iter().find(|t| t.name == track).and_then(|t| t.channel).unwrap();
+    project.channels.iter().find(|c| c.id == channel).unwrap().devices.iter().map(|d| d.name.clone()).collect()
+}
+
+fn drag_device(harness: &mut Harness<'static, App>, from: Pos2, to: Pos2) {
+    // Stepped: the label beside the pointer repaints while it is dragged.
+    harness.hover_at(from);
+    harness.run();
+    harness.drag_at(from);
+    harness.step();
+    harness.hover_at(from + (to - from) * 0.5);
+    harness.step();
+    harness.step();
+    harness.hover_at(to);
+    harness.step();
+    harness.step();
+    harness.drop_at(to);
+    harness.step();
+    harness.run();
+}
+
+#[test]
+fn a_device_dragged_onto_another_track_moves_there_and_with_ctrl_is_copied() {
+    let mut harness = window_at(DEVICES_AT + 40.0);
+    let (drums, bass) = (chain_of(&harness, "Drums"), chain_of(&harness, "Bass"));
+    let from = harness.get_by_label("Show Limiter on Drums").rect().center();
+    let to = harness.get_by_label("Bass channel strip").rect().center();
+    drag_device(&mut harness, from, to);
+    assert!(!chain_of(&harness, "Drums").contains(&"Limiter".to_string()), "moved away");
+    assert_eq!(chain_of(&harness, "Bass").len(), bass.len() + 1);
+    assert_eq!(chain_of(&harness, "Bass").last().map(String::as_str), Some("Limiter"));
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!((chain_of(&harness, "Drums"), chain_of(&harness, "Bass")), (drums.clone(), bass.clone()), "one undo");
+    // With Ctrl held it is copied: Drums keeps it.
+    let from = harness.get_by_label("Show Limiter on Drums").rect().center();
+    harness.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    drag_device(&mut harness, from, to);
+    harness.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    assert_eq!(chain_of(&harness, "Drums"), drums);
+    assert_eq!(chain_of(&harness, "Bass").len(), bass.len() + 1);
+}
+
+#[test]
+fn a_clicked_volume_takes_a_typed_number_and_the_arrow_keys() {
+    let mut harness = window_at(DEVICES_AT + 40.0);
+    let db = |h: &Harness<'static, App>| 20.0 * volume(h).log10();
+    let name = harness.state().session().unwrap().project().channels[0].name.clone();
+    harness.get_by_label(&format!("{name} volume")).click();
+    harness.run();
+    harness.event(egui::Event::Text("-12".into()));
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!((db(&harness) + 12.0).abs() < 0.05, "typed: {}", db(&harness));
+    // Clicked again, later than a double-click: Up is 1 dB louder, Shift and Down 0.1 dB quieter.
+    harness.run_steps(60);
+    harness.get_by_label(&format!("{name} volume")).click();
+    harness.run();
+    harness.key_press(Key::ArrowUp);
+    harness.run();
+    assert!((db(&harness) + 11.0).abs() < 0.05, "{}", db(&harness));
+    harness.key_press_modifiers(Modifiers::SHIFT, Key::ArrowDown);
+    harness.run();
+    assert!((db(&harness) + 11.1).abs() < 0.05, "{}", db(&harness));
 }

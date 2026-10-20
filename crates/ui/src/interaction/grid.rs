@@ -135,6 +135,36 @@ pub struct SendKnob {
     pub pre_fader: bool,
 }
 
+/// What a channel's enabled automation plays at `beat`: its volume in dB and its pan, each when
+/// it has a lane with points (#706).
+pub fn played_mixer(channel: &suhina_engine::model::Channel, beat: f64) -> (Option<f64>, Option<f64>) {
+    let lane = |param: &str| channel.automation.iter().find(|l| l.param == param && l.enabled && !l.points.is_empty());
+    (
+        lane("volume").and_then(|l| l.value_at(beat, false)).map(gain_to_db),
+        lane("pan").and_then(|l| l.value_at(beat, false)),
+    )
+}
+
+/// A channel's devices as its strip's list shows them.
+fn strip_devices(devices: &[suhina_engine::model::Device]) -> Vec<StripDevice> {
+    devices
+        .iter()
+        .map(|d| StripDevice {
+            name: d.name.clone(),
+            enabled: d.enabled,
+            plugin: matches!(
+                d.kind,
+                suhina_engine::model::DeviceKind::Clap { .. }
+                    | suhina_engine::model::DeviceKind::Vst3 { .. }
+                    | suhina_engine::model::DeviceKind::Vst2 { .. }
+            ),
+            group: d
+                .as_group()
+                .map(|g| g.branches.iter().map(|b| suhina_engine::model::count_devices(&b.devices)).sum()),
+        })
+        .collect()
+}
+
 impl Column {
     /// Where the track sits in the track list.
     pub fn place(&self) -> crate::interaction::nesting::Place {
@@ -195,6 +225,8 @@ pub struct Grid {
     pub mapped: Vec<(MappingTarget, String)>,
     /// The main output's volume in dB.
     pub main_volume_db: f64,
+    /// The main channel's devices, for its strip's list.
+    pub main_devices: Vec<StripDevice>,
     /// The metronome: on, its level in dB, its sound; set by the app.
     pub metronome: (bool, f64, suhina_engine::ClickSound),
 }
@@ -312,24 +344,7 @@ impl Grid {
                         })
                         .collect(),
                 },
-                devices: channel.map_or_else(Vec::new, |c| {
-                    c.devices
-                        .iter()
-                        .map(|d| StripDevice {
-                            name: d.name.clone(),
-                            enabled: d.enabled,
-                            plugin: matches!(
-                                d.kind,
-                                suhina_engine::model::DeviceKind::Clap { .. }
-                                    | suhina_engine::model::DeviceKind::Vst3 { .. }
-                                    | suhina_engine::model::DeviceKind::Vst2 { .. }
-                            ),
-                            group: d.as_group().map(|g| {
-                                g.branches.iter().map(|b| suhina_engine::model::count_devices(&b.devices)).sum()
-                            }),
-                        })
-                        .collect()
-                }),
+                devices: channel.map_or_else(Vec::new, |c| strip_devices(&c.devices)),
             };
             if kind == ColumnKind::Return { returns.push(column) } else { columns.push(column) }
         }
@@ -375,7 +390,7 @@ impl Grid {
                 None => mapped.push((m.target, m.source.label())),
             }
         }
-        Self {
+        let mut grid = Self {
             columns,
             midi_ports: Vec::new(),
             input_channels: 0,
@@ -391,7 +406,41 @@ impl Grid {
                 .iter()
                 .find(|c| c.role == ChannelRole::Master)
                 .map_or(0.0, |c| gain_to_db(c.volume)),
+            main_devices: project
+                .channels
+                .iter()
+                .find(|c| c.role == ChannelRole::Master)
+                .map_or_else(Vec::new, |c| strip_devices(&c.devices)),
             metronome: (false, -6.0, suhina_engine::ClickSound::Beep),
+        };
+        grid.follow_automation(project);
+        grid
+    }
+
+    /// While the transport runs, the strips show what automation plays: volume and pan, on
+    /// returns and Main too (#706).
+    fn follow_automation(&mut self, project: &Project) {
+        if !self.running {
+            return;
+        }
+        let channel_of = |track: TrackId| {
+            let id = project.tracks.iter().find(|t| t.id == track)?.channel?;
+            project.channels.iter().find(|c| c.id == id)
+        };
+        for column in &mut self.columns {
+            let Some(channel) = channel_of(column.track) else { continue };
+            let (volume, pan) = played_mixer(channel, self.beat);
+            if let Some(volume) = volume {
+                column.volume_db = volume;
+            }
+            if let Some(pan) = pan {
+                column.pan = pan;
+            }
+        }
+        if let Some(main) = project.channels.iter().find(|c| c.role == ChannelRole::Master)
+            && let (Some(volume), _) = played_mixer(main, self.beat)
+        {
+            self.main_volume_db = volume;
         }
     }
 

@@ -72,6 +72,34 @@ const EDITOR_TICK: Duration = Duration::from_millis(1);
 /// How long unloading waits for an instance's audio thread to stop; one still running then is
 /// stuck in the plug-in, and the instance is left behind rather than taking the process with it.
 pub(crate) const UNLOAD_WAIT: Duration = Duration::from_secs(1);
+/// How long a VST3 plug-in has to settle after it loads before it is released: one let go of
+/// sooner (loaded again at once as ARA, say) is kept, stopped and silent, until then.
+const SETTLE: Duration = Duration::from_secs(5);
+
+thread_local! {
+    /// VST3 plug-ins unloaded before they settled, and when each is released. Some finish
+    /// starting up through the main thread's messages after they load, and releasing one before
+    /// that waits for it on this very thread: Melodyne, let go of a tenth of a second after it
+    /// loaded, held the host until the engine gave up on it. Released from the main loop
+    /// ([`release_settled`]), the messages flowing meanwhile.
+    static SETTLING: std::cell::RefCell<Vec<(Instant, vst3::Vst3Plugin)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Releases the plug-ins in [`SETTLING`] whose time has come.
+fn release_settled() {
+    let due: Vec<vst3::Vst3Plugin> = SETTLING.with(|settling| {
+        let Ok(mut settling) = settling.try_borrow_mut() else { return Vec::new() };
+        let now = Instant::now();
+        let (due, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut *settling).into_iter().partition(|(at, _)| *at <= now);
+        *settling = keep;
+        due.into_iter().map(|(_, plugin)| plugin).collect()
+    });
+    for plugin in due {
+        suhina_plugins::trace!("vst3: releasing a plug-in that has settled");
+        drop(plugin);
+    }
+}
 /// How often the process reports its RAM to the engine's control bar.
 const MEMORY_EVERY: Duration = Duration::from_secs(1);
 /// Most instances one process runs.
@@ -232,6 +260,14 @@ impl Loaded {
 
     /// A latency the plug-in reported since this was last asked, after restarting its
     /// processing where its format asks for that: the engine is to be told.
+    /// The notes an ARA plug-in found in its regions since the last call (#720).
+    fn take_ara_notes(&self) -> Vec<(String, Vec<suhina_plugins::protocol::AraNote>, bool)> {
+        match self {
+            Self::Vst3(plugin) => plugin.take_ara_notes(),
+            Self::Clap(_) | Self::Test { .. } => Vec::new(),
+        }
+    }
+
     fn latency_changed(&mut self) -> Option<u32> {
         match self {
             Self::Clap(plugin) => plugin.latency_changed(),
@@ -267,6 +303,22 @@ impl Loaded {
     fn ara_update(&mut self, document: &suhina_plugins::protocol::AraDocument) -> Result<(), String> {
         match self {
             Self::Vst3(plugin) => plugin.ara_update(document),
+            _ => Err("only a VST3 plug-in can be bound to an ARA document".into()),
+        }
+    }
+
+    /// The edits of one modification and its source, stored on their own (ADR 0028 step 6).
+    fn ara_export(&self, modification: &str, source: &str) -> Result<(String, Vec<u8>), String> {
+        match self {
+            Self::Vst3(plugin) => plugin.ara_export(modification, source),
+            _ => Err("only a VST3 plug-in can be bound to an ARA document".into()),
+        }
+    }
+
+    /// Gives the plug-in edits another track's stored, for one of its modifications.
+    fn ara_import(&self, id: &str, bytes: &[u8], from: &str, to: &str, source: &str) -> Result<(), String> {
+        match self {
+            Self::Vst3(plugin) => plugin.ara_import(id, bytes, from, to, source),
             _ => Err("only a VST3 plug-in can be bound to an ARA document".into()),
         }
     }
@@ -343,8 +395,10 @@ impl Loaded {
     }
 
     fn tick(&mut self) {
-        if let Self::Clap(plugin) = self {
-            plugin.tick();
+        match self {
+            Self::Clap(plugin) => plugin.tick(),
+            Self::Vst3(plugin) => plugin.tick(),
+            Self::Test { .. } => {}
         }
     }
 
@@ -362,8 +416,18 @@ impl Loaded {
                 }
             }
             Self::Vst3(mut plugin) => {
+                suhina_plugins::trace!("vst3 unload: close editor");
                 plugin.close_editor();
+                suhina_plugins::trace!("vst3 unload: stop audio");
                 if plugin.stop_audio(UNLOAD_WAIT) {
+                    let age = plugin.age();
+                    if age < SETTLE {
+                        suhina_plugins::trace!("vst3 unload: {age:?} old; released later");
+                        let at = Instant::now() + (SETTLE - age);
+                        SETTLING.with(|settling| settling.borrow_mut().push((at, plugin)));
+                        return;
+                    }
+                    suhina_plugins::trace!("vst3 unload: audio stopped; drop");
                     drop(plugin);
                 } else {
                     std::mem::forget(plugin);
@@ -427,7 +491,47 @@ fn start(
 }
 
 /// Writes one message to the engine.
+/// The engine's end of the connection, shared: the main loop and a plug-in's transport request,
+/// sent the moment it is made, each write whole lines to it, one at a time.
+struct Shared<W>(Arc<std::sync::Mutex<W>>);
+
+impl<W> Clone for Shared<W> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<W: Write> Write for Shared<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).write(buf)
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).write_all(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).flush()
+    }
+}
+
+/// Where [`send_now`] writes: the connection, once the host is connected.
+static NOW: std::sync::Mutex<Option<Box<dyn Write + Send>>> = std::sync::Mutex::new(None);
+
+/// Sends `message` at once, from whichever thread, rather than at the main loop's next turn:
+/// an ARA plug-in's transport request, which waited for its own click to be handled before
+/// (100 ms or more, so its playhead went to the new place late). Returns whether it was sent.
+pub(crate) fn send_now(message: &Message) -> bool {
+    let mut now = NOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    now.as_mut().is_some_and(|writer| send(writer, message).is_ok())
+}
+
 fn send(writer: &mut impl Write, message: &Message) -> std::io::Result<()> {
+    if suhina_plugins::trace::on() && !matches!(message, Message::AraNotes { .. }) {
+        let text = format!("{message:?}");
+        let cut = text.char_indices().nth(300).map_or(text.len(), |(i, _)| i);
+        suhina_plugins::trace!("host sends {}", &text[..cut]);
+    }
     let mut out = message.encode();
     out.push('\n');
     writer.write_all(out.as_bytes())?;
@@ -485,17 +589,27 @@ fn next_message(messages: &std::sync::mpsc::Receiver<Message>) -> Result<Message
 type Instances = BTreeMap<u32, Loaded>;
 
 fn run(address: &str) -> Result<(), Box<dyn std::error::Error>> {
+    suhina_plugins::trace!("host up, connecting");
     let stream = suhina_plugins::connect(address)?;
-    let mut writer = stream.try_clone()?;
+    suhina_plugins::trace!("host connected");
+    let mut writer = Shared(Arc::new(std::sync::Mutex::new(stream.try_clone()?)));
+    *NOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(writer.clone()));
     let messages = wakeful(suhina_plugins::read_lines(stream));
     let mut instances = Instances::new();
     let mut last_memory = Instant::now();
+    // Messages read while placements and sizes were gathered, to answer next, in order.
+    let mut held: std::collections::VecDeque<Message> = std::collections::VecDeque::new();
     loop {
         // Between messages: the plug-ins' main-thread callbacks and their editors' windows.
         window::pump();
+        release_settled();
         // Space in an editor window plays or stops the engine, as it does in Suhina's own.
         for _ in 0..window::take_transport_keys() {
             send(&mut writer, &Message::TransportKey)?;
+        }
+        // What ARA plug-ins asked of the transport (their play buttons, their timeline).
+        for request in ara::take_playback_requests() {
+            send(&mut writer, &Message::AraPlayback(request))?;
         }
         // The engine's control bar adds this process's RAM to the program's; report it without
         // being asked, off the control thread, once a second.
@@ -507,6 +621,9 @@ fn run(address: &str) -> Result<(), Box<dyn std::error::Error>> {
         }
         for (instance, loaded) in &mut instances {
             loaded.tick();
+            for (region, notes, truncated) in loaded.take_ara_notes() {
+                send(&mut writer, &Message::AraNotes { instance: *instance, region, notes, truncated })?;
+            }
             if let Some(latency) = loaded.latency_changed() {
                 send(&mut writer, &Message::LatencyChanged { instance: *instance, latency })?;
             }
@@ -519,13 +636,58 @@ fn run(address: &str) -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
         }
-        let message = match next_message(&messages) {
+        let message = match held.pop_front().map_or_else(|| next_message(&messages), Ok) {
             Ok(message) => message,
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         };
+        // Placements and sizes of an editor queued while the host was busy (a splitter dragged:
+        // one of each a frame): only the newest of each counts, so the editor goes straight to
+        // where and how big the window wants it now rather than laying itself out again for
+        // every step on the way, which a heavy editor (Melodyne) took longer to do than a frame.
+        let message = match message {
+            Message::PlaceEditor { instance, .. } | Message::FitEditor { instance, .. } if held.is_empty() => {
+                let (mut place, mut fit) = (None, None);
+                let mut keep = |message: Message| match message {
+                    Message::PlaceEditor { instance: same, .. } | Message::FitEditor { instance: same, .. }
+                        if same != instance =>
+                    {
+                        Some(message)
+                    }
+                    Message::PlaceEditor { .. } => {
+                        place = Some(message);
+                        None
+                    }
+                    Message::FitEditor { .. } => {
+                        fit = Some(message);
+                        None
+                    }
+                    other => Some(other),
+                };
+                let mut rest = keep(message);
+                while rest.is_none() {
+                    let Ok(next) = messages.try_recv() else { break };
+                    rest = keep(next);
+                }
+                held.extend(fit);
+                held.extend(rest);
+                match place {
+                    Some(place) => place,
+                    None => match held.pop_front() {
+                        Some(first) => first,
+                        None => continue,
+                    },
+                }
+            }
+            other => other,
+        };
         if message == Message::Quit {
             break;
+        }
+        if suhina_plugins::trace::on() {
+            let text = format!("{message:?}");
+            let cut = text.char_indices().nth(400).map_or(text.len(), |(i, _)| i);
+            suhina_plugins::trace!("host gets {}", &text[..cut]);
         }
         if let Some(reply) = answer(&mut instances, message) {
             send(&mut writer, &reply)?;
@@ -534,6 +696,8 @@ fn run(address: &str) -> Result<(), Box<dyn std::error::Error>> {
     for (_, loaded) in std::mem::take(&mut instances) {
         loaded.unload();
     }
+    // The process ends: what has not settled is left to it rather than waited for.
+    SETTLING.with(|settling| std::mem::forget(settling.take()));
     Ok(())
 }
 
@@ -563,7 +727,10 @@ fn answer(instances: &mut Instances, message: Message) -> Option<Message> {
         }
         Message::Unload { instance } => {
             if let Some(loaded) = instances.remove(&instance) {
+                let began = std::time::Instant::now();
+                suhina_plugins::trace!("host unloads {instance}");
                 loaded.unload();
+                suhina_plugins::trace!("host unloaded {instance} in {:?}", began.elapsed());
             }
             Message::Unloaded { instance }
         }
@@ -595,9 +762,25 @@ fn answer(instances: &mut Instances, message: Message) -> Option<Message> {
                 None => missing(instance),
             }
         }
+        Message::AraExport { instance, modification, source } => {
+            match instances.get(&instance).map(|l| l.ara_export(&modification, &source)) {
+                Some(Ok((archive_id, data))) => Message::AraExported { instance, archive_id, data },
+                Some(Err(message)) => failed(instance, message),
+                None => missing(instance),
+            }
+        }
+        Message::AraImport { instance, archive_id, data, from, to, source } => {
+            match instances.get(&instance).map(|l| l.ara_import(&archive_id, &data, &from, &to, &source)) {
+                Some(Ok(())) => Message::AraImported { instance },
+                Some(Err(message)) => failed(instance, message),
+                None => missing(instance),
+            }
+        }
         Message::FitEditor { instance, width, height } => {
-            if let Some(Loaded::Vst3(plugin)) = instances.get_mut(&instance) {
-                plugin.fit_editor(window::Size { width, height });
+            match instances.get_mut(&instance) {
+                Some(Loaded::Vst3(plugin)) => plugin.fit_editor(window::Size { width, height }),
+                Some(Loaded::Clap(plugin)) => plugin.fit_editor(window::Size { width, height }),
+                _ => {}
             }
             return None;
         }

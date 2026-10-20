@@ -3,7 +3,7 @@ description: How ARA plug-ins (audio editors such as pitch editors) are hosted o
 read_when: ARA, ARA2, Melodyne, pitch editor, audio random access, playback region, audio source, audio modification, region sequence, document controller, overlapping audio clips, audio overlap, arrangement.audioOverlaps, stacked clips and ARA
 type: decision
 status: draft
-last_verified: 2026-10-19
+last_verified: 2026-10-20
 covers:
   - crates/model/src/overlap.rs
   - crates/session/src/commands.rs
@@ -193,6 +193,61 @@ the list below, in a first form). Where it differs from the decisions above it i
   `ARAVST3.h` are declared by hand in `crates/plugin-host/src/ara.rs`. The headers pack structs
   to 1 byte on x86 and to 8 on ARM; the bindings are generated for x86-64, and an ARM build
   needs them generated there.
+- **Model updates.** The host calls the document controller's `notifyModelUpdates` every 250 ms
+  while it is not editing, right after every edit and restore, and before storing the edits, as
+  the API asks ("periodically by the host whenever not editing"). Without it a plug-in sends what
+  an edit set off only on its own timer, which showed as a clip resize drawn about 2 s late in
+  the editor (#718).
+- **Musical context.** The document carries the song's tempo map as ARA tempo entries (seconds
+  and quarter notes; a tempo ramp gets one a beat, since ARA takes the tempo as even between two)
+  and its time signatures as bar signatures, and the host's content access controller hands them
+  to the plug-in's musical context readers, so its timeline counts bars as the song does (it
+  counted from 1 at the clip). A change in either reaches it as an edit
+  (`updateMusicalContextContent`). A document without them, from an older engine, is an even
+  tempo in 4/4.
+- **Transport requests.** The plug-in's own play and stop buttons and a click in its editor's
+  timeline reach Suhina's transport: the host's playback controller queues them and sends
+  `ara_playback` (protocol version 12), and the window plays, stops or moves the play position
+  through the tempo map. A newer position replaces one not sent yet. The app takes these requests
+  in on the thread that reads the host's lines, before it wakes the window, so the frame it wakes
+  moves the transport. Until the engine reports the position asked for (or a second has passed),
+  the host shows the plug-in that position in its process context while the transport is stopped:
+  the request goes to the engine and back, and the plug-in otherwise drew the old position from the
+  next block, its playhead flickering back for a moment. The loop (cycle) requests
+  are not followed; the loop region is set in the ruler. A click on a clip in the arrangement
+  moves the play position there, so the editor follows the clip it shows (#717) The rules that play
+  from a selected clip's start (Settings › Play from, and a clip picked while stopped) give way
+  on a track with an ARA plug-in, always: there the editor's timeline and a click set where
+  play starts.
+- **Copies keep their edits** (decision 5). A clip that gets its own content (a paste, a split's
+  second part, notes copied on edit) names in the update the modification it is a copy of
+  (`clone_of`): the same clip's earlier one, or for a new clip the narrowest region of the same
+  file whose span holds its own. The host makes the new modification with
+  `cloneAudioModification`, so it starts with those edits; a plug-in that cannot clone gets a new
+  one, as before.
+- **Edits taken to another track** (stage 6 in part, #722). A clip an ARA plug-in edits that is
+  moved or copied to another track asks first: **Keep edits** or **Copy as new** (or Cancel).
+  `clip.moveMany` takes it as `ara_edits` (`keep`, or `new`, the default). With keep, the track it
+  goes to gets the same plug-in first in its chain when it has none (with no state of its own),
+  and the clip's edits go along: the first track's plug-in stores the clip's modification and its
+  source on their own (`storeObjectsToArchive` with a filter, a partial archive: `ara_export`),
+  and once the other track's plug-in runs with the clip, it restores them for the clip's
+  modification there (`restoreObjectsFromArchive` with a filter mapping the old persistent id to
+  the new one, `ara_import`; protocol version 13). The session keeps each carry until it is done,
+  for at most 60 s, and says when it could not be. With one document per instance (below) the
+  edits cannot be cloned across tracks inside one document, which is why they go by archive.
+- **Notes on the clips** (#720). After a model update in which the plug-in said a region's,
+  modification's or source's notes may have changed (not with "note scope remains unchanged"),
+  and after the host's own edits, the host reads every region's notes with a playback-region
+  content reader, outside the update as the API asks, and sends those that changed as
+  `ara_notes` (times from the region's start, pitch, volume; at most 16 384 a region). The
+  session keeps them by clip while the plug-in runs; the arrangement draws them as bars over
+  the clip's waveform, which dims under them, placed through the tempo map. A bypassed
+  plug-in's notes are kept and not shown. When the factory lists notes among what it analyses, the host asks it once
+  for each source whose notes are not found yet, so they show without the editor being opened. A
+  finished analysis (its progress Completed) has the notes read too, and while a region has none
+  yet they are looked for again every second, as a plug-in may finish without saying the content
+  changed.
 - **The document.** `load` carries an optional `ara` document (protocol version 9): the track's
   name, the tempo, the sources (an id, a name and a shared-memory address each) and the regions
   (clip id, content id, start, length and offset in seconds). The host queries the component for
@@ -245,8 +300,9 @@ the list below, in a first form). Where it differs from the decisions above it i
   question when the plug-in is removed, come with the overlap guard.
 - **Found when it loads, too.** The host tells the engine with `loaded` whether the plug-in
   answers `IPlugInEntryPoint` (`edits_clips`). One the scan did not mark (the module's ARA class
-  named differently, say) is then loaded again with its track's clips, with a notice, and is
-  treated as an ARA plug-in from then on.
+  named differently, say, or a catalog from before the scan read ARA) is then loaded again with
+  its track's clips, with a notice, and is treated as an ARA plug-in from then on: the catalog
+  remembers it, so its next device, in any project, starts with its clips at once.
 - **Opened as a host with a pitch editor built in does.** A clip's menu (**Open in** the plug-in)
   and Alt+M work on any audio clip in the Arrangement: when the clip's track has no ARA plug-in
   running, the installed one (the scan's ARA plug-ins, Melodyne first, else Melodyne by name) is

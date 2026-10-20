@@ -434,6 +434,42 @@ fn ctrl_f_searches_ctrl_b_hides_and_rows_never_take_the_keyboard() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
+/// Ctrl+F always searches everything: All is chosen and the search kept, selected, so typing
+/// replaces it; a kind chosen afterwards keeps the search and narrows it to that kind.
+#[test]
+fn ctrl_f_searches_all_and_a_kind_chosen_after_keeps_the_search() {
+    let (settings, folder) = (temp("all-settings"), temp("all"));
+    pack(&folder);
+    let mut harness = window(&settings, &folder);
+    harness.get_by_label("Show Samples").click();
+    harness.run();
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    harness.run();
+    harness.run();
+    assert_eq!(harness.state().browser.category, suhina_session::Category::All, "Ctrl+F chooses All");
+    assert_eq!(harness.state().browser.place, None);
+    harness.input_mut().events.push(egui::Event::Text("snare".into()));
+    harness.run();
+    assert_eq!(harness.state().browser.search, "snare");
+
+    // A kind chosen keeps the search, and the search looks in that kind only.
+    harness.get_by_label("Show Samples").click();
+    harness.run();
+    assert_eq!(harness.state().browser.category, suhina_session::Category::Samples);
+    assert_eq!(harness.state().browser.search, "snare");
+
+    // Ctrl+F again: All, the search selected, so what is typed replaces it.
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    harness.run();
+    harness.run();
+    assert_eq!(harness.state().browser.category, suhina_session::Category::All);
+    harness.input_mut().events.push(egui::Event::Text("kick".into()));
+    harness.run();
+    assert_eq!(harness.state().browser.search, "kick", "typing replaced the selected search");
+    let _ = std::fs::remove_dir_all(&settings);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 #[test]
 fn a_midi_file_dragged_onto_a_slot_becomes_a_clip_there() {
     let (settings, folder) = (temp("slot-settings"), temp("slot"));
@@ -522,12 +558,13 @@ fn a_stems_file_dropped_on_a_lane_becomes_one_folded_group() {
     assert!(until(&mut harness, grouped), "a group of the master and its four stems");
     // One more frame: the drop runs after the view has drawn, so the lanes follow it next frame.
     harness.run();
-    // The group arrives folded: one lane named after the file, its tracks away, and the clip the
-    // fold stands in for (the master) drawn on that lane.
+    // The group arrives folded: one lane named after the file, its tracks away. The folded lane
+    // draws every stem's clips as a thin row each, marks rather than clips to pick: the stems are
+    // reached by unfolding.
     assert!(harness.query_by_label("Track tones").is_some(), "the group's own lane");
     assert!(harness.query_by_label("Unfold tones").is_some(), "it arrives folded");
     assert!(harness.query_by_label("Track Master").is_none(), "the stems' lanes are folded away");
-    assert!(harness.query_by_label_contains("Clip tones – Master").is_some(), "its row shows the master");
+    assert!(harness.query_by_label_contains("Clip tones – Master").is_none(), "the fold draws marks, not clips");
 
     harness.get_by_label("Unfold tones").click();
     harness.run();
@@ -685,7 +722,7 @@ fn a_device_dragged_onto_a_track_header_joins_its_chain_and_becomes_recent() {
         })
     };
     assert!(until(&mut harness, |app| bass_devices(app) == 1));
-    harness.get_by_label("Place Effects").click();
+    harness.get_by_label("Place Recent Effects").click();
     harness.run();
     assert!(harness.query_by_label(&row("Overdrive")).is_some(), "Recent › Effects lists it");
     let _ = std::fs::remove_dir_all(&settings);
@@ -920,7 +957,7 @@ fn a_place_stays_chosen_on_a_second_click_and_its_cross_shows_everything() {
     harness.run();
     assert!(harness.state().browser.place.is_none(), "the cross lets go of it");
     // A recent group brings its category; another category lets go of the group.
-    harness.get_by_label("Place MIDI").click();
+    harness.get_by_label("Place Recent MIDI").click();
     harness.run();
     assert_eq!(harness.state().browser.category, suhina_session::Category::Midi);
     harness.get_by_label("Show Instruments").click();
@@ -932,13 +969,22 @@ fn a_place_stays_chosen_on_a_second_click_and_its_cross_shows_everything() {
     harness.get_by_label("Show Instruments").click();
     harness.run();
     assert!(harness.state().browser.place.is_none());
-    // The sample map is a button of its own in the category row.
+    // The sample map is the samples' other view: List and Sample map over the list while
+    // Samples is chosen, and nowhere else (#711).
+    assert!(harness.query_by_label("Show the samples laid out by how they sound").is_none());
+    harness.get_by_label("Show Samples").click();
+    harness.run();
     harness.get_by_label("Show the samples laid out by how they sound").click();
     harness.run();
     assert_eq!(harness.state().browser.mode, suhina_ui::browser::ResultsMode::Other);
-    harness.get_by_label("Show Samples").click();
+    harness.get_by_label("Show the samples as a list").click();
     harness.run();
     assert_eq!(harness.state().browser.mode, suhina_ui::browser::ResultsMode::List);
+    // Recent is an item of its own, every kind's recent items together.
+    harness.get_by_label("Place Recent").click();
+    harness.run();
+    assert_eq!(harness.state().browser.place, Some(suhina_ui::browser::Place::Recent(None)));
+    assert_eq!(harness.state().browser.category, suhina_session::Category::All);
     let _ = std::fs::remove_dir_all(&settings);
     let _ = std::fs::remove_dir_all(&folder);
 }

@@ -6,15 +6,16 @@
 //!
 //! Every message has an `op`. Engine to host: `hello`, `load`, `unload`, `ping`, `get_state`,
 //! `set_state`, `get_params`, `set_param`, `open_editor`, `place_editor`, `close_editor`,
-//! `fit_editor`, `ara_select`, `ara_update`, `quit`. Host to engine: `hello`, `loaded`, `unloaded`, `pong`, `state`, `params`, `param`,
-//! `editor_opened`, `editor_closed`, `editor_resized`, `latency_changed`, `ara_updated`, `memory`,
-//! `transport_key`, `error`. Every message is answered, except `place_editor`, `fit_editor`,
+//! `fit_editor`, `ara_select`, `ara_update`, `ara_export`, `ara_import`, `quit`. Host to engine: `hello`, `loaded`, `unloaded`, `pong`, `state`, `params`, `param`,
+//! `editor_opened`, `editor_closed`, `editor_resized`, `latency_changed`, `ara_updated`, `ara_exported`, `ara_imported`, `memory`,
+//! `transport_key`, `ara_playback`, `ara_notes`, `error`. Every message is answered, except `place_editor`, `fit_editor`,
 //! `ara_select` and `quit` (so the engine never waits on them).
 //! `editor_closed` also comes unasked, when the user closes an editor's window; `editor_resized`
 //! only comes unasked, when a plug-in gives its editor a new size, `latency_changed` only
 //! comes unasked, when a running plug-in reports another latency, `memory` only comes unasked,
-//! once a second, and `transport_key` only comes unasked, when Space is pressed in a plug-in's
-//! window.
+//! once a second, `transport_key` only comes unasked, when Space is pressed in a plug-in's
+//! window, `ara_playback` only comes unasked, when an ARA plug-in asks the transport to play,
+//! stop or move, and `ara_notes` only comes unasked, when the notes it found in a region change.
 //!
 //! One host process runs several plug-in instances. The engine names each with an `instance`
 //! number when it loads it; every message about one instance, and its reply, carries that
@@ -24,7 +25,7 @@
 use serde_json::{Value, json};
 
 /// Bumped whenever a message changes; both sides refuse a different version.
-pub const VERSION: u64 = 11;
+pub const VERSION: u64 = 13;
 /// Longest line either side accepts; state blobs are hex, so this bounds them at 32 MiB.
 pub const MAX_LINE: usize = 64 * 1024 * 1024;
 
@@ -125,6 +126,37 @@ impl Placement {
 pub const MAX_ARA_OBJECTS: usize = 4096;
 /// Longest name or id in an ARA document, in bytes.
 pub const MAX_ARA_TEXT: usize = 1024;
+/// Most notes one `ara_notes` message carries for a region; more are cut, and the message says so.
+pub const MAX_ARA_NOTES: usize = 16_384;
+
+/// A note an ARA plug-in found in a clip (#720): `start` seconds after the region starts,
+/// lasting `length` seconds, at MIDI pitch `pitch`, as loud as `volume` (0 to 1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AraNote {
+    pub start: f64,
+    pub length: f64,
+    pub pitch: u8,
+    pub volume: f32,
+}
+
+impl AraNote {
+    fn to_json(self) -> Value {
+        json!([self.start, self.length, self.pitch, self.volume])
+    }
+
+    fn from_json(value: &Value) -> Option<Self> {
+        let list = value.as_array().filter(|l| l.len() == 4)?;
+        let number = |i: usize| list.get(i).and_then(Value::as_f64).filter(|v| v.is_finite());
+        let (start, length) = (number(0)?, number(1)?);
+        let pitch = u8::try_from(list.get(2)?.as_u64()?).ok().filter(|p| *p <= 127)?;
+        let volume = number(3)?;
+        if length < 0.0 || !(0.0..=1.0).contains(&volume) {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, reason = "a volume from 0 to 1")]
+        Some(Self { start, length, pitch, volume: volume as f32 })
+    }
+}
 
 /// The ARA document a plug-in instance is bound to as it loads ([ADR 0028]): the audio sources
 /// it may read and the playback regions it renders and edits, on one region sequence (the
@@ -138,8 +170,30 @@ pub struct AraDocument {
     /// The region sequence's name: the track's.
     pub sequence: String,
     pub tempo_bpm: f64,
+    /// The song's tempo map as ARA's tempo entries: (seconds, quarter notes), in order, at least
+    /// two; between two entries the tempo is even. Empty: an even `tempo_bpm` from the start.
+    pub tempo: Vec<(f64, f64)>,
+    /// The song's time signatures as ARA's bar signatures: (numerator, denominator, the quarter
+    /// note the bar starts at), in order. Empty: 4/4 from the start.
+    pub bars: Vec<(u32, u32, f64)>,
     pub sources: Vec<AraSource>,
     pub regions: Vec<AraRegion>,
+}
+
+impl AraDocument {
+    /// The tempo entries the plug-in is told: `tempo`, or an even `tempo_bpm` from the start.
+    pub fn tempo_entries(&self) -> Vec<(f64, f64)> {
+        if self.tempo.len() >= 2 {
+            return self.tempo.clone();
+        }
+        let bpm = if self.tempo_bpm.is_finite() && self.tempo_bpm > 0.0 { self.tempo_bpm } else { 120.0 };
+        vec![(0.0, 0.0), (60.0 / bpm, 1.0)]
+    }
+
+    /// The bar signatures the plug-in is told: `bars`, or 4/4 from the start.
+    pub fn bar_signatures(&self) -> Vec<(u32, u32, f64)> {
+        if self.bars.is_empty() { vec![(4, 4, 0.0)] } else { self.bars.clone() }
+    }
 }
 
 /// An audio file's decoded samples, in a region the host maps read only
@@ -163,17 +217,23 @@ pub struct AraRegion {
     pub start: f64,
     pub duration: f64,
     pub offset: f64,
+    /// For a modification the plug-in does not have yet: the one it is a copy of, so it starts
+    /// with that one's edits (`cloneAudioModification`) rather than none. A pasted, split or
+    /// otherwise copied clip gets its own content, and with this its edits (#722).
+    pub clone_of: Option<String>,
 }
 
 impl AraDocument {
     fn to_json(&self) -> Value {
         json!({
             "name": self.name, "sequence": self.sequence, "tempo_bpm": self.tempo_bpm,
+            "tempo": self.tempo.iter().map(|(s, q)| json!([s, q])).collect::<Vec<_>>(),
+            "bars": self.bars.iter().map(|(n, d, q)| json!([n, d, q])).collect::<Vec<_>>(),
             "sources": self.sources.iter().map(|s| json!({ "id": s.id, "name": s.name, "address": s.address }))
                 .collect::<Vec<_>>(),
             "regions": self.regions.iter().map(|r| json!({
                 "id": r.id, "name": r.name, "source": r.source, "modification": r.modification,
-                "start": r.start, "duration": r.duration, "offset": r.offset,
+                "start": r.start, "duration": r.duration, "offset": r.offset, "clone_of": r.clone_of,
             })).collect::<Vec<_>>(),
         })
     }
@@ -206,12 +266,64 @@ impl AraDocument {
                     start,
                     duration,
                     offset,
+                    clone_of: match r.get("clone_of") {
+                        None | Some(Value::Null) => None,
+                        Some(_) => Some(text(r, "clone_of")?),
+                    },
                 })
             })
             .collect::<Option<Vec<_>>>()?;
         let tempo_bpm = time(value, "tempo_bpm").filter(|t| *t > 0.0)?;
-        Some(Self { name: text(value, "name")?, sequence: text(value, "sequence")?, tempo_bpm, sources, regions })
+        // Tempo entries and bar signatures, in order; a document without them (an older engine)
+        // has an even tempo in 4/4.
+        let number = |v: &Value| v.as_f64().filter(|n| n.is_finite());
+        let tempo = match value.get("tempo") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .filter(|l| l.len() <= MAX_ARA_OBJECTS)?
+                .iter()
+                .map(|e| Some((number(e.get(0)?)?, number(e.get(1)?)?)))
+                .collect::<Option<Vec<_>>>()?,
+        };
+        if tempo.windows(2).any(|w| !(w[1].0 > w[0].0 && w[1].1 > w[0].1)) {
+            return None;
+        }
+        let bars = match value.get("bars") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .filter(|l| l.len() <= MAX_ARA_OBJECTS)?
+                .iter()
+                .map(|e| {
+                    let n = u32::try_from(e.get(0)?.as_u64()?).ok().filter(|n| (1..=64).contains(n))?;
+                    let d = u32::try_from(e.get(1)?.as_u64()?).ok().filter(|d| (1..=64).contains(d))?;
+                    Some((n, d, number(e.get(2)?)?))
+                })
+                .collect::<Option<Vec<_>>>()?,
+        };
+        if bars.windows(2).any(|w| w[1].2 <= w[0].2) {
+            return None;
+        }
+        Some(Self {
+            name: text(value, "name")?,
+            sequence: text(value, "sequence")?,
+            tempo_bpm,
+            tempo,
+            bars,
+            sources,
+            regions,
+        })
     }
+}
+
+/// What an ARA plug-in asked of the host's transport (ARA's playback controller).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AraPlayback {
+    Start,
+    Stop,
+    /// Move the play position to this many seconds of song time.
+    Position(f64),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -330,6 +442,36 @@ pub enum Message {
     AraUpdated {
         instance: u32,
     },
+    /// The edits of one audio modification of a plug-in loaded with an ARA document (ADR 0028),
+    /// by its persistent id (`content-<id>`), with its audio source's (`source`, the pool key):
+    /// stored on their own (a partial archive), to give another track's plug-in. Answered with
+    /// `AraExported`, or an error when the plug-in cannot store them.
+    AraExport {
+        instance: u32,
+        modification: String,
+        source: String,
+    },
+    AraExported {
+        instance: u32,
+        /// The plug-in's document archive id the edits are stored for.
+        archive_id: String,
+        data: Vec<u8>,
+    },
+    /// Gives a plug-in loaded with an ARA document the edits `AraExport` stored in another
+    /// track's, for its modification `to` (they were `from` there) of the same source: a clip
+    /// moved or copied to this track with its edits kept. Answered with `AraImported`, or an
+    /// error (no modification `to` in the document yet, or a plug-in that cannot restore).
+    AraImport {
+        instance: u32,
+        archive_id: String,
+        data: Vec<u8>,
+        from: String,
+        to: String,
+        source: String,
+    },
+    AraImported {
+        instance: u32,
+    },
     /// The plug-in gave its editor a new size (unasked, in both modes).
     EditorResized {
         instance: u32,
@@ -350,6 +492,18 @@ pub enum Message {
     /// Space was pressed in one of the host's editor windows (unasked): the engine plays or
     /// stops as Space does in its own window, since the key never reaches it there.
     TransportKey,
+    /// An ARA plug-in asked the host's transport to play, stop or move (unasked): its own
+    /// transport buttons and a click in its editor's timeline (#717).
+    AraPlayback(AraPlayback),
+    /// The notes an ARA plug-in found in one of the instance's regions, all of them, oldest
+    /// first (unasked): sent when they change, and empty when it has none (any more) (#720).
+    /// `truncated` when there were more than [`MAX_ARA_NOTES`].
+    AraNotes {
+        instance: u32,
+        region: String,
+        notes: Vec<AraNote>,
+        truncated: bool,
+    },
     CloseEditor {
         instance: u32,
     },
@@ -386,8 +540,13 @@ impl Message {
             | Self::FitEditor { instance, .. }
             | Self::AraUpdate { instance, .. }
             | Self::AraUpdated { instance }
+            | Self::AraExport { instance, .. }
+            | Self::AraExported { instance, .. }
+            | Self::AraImport { instance, .. }
+            | Self::AraImported { instance }
             | Self::EditorResized { instance, .. }
             | Self::LatencyChanged { instance, .. }
+            | Self::AraNotes { instance, .. }
             | Self::CloseEditor { instance }
             | Self::EditorClosed { instance } => Some(*instance),
             Self::Error { instance, .. } => *instance,
@@ -396,6 +555,7 @@ impl Message {
             | Self::Pong { .. }
             | Self::Memory { .. }
             | Self::TransportKey
+            | Self::AraPlayback(_)
             | Self::Quit => None,
         }
     }
@@ -452,6 +612,21 @@ impl Message {
                 json!({ "op": "ara_update", "instance": instance, "document": document.to_json() })
             }
             Self::AraUpdated { instance } => json!({ "op": "ara_updated", "instance": instance }),
+            Self::AraExport { instance, modification, source } => {
+                json!({ "op": "ara_export", "instance": instance, "modification": modification, "source": source })
+            }
+            Self::AraExported { instance, archive_id, data } => {
+                json!({ "op": "ara_exported", "instance": instance, "archive_id": archive_id, "data": hex(data) })
+            }
+            Self::AraImport { instance, archive_id, data, from, to, source } => json!({
+                "op": "ara_import", "instance": instance, "archive_id": archive_id, "data": hex(data),
+                "from": from, "to": to, "source": source,
+            }),
+            Self::AraImported { instance } => json!({ "op": "ara_imported", "instance": instance }),
+            Self::AraNotes { instance, region, notes, truncated } => json!({
+                "op": "ara_notes", "instance": instance, "region": region, "truncated": truncated,
+                "notes": notes.iter().map(|n| n.to_json()).collect::<Vec<_>>(),
+            }),
             Self::AraSelect { instance, region } => {
                 json!({ "op": "ara_select", "instance": instance, "region": region })
             }
@@ -463,6 +638,11 @@ impl Message {
             }
             Self::Memory { bytes } => json!({ "op": "memory", "bytes": bytes }),
             Self::TransportKey => json!({ "op": "transport_key" }),
+            Self::AraPlayback(AraPlayback::Start) => json!({ "op": "ara_playback", "request": "start" }),
+            Self::AraPlayback(AraPlayback::Stop) => json!({ "op": "ara_playback", "request": "stop" }),
+            Self::AraPlayback(AraPlayback::Position(seconds)) => {
+                json!({ "op": "ara_playback", "request": "position", "seconds": seconds })
+            }
             Self::CloseEditor { instance } => json!({ "op": "close_editor", "instance": instance }),
             Self::EditorClosed { instance } => json!({ "op": "editor_closed", "instance": instance }),
             Self::Quit => json!({ "op": "quit" }),
@@ -563,6 +743,37 @@ impl Message {
                 Self::AraUpdate { instance: instance()?, document: AraDocument::from_json(value.get("document")?)? }
             }
             "ara_updated" => Self::AraUpdated { instance: instance()? },
+            "ara_export" => Self::AraExport {
+                instance: instance()?,
+                modification: text("modification").filter(|t| t.len() <= MAX_ARA_TEXT)?,
+                source: text("source").filter(|t| t.len() <= MAX_ARA_TEXT)?,
+            },
+            "ara_exported" => Self::AraExported {
+                instance: instance()?,
+                archive_id: text("archive_id").filter(|t| t.len() <= MAX_ARA_TEXT)?,
+                data: bytes("data")?,
+            },
+            "ara_import" => Self::AraImport {
+                instance: instance()?,
+                archive_id: text("archive_id").filter(|t| t.len() <= MAX_ARA_TEXT)?,
+                data: bytes("data")?,
+                from: text("from").filter(|t| t.len() <= MAX_ARA_TEXT)?,
+                to: text("to").filter(|t| t.len() <= MAX_ARA_TEXT)?,
+                source: text("source").filter(|t| t.len() <= MAX_ARA_TEXT)?,
+            },
+            "ara_imported" => Self::AraImported { instance: instance()? },
+            "ara_notes" => Self::AraNotes {
+                instance: instance()?,
+                region: value.get("region")?.as_str().filter(|t| t.len() <= MAX_ARA_TEXT)?.to_string(),
+                notes: value
+                    .get("notes")?
+                    .as_array()
+                    .filter(|l| l.len() <= MAX_ARA_NOTES)?
+                    .iter()
+                    .map(AraNote::from_json)
+                    .collect::<Option<Vec<_>>>()?,
+                truncated: value.get("truncated")?.as_bool()?,
+            },
             "ara_select" => Self::AraSelect {
                 instance: instance()?,
                 region: match value.get("region") {
@@ -576,6 +787,14 @@ impl Message {
             "latency_changed" => Self::LatencyChanged { instance: instance()?, latency: small("latency")? },
             "memory" => Self::Memory { bytes: number("bytes")? },
             "transport_key" => Self::TransportKey,
+            "ara_playback" => Self::AraPlayback(match text("request")?.as_str() {
+                "start" => AraPlayback::Start,
+                "stop" => AraPlayback::Stop,
+                "position" => AraPlayback::Position(
+                    value.get("seconds").and_then(Value::as_f64).filter(|s| s.is_finite() && *s >= 0.0)?,
+                ),
+                _ => return None,
+            }),
             "close_editor" => Self::CloseEditor { instance: instance()? },
             "editor_closed" => Self::EditorClosed { instance: instance()? },
             "quit" => Self::Quit,
@@ -603,6 +822,8 @@ mod tests {
 
     fn ara_document() -> AraDocument {
         AraDocument {
+            tempo: vec![(0.0, 0.0), (0.5, 1.0), (2.5, 4.0)],
+            bars: vec![(4, 4, 0.0), (3, 4, 8.0)],
             name: "Song".into(),
             sequence: "Vocal".into(),
             tempo_bpm: 120.0,
@@ -615,6 +836,7 @@ mod tests {
                 start: 2.0,
                 duration: 4.0,
                 offset: 0.5,
+                clone_of: Some("content-3".into()),
             }],
         }
     }
@@ -665,10 +887,20 @@ mod tests {
 
     #[test]
     fn every_message_round_trips() {
-        assert_eq!(VERSION, 11);
+        assert_eq!(VERSION, 13);
         let messages = [
             Message::Hello { version: VERSION },
             Message::TransportKey,
+            Message::AraPlayback(AraPlayback::Start),
+            Message::AraPlayback(AraPlayback::Stop),
+            Message::AraPlayback(AraPlayback::Position(12.5)),
+            Message::AraNotes {
+                instance: 4,
+                region: "clip-12".into(),
+                notes: vec![AraNote { start: 0.5, length: 0.25, pitch: 62, volume: 0.75 }],
+                truncated: false,
+            },
+            Message::AraNotes { instance: 4, region: "clip-13".into(), notes: Vec::new(), truncated: true },
             Message::Load {
                 instance: 3,
                 plugin: "test:gain".into(),
@@ -710,6 +942,17 @@ mod tests {
                 placement: Placement { x: -40, y: 620, clip_x: 0, clip_y: 600, clip_width: 1280, clip_height: 0 },
             },
             Message::AraSelect { instance: 6, region: Some("clip-7".into()) },
+            Message::AraExport { instance: 6, modification: "content-3".into(), source: "C:\\a\\take.wav".into() },
+            Message::AraExported { instance: 6, archive_id: "com.example.edits".into(), data: vec![1, 2, 0xff] },
+            Message::AraImport {
+                instance: 7,
+                archive_id: "com.example.edits".into(),
+                data: vec![1, 2, 0xff],
+                from: "content-3".into(),
+                to: "content-9".into(),
+                source: "C:\\a\\take.wav".into(),
+            },
+            Message::AraImported { instance: 7 },
             Message::AraSelect { instance: 6, region: None },
             Message::AraUpdate { instance: 6, document: ara_document() },
             Message::AraUpdated { instance: 6 },

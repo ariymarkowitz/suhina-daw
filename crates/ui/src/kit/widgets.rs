@@ -130,7 +130,8 @@ pub fn solo_button(
     ))
 }
 
-/// A track's cue button ("C"): draws it in `rect` and returns the command a click asks for,
+/// A track's cue button (headphones; a C read as part of the pan field beside it, which shows C
+/// for centre, #744): draws it in `rect` and returns the command a click asks for,
 /// which turns the track's cue on or off, so it is also heard on the cue output (headphones).
 pub fn cue_button(
     ui: &Ui,
@@ -145,8 +146,28 @@ pub fn cue_button(
     let response = button_area(ui, rect, id, label);
     let (fill, text) = toggle_colors(ui, &response, cue);
     painter.rect_filled(rect, 0.0, fill);
-    text_in(painter, rect, Align2::CENTER_CENTER, "C", theme::ui_font(theme::TEXT_SMALL), text);
+    headphones(painter, rect, text);
     response.clicked().then(|| Action::new("track.setCue", serde_json::json!({ "track": track, "cue": !cue })))
+}
+
+/// A pair of headphones in the middle of `rect`, in `color`: the band an arc over the top, a cup
+/// at each of its ends. Sized from the rectangle's height, so it reads at a button's 15 points.
+pub fn headphones(painter: &Painter, rect: Rect, color: Color32) {
+    let size = rect.height().min(rect.width()) * 0.62;
+    let radius = size * 0.45;
+    let center = rect.center() + egui::vec2(0.0, size * 0.12);
+    let band: Vec<Pos2> = (0..=12)
+        .map(|i| {
+            let angle = std::f32::consts::PI * (1.0 + i as f32 / 12.0);
+            center + egui::vec2(angle.cos() * radius, angle.sin() * radius)
+        })
+        .collect();
+    painter.add(egui::Shape::line(band, egui::Stroke::new((size * 0.13).max(1.0), color)));
+    let cup = egui::vec2(size * 0.26, size * 0.42);
+    for side in [-1.0f32, 1.0] {
+        let at = center + egui::vec2(side * radius, cup.y * 0.35);
+        painter.rect_filled(Rect::from_center_size(at, cup), size * 0.06, color);
+    }
 }
 
 /// A track's arm button (components › Arm): a ring off, a filled red dot on its dark red
@@ -214,6 +235,12 @@ pub enum Drag {
     Done(f64),
 }
 
+/// Whether the wheel over a value field changes its value this frame: with Alt held. Without it
+/// the wheel scrolls the view under the field (`docs/spec/arrangement-editing.md`).
+pub fn wheel_moves_value(ui: &Ui) -> bool {
+    ui.input(|i| i.modifiers.alt)
+}
+
 /// The points one tick of a wheel scrolls, which is one step of a value control (egui reports a
 /// line of a wheel as this many points on most platforms).
 const WHEEL_TICK: f64 = 50.0;
@@ -226,20 +253,147 @@ fn wheel_points(ui: &Ui) -> f32 {
             .events
             .iter()
             .filter_map(|event| match event {
-                egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
-                    egui::MouseWheelUnit::Point => delta.y,
-                    egui::MouseWheelUnit::Line => delta.y * WHEEL_TICK as f32,
-                    egui::MouseWheelUnit::Page => delta.y * 400.0,
-                }),
+                egui::Event::MouseWheel { unit, delta, .. } => {
+                    // Some systems turn Alt and the wheel into a sideways scroll.
+                    let turned = if delta.y == 0.0 { delta.x } else { delta.y };
+                    Some(match unit {
+                        egui::MouseWheelUnit::Point => turned,
+                        egui::MouseWheelUnit::Line => turned * WHEEL_TICK as f32,
+                        egui::MouseWheelUnit::Page => turned * 400.0,
+                    })
+                }
                 _ => None,
             })
             .sum()
     })
 }
 
+/// The value control clicked or dragged last, and the frame it was drawn in: the arrow keys and
+/// typed digits go to it (#707) until a click elsewhere, Enter or Escape.
+const ACTIVE_VALUE: &str = "active-value";
+
+/// Whether a value control takes this frame's keys: an arrow, a digit, Enter, Escape or
+/// Backspace while one is active. The window's shortcuts wait for this frame then, so a digit
+/// typed into it does not pick a tool; Ctrl+Z and Space still reach them.
+pub fn value_active(ctx: &egui::Context) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    let active = ctx
+        .data(|d| d.get_temp::<(egui::Id, u64)>(egui::Id::new(ACTIVE_VALUE)))
+        .is_some_and(|(_, drawn)| pass.saturating_sub(drawn) <= 2);
+    active
+        && ctx.input(|i| {
+            i.events.iter().any(|event| match event {
+                egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                    !modifiers.command
+                        && matches!(
+                            key,
+                            egui::Key::ArrowUp
+                                | egui::Key::ArrowDown
+                                | egui::Key::Enter
+                                | egui::Key::Escape
+                                | egui::Key::Backspace
+                        )
+                }
+                egui::Event::Text(text) => text.chars().all(|c| c.is_ascii_digit() || matches!(c, '-' | '.' | ',')),
+                _ => false,
+            })
+        })
+}
+
+/// The keys an active value control takes this frame: arrow steps (up is +1), and Enter with
+/// the number typed into it.
+fn value_keys(ui: &Ui, response: &Response) -> (i32, bool, Option<String>) {
+    let ctx = ui.ctx();
+    let key = egui::Id::new(ACTIVE_VALUE);
+    let typed_id = response.id.with("typed");
+    let pass = ctx.cumulative_pass_nr();
+    if response.clicked() || response.drag_started_by(egui::PointerButton::Primary) {
+        ctx.data_mut(|d| {
+            d.insert_temp(key, (response.id, pass));
+            d.remove::<String>(typed_id);
+        });
+    }
+    let active = ctx.data(|d| d.get_temp::<(egui::Id, u64)>(key)).is_some_and(|(id, _)| id == response.id);
+    if !active {
+        return (0, false, None);
+    }
+    // A press anywhere else lets it go.
+    if ui.input(|i| i.pointer.any_pressed()) && !response.hovered() {
+        ctx.data_mut(|d| {
+            d.remove::<(egui::Id, u64)>(key);
+            d.remove::<String>(typed_id);
+        });
+        return (0, false, None);
+    }
+    ctx.data_mut(|d| d.insert_temp(key, (response.id, pass)));
+    let mut typed = ctx.data(|d| d.get_temp::<String>(typed_id)).unwrap_or_default();
+    let (mut steps, mut fine, mut enter, mut escape) = (0i32, false, false, false);
+    ctx.input_mut(|i| {
+        i.events.retain(|event| match event {
+            egui::Event::Key { key: egui::Key::ArrowUp, pressed: true, modifiers, .. } => {
+                steps += 1;
+                fine |= modifiers.shift;
+                false
+            }
+            egui::Event::Key { key: egui::Key::ArrowDown, pressed: true, modifiers, .. } => {
+                steps -= 1;
+                fine |= modifiers.shift;
+                false
+            }
+            egui::Event::Key { key: egui::Key::Enter, pressed: true, .. } => {
+                enter = true;
+                false
+            }
+            egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => {
+                escape = true;
+                false
+            }
+            egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => {
+                typed.pop();
+                false
+            }
+            egui::Event::Text(text) if text.chars().all(|c| c.is_ascii_digit() || matches!(c, '-' | '.' | ',')) => {
+                typed.push_str(text);
+                false
+            }
+            _ => true,
+        });
+    });
+    if escape {
+        ctx.data_mut(|d| {
+            d.remove::<(egui::Id, u64)>(key);
+            d.remove::<String>(typed_id);
+        });
+        return (0, false, None);
+    }
+    if enter {
+        ctx.data_mut(|d| {
+            d.remove::<(egui::Id, u64)>(key);
+            d.remove::<String>(typed_id);
+        });
+        return (0, fine, Some(typed));
+    }
+    ctx.data_mut(|d| d.insert_temp(typed_id, typed.clone()));
+    // Lit while it takes the keys; what is typed shows over it.
+    let painter = ui.painter_at(response.rect);
+    painter.rect_stroke(response.rect, 0.0, Stroke::new(1.0, theme::accent()), egui::StrokeKind::Inside);
+    if !typed.is_empty() {
+        painter.rect_filled(response.rect.shrink(1.0), 0.0, theme::control_active());
+        painter.text(
+            response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &typed,
+            theme::mono_font(theme::TEXT_SMALL),
+            theme::text_value(),
+        );
+    }
+    (steps, fine, None)
+}
+
 /// A number changed by dragging vertically (up raises it), by the wheel over it and by a
-/// double-click. `per_point` is the change per point of drag and `per_tick` the change per wheel
-/// tick; Shift makes both ten times finer.
+/// double-click; clicked, the arrow keys step it (Shift: ten times finer) and a number typed and
+/// Enter set it (#707). `per_point` is the change per point of drag and `per_tick` the change
+/// per wheel tick or arrow key; Shift makes both ten times finer.
 #[allow(clippy::too_many_arguments)]
 pub fn drag_value(
     ui: &Ui,
@@ -251,13 +405,30 @@ pub fn drag_value(
     range: (f64, f64),
     default: f64,
 ) -> Drag {
-    // The wheel over the control moves it, as a drag would; the caller commits what it is given.
-    // Scrolling up raises the value, as dragging up does.
-    if response.hovered() {
+    // Keys to the control clicked last: the arrows step it, Enter sets what was typed.
+    let (steps, fine, typed) = value_keys(ui, response);
+    if let Some(typed) = typed
+        && let Ok(number) = typed.replace(',', ".").trim().parse::<f64>()
+        && number.is_finite()
+    {
+        *preview = None;
+        return Drag::Done(number.clamp(range.0, range.1));
+    }
+    if steps != 0 {
+        let from = if value.is_finite() { value } else { range.0 };
+        let step = f64::from(steps) * per_tick * if fine { 0.1 } else { 1.0 };
+        *preview = None;
+        return Drag::Done((from + step).clamp(range.0, range.1));
+    }
+    // Alt and the wheel over the control move it, as a drag would; the caller commits what it is
+    // given. The wheel alone scrolls the view, so scrolling past a field never changes it.
+    // Scrolling up raises the value, as dragging up does; Shift too, ten times finer.
+    if response.hovered() && wheel_moves_value(ui) {
         let points = wheel_points(ui);
         if points != 0.0 {
             let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
-            let step = -f64::from(points) / WHEEL_TICK * per_tick * fine;
+            // A positive delta moves the content down: the wheel turned up, which raises it.
+            let step = f64::from(points) / WHEEL_TICK * per_tick * fine;
             *preview = None;
             return Drag::Done((value + step).clamp(range.0, range.1));
         }

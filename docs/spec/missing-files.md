@@ -3,7 +3,7 @@ description: What happens when a project's audio files cannot be found: the bar 
 read_when: missing files, missing samples, file not found, relink, locate, find files, moved samples, project.missingFiles, project.relinkFiles, library.findFiles
 type: spec
 status: draft
-last_verified: 2026-10-19
+last_verified: 2026-10-20
 covers:
   - crates/library/src/find.rs
   - crates/session/src/relink.rs
@@ -111,12 +111,40 @@ Over MCP, `folder` and every `to` path must be inside the server's read root ([`
 - Collecting a project's files into its folder ("collect and save").
 - Missing plug-ins are reported by the plug-in loading dialog (ADR 0006), not here.
 
+## Collect and save
+
+File › Collect and save copies the audio the project plays from outside its folder into
+`Samples/Collected` in that folder, points every clip and sampler at the copies
+(`project.collect`, one undo step) and saves. A copy of the same name and size already there
+is used; another file of the same name gets a number, as `kick (2).wav`. A project not saved
+yet asks for its name first and collects into the folder chosen. Afterwards the folder holds
+everything the project plays, so it can be moved or shared as it is.
+
 ## Project file boundaries
 
-On project open, audio clips and sampler sources are resolved only inside the
-project folder. Symbolic links and junctions are not followed. Parent traversal and
-external absolute paths are treated as missing without reading the external file.
-Choose an external file explicitly through Locate/Apply to use it in the current
-session. To reopen without another relink, keep source audio inside the project
-folder. A direct browser/file drop or explicit CLI/MCP load remains a user-selected
-operation; MCP paths still stay inside its configured read root.
+On project open, audio clips and sampler sources are resolved inside the project
+folder, without following symbolic links or junctions. Outside it, the desktop app reads a
+file the project names wherever it is on a local disk (a drive letter on Windows), as the
+person opened the project themselves; a network share or a device path is not read until
+they choose it. The CLI and the MCP server read only what the person chose themselves:
+
+- **Files they loaded and saved a project with.** Saving a project keeps the absolute
+  paths of the audio it has decoded (dropped, loaded, recorded or relinked) as trusted,
+  in `browser.json` beside the settings (`trusted_audio`, newest first, at most 20,000).
+  Any project that names one of them opens with it on this machine.
+- **The browser's library folders**, the folders the person added; a path with a parent
+  step out of one is not inside it.
+- **The folders a project's audio came from.** Saving also keeps, for that project file, the
+  folders outside it that its audio was loaded from (`project_folders` in `browser.json`, at
+  most 64 a project). Opening the project reads them, and the missing files search looks in
+  them as it does in the project's folder, so a sample moved inside the folder it was
+  dropped from is found by name. They are kept on this machine, never in the project file:
+  a project from someone else cannot name folders to read.
+
+Anything else a project names outside its folder is treated as missing, decided from the
+path alone before anything is read: in the desktop app a network share or a device path, in
+the CLI and the MCP server any path not trusted. A project that comes from someone else (live
+collaboration, when it arrives) is opened with the stricter rule too.
+Choose such a file through Locate/Apply to use it; saving then trusts it. The CLI and
+the MCP server open projects with the folder rule alone; MCP paths stay inside its
+configured read root.

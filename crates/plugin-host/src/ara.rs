@@ -14,12 +14,14 @@
 //!
 //! [ADR 0028]: https://github.com/suhina-daw/suhina-daw/blob/main/docs/decisions/0028-ara-hosting.md
 
+use std::cell::{Cell, RefCell};
 use std::ffi::{CString, c_void};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use suhina_ipc::AudioSource;
-use suhina_plugins::protocol::{AraDocument, AraRegion};
+use suhina_plugins::protocol::{AraDocument, AraNote, AraPlayback, AraRegion, MAX_ARA_NOTES};
 use vst3::ComPtr;
 use vst3::Steinberg::Vst::IComponent;
 use vst3::Steinberg::{FUnknown, FUnknownVtbl, TUID, kResultOk};
@@ -196,11 +198,76 @@ struct Host {
     sources: Vec<Box<Source>>,
     /// The plug-in said its document data changed (ARA 2.3), so the project has unsaved edits.
     changed: AtomicBool,
+    /// The plug-in said a region's, modification's or source's notes may have changed, or the
+    /// host changed the regions: the notes are read again after the next model update (#720).
+    notes_changed: AtomicBool,
+    /// The song's tempo map and time signatures, which the plug-in reads through the musical
+    /// context's content readers, so its timeline counts bars as the song does. Changed only
+    /// inside an edit, on the model thread, so what a reader handed out stays put.
+    tempo: Mutex<Vec<ARAContentTempoEntry>>,
+    bars: Mutex<Vec<ARAContentBarSignature>>,
 }
+
+impl Host {
+    /// Takes the tempo map and time signatures of `document`; whether they changed.
+    fn set_context(&self, document: &AraDocument) -> bool {
+        let tempo: Vec<ARAContentTempoEntry> = document
+            .tempo_entries()
+            .into_iter()
+            .map(|(seconds, quarters)| ARAContentTempoEntry { timePosition: seconds, quarterPosition: quarters })
+            .collect();
+        let bars: Vec<ARAContentBarSignature> = document
+            .bar_signatures()
+            .into_iter()
+            .map(|(numerator, denominator, at)| ARAContentBarSignature {
+                numerator: i32::try_from(numerator).unwrap_or(4),
+                denominator: i32::try_from(denominator).unwrap_or(4),
+                position: at,
+            })
+            .collect();
+        let same_tempo = {
+            let now = self.tempo.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            now.len() == tempo.len()
+                && now.iter().zip(&tempo).all(|(a, b)| {
+                    let (a_time, a_quarter, b_time, b_quarter) =
+                        (a.timePosition, a.quarterPosition, b.timePosition, b.quarterPosition);
+                    a_time == b_time && a_quarter == b_quarter
+                })
+        };
+        let same_bars = {
+            let now = self.bars.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            now.len() == bars.len()
+                && now.iter().zip(&bars).all(|(a, b)| {
+                    let (an, ad, ap, bn, bd, bp) =
+                        (a.numerator, a.denominator, a.position, b.numerator, b.denominator, b.position);
+                    an == bn && ad == bd && ap == bp
+                })
+        };
+        if same_tempo && same_bars {
+            return false;
+        }
+        *self.tempo.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = tempo;
+        *self.bars.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = bars;
+        true
+    }
+}
+
+/// How often the host lets the plug-in send the model changes it has queued, when it is not
+/// editing: the ARA API asks for it periodically; 250 ms keeps an edit's echo in the plug-in's
+/// editor prompt without a busy loop.
+const MODEL_UPDATES_EVERY: Duration = Duration::from_millis(250);
+
+/// How often the notes of regions that have none yet are looked for again (#720): a plug-in may
+/// finish its analysis without saying the content changed.
+const NOTES_AGAIN_EVERY: Duration = Duration::from_secs(1);
 
 /// An ARA document controller and the objects made in it, bound to one plug-in instance.
 pub(crate) struct Document {
     controller: *const ARADocumentControllerInstance,
+    /// When `notifyModelUpdates` was last called.
+    last_model_update: Cell<Instant>,
+    /// When the regions' notes were last read.
+    last_notes_read: Cell<Instant>,
     host: Box<Host>,
     context: ARAMusicalContextRef,
     sequence: ARARegionSequenceRef,
@@ -221,6 +288,13 @@ pub(crate) struct Document {
     editor_view: Option<(ARAEditorViewRef, *const ARAEditorViewInterface)>,
     /// The plug-in's factory, valid while its module is loaded.
     factory: *const ARAFactory,
+    /// The notes last sent for each region (its id and a digest of them), so only a change is
+    /// sent again.
+    notes_sent: RefCell<Vec<(String, u64)>>,
+    /// Regions' notes read and not yet taken by the main loop: id, notes, whether cut.
+    notes_out: RefCell<Vec<(String, Vec<AraNote>, bool)>>,
+    /// The sources whose notes the host asked the plug-in to find (once each).
+    analysis_asked: RefCell<Vec<ARAAudioSourceRef>>,
     /// The texts handed to the plug-in, kept for as long as the document.
     _texts: Vec<CString>,
     _entry: Interface,
@@ -281,7 +355,12 @@ impl Document {
             },
             sources,
             changed: AtomicBool::new(false),
+            // Read once the document is built.
+            notes_changed: AtomicBool::new(true),
+            tempo: Mutex::new(Vec::new()),
+            bars: Mutex::new(Vec::new()),
         });
+        host.set_context(document);
         let host_ref: *mut c_void = std::ptr::from_mut::<Host>(&mut host).cast();
         host.instance.audioAccessControllerHostRef = host_ref.cast();
         host.instance.archivingControllerHostRef = host_ref.cast();
@@ -297,6 +376,8 @@ impl Document {
         let controller = unsafe { create(&host.instance, &properties) };
         let mut made = Self {
             controller,
+            last_model_update: Cell::new(Instant::now()),
+            last_notes_read: Cell::new(Instant::now()),
             host,
             context: std::ptr::null_mut(),
             sequence: std::ptr::null_mut(),
@@ -309,6 +390,9 @@ impl Document {
             extension: std::ptr::null(),
             editor_view: None,
             factory,
+            notes_sent: RefCell::new(Vec::new()),
+            notes_out: RefCell::new(Vec::new()),
+            analysis_asked: RefCell::new(Vec::new()),
             _texts: Vec::new(),
             _entry: entry,
         };
@@ -382,9 +466,115 @@ impl Document {
         self.host.changed.swap(false, Ordering::AcqRel)
     }
 
+    /// Lets the plug-in send the model changes it has queued (`notifyModelUpdates`): what it
+    /// worked out after an edit (its analysis, the regions it changed) reaches its editor now
+    /// rather than on its own timer. Called outside an edit, on the model thread.
+    pub(crate) fn notify_model_updates(&self) {
+        self.last_model_update.set(Instant::now());
+        let Some(dc) = self.controller() else { return };
+        let Some(notify) = dc.interface.notifyModelUpdates else { return };
+        // SAFETY: a live document controller, not being edited, on its model thread.
+        unsafe { notify(dc.reference) };
+    }
+
+    /// Calls [`Document::notify_model_updates`] when [`MODEL_UPDATES_EVERY`] has passed since
+    /// the last call. The host's main loop calls it between messages.
+    pub(crate) fn tick(&self) {
+        if self.last_model_update.get().elapsed() >= MODEL_UPDATES_EVERY {
+            self.notify_model_updates();
+            // What the plug-in said changed reached the host inside that call; the notes are
+            // read now, outside it, as the API asks.
+            // While a region still has no notes (its analysis running, or a plug-in that says
+            // nothing when it ends) they are looked for again now and then.
+            let waiting = self.notes_sent.borrow().len() < self.region_described.len();
+            let again = waiting && self.last_notes_read.get().elapsed() >= NOTES_AGAIN_EVERY;
+            if self.host.notes_changed.swap(false, Ordering::AcqRel) || again {
+                self.last_notes_read.set(Instant::now());
+                self.read_notes();
+            }
+        }
+    }
+
+    /// Reads every region's notes and keeps for [`Document::take_notes`] those that differ from
+    /// what was sent; a region gone is forgotten, so its notes are sent again if it comes back.
+    fn read_notes(&self) {
+        let Some(dc) = self.controller() else { return };
+        self.ask_for_notes(&dc);
+        let mut sent = self.notes_sent.borrow_mut();
+        sent.retain(|(id, _)| self.region_described.iter().any(|r| r.id == *id));
+        let mut out = self.notes_out.borrow_mut();
+        for (region, described) in self.regions.iter().zip(&self.region_described) {
+            let Some((notes, truncated)) = region_notes(&dc, *region, described.start) else {
+                suhina_plugins::trace!("ara notes {}: cannot be read", described.id);
+                continue;
+            };
+            suhina_plugins::trace!(
+                "ara notes {}: {} notes, first at {:?}s, last ends {:?}s (from region start)",
+                described.id,
+                notes.len(),
+                notes.first().map(|n| n.start),
+                notes.iter().map(|n| n.start + n.length).reduce(f64::max)
+            );
+            let digest = notes_digest(&notes, truncated);
+            match sent.iter_mut().find(|(id, _)| *id == described.id) {
+                Some((_, last)) if *last == digest => continue,
+                Some((_, last)) => *last = digest,
+                // A region with no notes is not sent until it has some.
+                None if notes.is_empty() => continue,
+                None => sent.push((described.id.clone(), digest)),
+            }
+            out.retain(|(id, ..)| *id != described.id);
+            out.push((described.id.clone(), notes, truncated));
+        }
+    }
+
+    /// Asks the plug-in to find the notes of each source it has not analysed yet, once, when it
+    /// says it can (ADR 0028): the notes then show on the clips without the editor being opened.
+    /// The work is the plug-in's, in this process; it says when it is done with a content change.
+    fn ask_for_notes(&self, dc: &Controller) {
+        let notes_type = kARAContentTypeNotes as ARAContentType;
+        // SAFETY: the plug-in's factory, valid while its module is loaded.
+        let Some(factory) = (unsafe { self.factory.as_ref() }) else { return };
+        let types = factory.analyzeableContentTypes;
+        let count = factory.analyzeableContentTypesCount.min(64);
+        if types.is_null() {
+            return;
+        }
+        // SAFETY: the factory's list of `count` content types, valid while its module is loaded.
+        let listed = unsafe { std::slice::from_raw_parts(types, count) };
+        if !listed.contains(&notes_type) {
+            return;
+        }
+        let (Some(incomplete), Some(request)) =
+            (dc.interface.isAudioSourceContentAnalysisIncomplete, dc.interface.requestAudioSourceContentAnalysis)
+        else {
+            return;
+        };
+        let mut asked = self.analysis_asked.borrow_mut();
+        for source in &self.sources {
+            if asked.contains(source) {
+                continue;
+            }
+            asked.push(*source);
+            // SAFETY: a live controller, not being edited, for a source of this document.
+            if unsafe { incomplete(dc.reference, *source, notes_type) } != 0 {
+                // SAFETY: as above, with a list of one content type.
+                unsafe { request(dc.reference, *source, 1, &notes_type) };
+            }
+        }
+    }
+
+    /// The regions' notes read since the last call: region id, its notes as they are now
+    /// (empty when it has none any more), and whether there were more than the protocol carries.
+    pub(crate) fn take_notes(&self) -> Vec<(String, Vec<AraNote>, bool)> {
+        std::mem::take(&mut *self.notes_out.borrow_mut())
+    }
+
     /// The plug-in's edits as an archive: its document archive id and the bytes. `None` when it
     /// cannot store them.
     pub(crate) fn store(&self) -> Option<(String, Vec<u8>)> {
+        // What the plug-in has queued goes into the archive too.
+        self.notify_model_updates();
         let dc = self.controller()?;
         // SAFETY: the factory the document was made with, valid while its module is loaded.
         let factory = unsafe { self.factory.as_ref() }?;
@@ -398,11 +588,90 @@ impl Document {
         (stored != 0).then_some((id, archive.bytes))
     }
 
-    /// Gives the plug-in back the edits [`Document::store`] took, for the objects with the same
-    /// persistent ids (the same clips). Refused when the archive is of a kind the plug-in does
-    /// not read (another plug-in's, or a newer version's).
-    pub(crate) fn restore(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
+    /// The edits of one modification (`content-<id>`) and its source (the pool key), stored on
+    /// their own (a partial archive, ADR 0028 step 6): to give another track's plug-in when a
+    /// clip goes there with its edits kept. The plug-in's document archive id and the bytes.
+    pub(crate) fn export(&self, modification: &str, source: &str) -> Result<(String, Vec<u8>), String> {
+        // What the plug-in has queued goes into the archive too.
+        self.notify_model_updates();
         let dc = self.controller().ok_or("no document controller")?;
+        // SAFETY: as in `store`.
+        let factory = unsafe { self.factory.as_ref() }.ok_or("no ARA factory")?;
+        let id = text_of(factory.documentArchiveID).ok_or("the plug-in names no archive kind")?;
+        let store = dc.interface.storeObjectsToArchive.ok_or("the plug-in cannot store edits")?;
+        let at = |ids: &[String], wanted: &str| ids.iter().position(|i| i == wanted);
+        let modification_ref = at(&self.modification_ids, modification)
+            .and_then(|i| self.modifications.get(i).copied())
+            .ok_or_else(|| format!("the document has no {modification}"))?;
+        let source_ref = at(&self.source_ids, source)
+            .and_then(|i| self.sources.get(i).copied())
+            .ok_or("the document does not have the clip's audio")?;
+        let filter = ARAStoreObjectsFilter {
+            structSize: size_of::<ARAStoreObjectsFilter>(),
+            documentData: 0,
+            audioSourceRefsCount: 1,
+            audioSourceRefs: &source_ref,
+            audioModificationRefsCount: 1,
+            audioModificationRefs: &modification_ref,
+        };
+        let mut archive = Archive { bytes: Vec::new(), id: CString::new(id.clone()).map_err(|_| "a bad archive id")? };
+        let writer: ARAArchiveWriterHostRef = std::ptr::from_mut(&mut archive).cast();
+        // SAFETY: a live document controller, not being edited, on its model thread; the archive,
+        // the filter and the refs it points at live for the call.
+        let stored = unsafe { store(dc.reference, writer, &filter) };
+        if stored == 0 {
+            return Err("the plug-in could not store the clip's edits".into());
+        }
+        Ok((id, archive.bytes))
+    }
+
+    /// Gives the plug-in the edits [`Document::export`] stored in another track's document,
+    /// for its modification `to` (it was `from` there) of the same `source`: a clip moved or
+    /// copied to this track with its edits kept. Refused while the document has no `to` yet
+    /// (the clip has not reached it), or for an archive of a kind the plug-in does not read.
+    pub(crate) fn import(&self, id: &str, bytes: &[u8], from: &str, to: &str, source: &str) -> Result<(), String> {
+        if !self.modification_ids.iter().any(|m| m == to) {
+            return Err(format!("the document has no {to} yet"));
+        }
+        if !self.source_ids.iter().any(|s| s == source) {
+            return Err("the document does not have the clip's audio yet".into());
+        }
+        self.check_archive(id)?;
+        let dc = self.controller().ok_or("no document controller")?;
+        let (Some(begin), Some(end), Some(restore)) =
+            (dc.interface.beginEditing, dc.interface.endEditing, dc.interface.restoreObjectsFromArchive)
+        else {
+            return Err("the plug-in cannot restore edits".into());
+        };
+        let texts = [source, from, to].map(CString::new);
+        let [Ok(source), Ok(from), Ok(to)] = texts else { return Err("a bad persistent id".into()) };
+        let source_id = source.as_ptr();
+        let (from_id, to_id) = (from.as_ptr(), to.as_ptr());
+        let filter = ARARestoreObjectsFilter {
+            structSize: size_of::<ARARestoreObjectsFilter>(),
+            documentData: 0,
+            audioSourceIDsCount: 1,
+            audioSourceArchiveIDs: &source_id,
+            audioSourceCurrentIDs: &source_id,
+            audioModificationIDsCount: 1,
+            audioModificationArchiveIDs: &from_id,
+            audioModificationCurrentIDs: &to_id,
+        };
+        let mut archive = Archive { bytes: bytes.to_vec(), id: CString::new(id).map_err(|_| "a bad archive id")? };
+        let reader: ARAArchiveReaderHostRef = std::ptr::from_mut(&mut archive).cast();
+        // SAFETY: a live document controller on its model thread, inside an edit; the archive,
+        // the filter and the texts it points at live for the call.
+        unsafe { begin(dc.reference) };
+        // SAFETY: as above.
+        let restored = unsafe { restore(dc.reference, reader, &filter) };
+        // SAFETY: as above, closing the edit.
+        unsafe { end(dc.reference) };
+        self.notify_model_updates();
+        if restored == 0 { Err("the plug-in could not read the clip's edits".into()) } else { Ok(()) }
+    }
+
+    /// Whether the plug-in reads archives of kind `id`: its own, or one it lists as compatible.
+    fn check_archive(&self, id: &str) -> Result<(), String> {
         // SAFETY: as in `store`.
         let factory = unsafe { self.factory.as_ref() }.ok_or("no ARA factory")?;
         let mut known = vec![text_of(factory.documentArchiveID)];
@@ -413,9 +682,19 @@ impl Document {
                 known.push(text_of(unsafe { factory.compatibleDocumentArchiveIDs.wrapping_add(index).read() }));
             }
         }
-        if !known.iter().flatten().any(|k| k == id) {
-            return Err("the plug-in does not read these saved edits".into());
+        if known.iter().flatten().any(|k| k == id) {
+            Ok(())
+        } else {
+            Err("the plug-in does not read these saved edits".into())
         }
+    }
+
+    /// Gives the plug-in back the edits [`Document::store`] took, for the objects with the same
+    /// persistent ids (the same clips). Refused when the archive is of a kind the plug-in does
+    /// not read (another plug-in's, or a newer version's).
+    pub(crate) fn restore(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
+        let dc = self.controller().ok_or("no document controller")?;
+        self.check_archive(id)?;
         let (Some(begin), Some(end), Some(restore)) =
             (dc.interface.beginEditing, dc.interface.endEditing, dc.interface.restoreObjectsFromArchive)
         else {
@@ -430,6 +709,7 @@ impl Document {
         let restored = unsafe { restore(dc.reference, reader, std::ptr::null()) };
         // SAFETY: as above, closing the edit.
         unsafe { end(dc.reference) };
+        self.notify_model_updates();
         if restored == 0 { Err("the plug-in could not read its saved edits".into()) } else { Ok(()) }
     }
 
@@ -536,14 +816,31 @@ impl Document {
             return self.modifications.get(index).copied().ok_or_else(|| "a modification is missing".into());
         }
         let source = *self.sources.get(region.source).ok_or("a region names a source the document lacks")?;
-        let make =
-            dc.interface.createAudioModification.ok_or("the document controller cannot make an audio modification")?;
         let host_ref: *mut c_void = std::ptr::from_mut::<Host>(&mut self.host).cast();
         let properties = ARAAudioModificationProperties {
             structSize: size_of::<ARAAudioModificationProperties>(),
             name: self.text(&region.name),
             persistentID: self.text(&region.modification),
         };
+        // A copy of a modification this document has starts with its edits (ADR 0028 decision
+        // 5): a pasted or split clip, or one that got its own content. A plug-in that cannot
+        // clone, or a clone it refuses, gets a new modification instead.
+        let original = region
+            .clone_of
+            .as_ref()
+            .and_then(|of| self.modification_ids.iter().position(|id| id == of))
+            .and_then(|index| self.modifications.get(index).copied());
+        if let (Some(original), Some(clone)) = (original, dc.interface.cloneAudioModification) {
+            // SAFETY: a live controller inside an edit, for a modification of this document.
+            let made = unsafe { clone(dc.reference, original, host_ref.cast(), &properties) };
+            if !made.is_null() {
+                self.modifications.push(made);
+                self.modification_ids.push(region.modification.clone());
+                return Ok(made);
+            }
+        }
+        let make =
+            dc.interface.createAudioModification.ok_or("the document controller cannot make an audio modification")?;
         // SAFETY: a live controller inside an edit, for a source of this document.
         let made = unsafe { make(dc.reference, source, host_ref.cast(), &properties) };
         if made.is_null() {
@@ -556,6 +853,16 @@ impl Document {
 
     /// A region's properties as ARA takes them.
     fn region_properties(&mut self, region: &AraRegion) -> ARAPlaybackRegionProperties {
+        suhina_plugins::trace!(
+            "ara region {} {:?}: start {:.3}s duration {:.3}s offset {:.3}s modification {} clone_of {:?}",
+            region.id,
+            region.name,
+            region.start,
+            region.duration,
+            region.offset,
+            region.modification,
+            region.clone_of
+        );
         ARAPlaybackRegionProperties {
             structSize: size_of::<ARAPlaybackRegionProperties>(),
             transformationFlags: 0,
@@ -582,7 +889,8 @@ impl Document {
             return Err(format!("the plug-in refused the playback region {:?}", region.name));
         }
         self.regions.push(made);
-        self.region_described.push(region.clone());
+        // Kept without `clone_of`: a later document names no copy for it, and the region is the same.
+        self.region_described.push(AraRegion { clone_of: None, ..region.clone() });
         Ok(made)
     }
 
@@ -611,6 +919,10 @@ impl Document {
         let edited = self.apply(&dc, document, new_sources);
         // SAFETY: as above, closing the edit `begin` opened.
         unsafe { end(dc.reference) };
+        // The plug-in redraws the change once it may send what the edit set off.
+        self.notify_model_updates();
+        // Moved, trimmed or new regions: the plug-in need not say so, so their notes are read.
+        self.host.notes_changed.store(true, Ordering::Release);
         edited
     }
 
@@ -621,6 +933,23 @@ impl Document {
         document: &AraDocument,
         new_sources: Vec<(String, String, Box<Source>)>,
     ) -> Result<Edited, String> {
+        // A tempo or time signature changed: the plug-in reads the musical context again.
+        if self.host.set_context(document)
+            && !self.context.is_null()
+            && let Some(update) = dc.interface.updateMusicalContextContent
+        {
+            suhina_plugins::trace!("ara musical context changed");
+            // SAFETY: a live controller inside an edit, for this document's context; a null
+            // range is the whole of it.
+            unsafe {
+                update(
+                    dc.reference,
+                    self.context,
+                    std::ptr::null(),
+                    kARAContentUpdateEverythingChanged as ARAContentUpdateFlags,
+                )
+            };
+        }
         for (id, name, source) in new_sources {
             self.host.sources.push(source);
             self.add_source(dc, self.host.sources.len() - 1, &id, &name)?;
@@ -647,7 +976,8 @@ impl Document {
                 .position(|old| old.id == region.id && old.modification == region.modification)
                 .filter(|&index| self.regions.get(index).is_some_and(|r| !edited.removed.contains(r)));
             match found {
-                Some(index) if self.region_described.get(index) == Some(region) => {}
+                Some(index)
+                    if self.region_described.get(index) == Some(&AraRegion { clone_of: None, ..region.clone() }) => {}
                 Some(index) => {
                     let update = dc
                         .interface
@@ -658,7 +988,7 @@ impl Document {
                     // SAFETY: a live controller inside an edit, for a region of this document.
                     unsafe { update(dc.reference, made, &properties) };
                     if let Some(old) = self.region_described.get_mut(index) {
-                        *old = region.clone();
+                        *old = AraRegion { clone_of: None, ..region.clone() };
                     }
                 }
                 None => edited.added.push(self.add_region(dc, region)?),
@@ -963,41 +1293,62 @@ unsafe extern "C" fn archive_id(
 
 static CONTENT_ACCESS: ARAContentAccessControllerInterface = ARAContentAccessControllerInterface {
     structSize: size_of::<ARAContentAccessControllerInterface>(),
-    isMusicalContextContentAvailable: Some(no_context_content),
+    isMusicalContextContentAvailable: Some(context_content),
     getMusicalContextContentGrade: Some(context_grade),
-    createMusicalContextContentReader: Some(no_context_reader),
+    createMusicalContextContentReader: Some(context_reader),
     isAudioSourceContentAvailable: Some(no_source_content),
     getAudioSourceContentGrade: Some(source_grade),
     createAudioSourceContentReader: Some(no_source_reader),
-    getContentReaderEventCount: Some(no_events),
-    getContentReaderDataForEvent: Some(no_event),
+    getContentReaderEventCount: Some(events),
+    getContentReaderDataForEvent: Some(event),
     destroyContentReader: Some(no_reader_to_destroy),
 };
 
-// Suhina describes no content (tempo, chords, notes) to the plug-in yet; it analyses its own.
-unsafe extern "C" fn no_context_content(
+// The musical context has the song's tempo map and time signatures (so the plug-in counts bars
+// as the song does); Suhina describes no other content (chords, notes) yet: the plug-in analyses
+// its own. A reader is the content type it reads, as a pointer-sized number.
+const TEMPO_READER: usize = 1;
+const BARS_READER: usize = 2;
+
+fn context_kind(kind: ARAContentType) -> Option<usize> {
+    if kind == kARAContentTypeTempoEntries as ARAContentType {
+        Some(TEMPO_READER)
+    } else if kind == kARAContentTypeBarSignatures as ARAContentType {
+        Some(BARS_READER)
+    } else {
+        None
+    }
+}
+
+unsafe extern "C" fn context_content(
     _host: ARAContentAccessControllerHostRef,
     _context: ARAMusicalContextHostRef,
-    _kind: ARAContentType,
+    kind: ARAContentType,
 ) -> ARABool {
-    0
+    ARABool::from(context_kind(kind).is_some())
 }
 
 unsafe extern "C" fn context_grade(
     _host: ARAContentAccessControllerHostRef,
     _context: ARAMusicalContextHostRef,
-    _kind: ARAContentType,
+    kind: ARAContentType,
 ) -> ARAContentGrade {
-    kARAContentGradeInitial as ARAContentGrade
+    // The song's own tempo and meter, as the user set them.
+    if context_kind(kind).is_some() {
+        kARAContentGradeAdjusted as ARAContentGrade
+    } else {
+        kARAContentGradeInitial as ARAContentGrade
+    }
 }
 
-unsafe extern "C" fn no_context_reader(
+unsafe extern "C" fn context_reader(
     _host: ARAContentAccessControllerHostRef,
     _context: ARAMusicalContextHostRef,
-    _kind: ARAContentType,
+    kind: ARAContentType,
     _range: *const ARAContentTimeRange,
 ) -> ARAContentReaderHostRef {
-    std::ptr::null_mut()
+    // Every entry, whatever the range: those around it are among them, as ARA asks.
+    context_kind(kind).map_or(std::ptr::null_mut(), std::ptr::without_provenance_mut)
 }
 
 unsafe extern "C" fn no_source_content(
@@ -1025,16 +1376,32 @@ unsafe extern "C" fn no_source_reader(
     std::ptr::null_mut()
 }
 
-unsafe extern "C" fn no_events(_host: ARAContentAccessControllerHostRef, _reader: ARAContentReaderHostRef) -> ARAInt32 {
-    0
+unsafe extern "C" fn events(host: ARAContentAccessControllerHostRef, reader: ARAContentReaderHostRef) -> ARAInt32 {
+    // SAFETY: the host ref is the document's `Host`, which outlives its controller.
+    let Some(host) = (unsafe { host.cast::<Host>().as_ref() }) else { return 0 };
+    let count = match reader.addr() {
+        TEMPO_READER => host.tempo.lock().map_or(0, |t| t.len()),
+        BARS_READER => host.bars.lock().map_or(0, |b| b.len()),
+        _ => 0,
+    };
+    ARAInt32::try_from(count).unwrap_or(0)
 }
 
-unsafe extern "C" fn no_event(
-    _host: ARAContentAccessControllerHostRef,
-    _reader: ARAContentReaderHostRef,
-    _index: ARAInt32,
+unsafe extern "C" fn event(
+    host: ARAContentAccessControllerHostRef,
+    reader: ARAContentReaderHostRef,
+    index: ARAInt32,
 ) -> *const c_void {
-    std::ptr::null()
+    // SAFETY: as in `events`.
+    let Some(host) = (unsafe { host.cast::<Host>().as_ref() }) else { return std::ptr::null() };
+    let Ok(index) = usize::try_from(index) else { return std::ptr::null() };
+    // The entries change only inside an edit, so the pointer stays good while the plug-in reads.
+    match reader.addr() {
+        TEMPO_READER => host.tempo.lock().ok().and_then(|t| t.get(index).map(|e| std::ptr::from_ref(e).cast())),
+        BARS_READER => host.bars.lock().ok().and_then(|b| b.get(index).map(|e| std::ptr::from_ref(e).cast())),
+        _ => None,
+    }
+    .unwrap_or(std::ptr::null())
 }
 
 unsafe extern "C" fn no_reader_to_destroy(_host: ARAContentAccessControllerHostRef, _reader: ARAContentReaderHostRef) {}
@@ -1049,40 +1416,123 @@ static MODEL_UPDATE: ARAModelUpdateControllerInterface = ARAModelUpdateControlle
 };
 
 unsafe extern "C" fn analysis_progress(
-    _host: ARAModelUpdateControllerHostRef,
+    host: ARAModelUpdateControllerHostRef,
     _source: ARAAudioSourceHostRef,
-    _state: ARAAnalysisProgressState,
-    _value: f32,
+    state: ARAAnalysisProgressState,
+    value: f32,
 ) {
+    suhina_plugins::trace!("ara analysis progress state {state} value {value:.2}");
+    // An analysis done: its notes are there to read, whether or not the plug-in also says the
+    // content changed.
+    if state == kARAAnalysisProgressCompleted as ARAAnalysisProgressState {
+        // SAFETY: as in `modification_changed`.
+        notes_may_have_changed(unsafe { host.cast::<Host>().as_ref() }, 0);
+    }
 }
 
 unsafe extern "C" fn source_changed(
-    _host: ARAModelUpdateControllerHostRef,
+    host: ARAModelUpdateControllerHostRef,
     _source: ARAAudioSourceHostRef,
     _range: *const ARAContentTimeRange,
-    _flags: ARAContentUpdateFlags,
+    flags: ARAContentUpdateFlags,
 ) {
+    // An analysis done, say: the regions of the source have notes to read.
+    // SAFETY: as in `modification_changed`.
+    notes_may_have_changed(unsafe { host.cast::<Host>().as_ref() }, flags);
+}
+
+/// Marks the notes to be read again, unless the plug-in says they stayed as they were.
+fn notes_may_have_changed(host: Option<&Host>, flags: ARAContentUpdateFlags) {
+    suhina_plugins::trace!("ara content changed flags {flags:#x}");
+    if let Some(host) = host
+        && flags & kARAContentUpdateNoteScopeRemainsUnchanged as ARAContentUpdateFlags == 0
+    {
+        host.notes_changed.store(true, Ordering::Release);
+    }
+}
+
+/// The notes the plug-in has for `region`, which starts `start` seconds into the song: times
+/// from the region's start, read with a playback-region content reader as the API asks of a host
+/// that shows them. `Some` with none when it has no notes for it, `None` when they cannot be read.
+fn region_notes(dc: &Controller, region: ARAPlaybackRegionRef, start: f64) -> Option<(Vec<AraNote>, bool)> {
+    let i = &dc.interface;
+    let (Some(available), Some(create), Some(count), Some(data), Some(destroy)) = (
+        i.isPlaybackRegionContentAvailable,
+        i.createPlaybackRegionContentReader,
+        i.getContentReaderEventCount,
+        i.getContentReaderDataForEvent,
+        i.destroyContentReader,
+    ) else {
+        return None;
+    };
+    let notes_type = kARAContentTypeNotes as ARAContentType;
+    // SAFETY: a live controller, not being edited, for a region of this document.
+    if unsafe { available(dc.reference, region, notes_type) } == 0 {
+        return Some((Vec::new(), false));
+    }
+    // SAFETY: as above; a null range reads the whole region.
+    let reader = unsafe { create(dc.reference, region, notes_type, std::ptr::null()) };
+    if reader.is_null() {
+        return None;
+    }
+    // SAFETY: the reader just made, destroyed below.
+    let total = usize::try_from(unsafe { count(dc.reference, reader) }).unwrap_or(0);
+    let mut notes = Vec::with_capacity(total.min(MAX_ARA_NOTES));
+    for index in 0..total.min(MAX_ARA_NOTES) {
+        let Ok(index) = i32::try_from(index) else { break };
+        // SAFETY: an index below the count, for the live reader.
+        let event = unsafe { data(dc.reference, reader, index) }.cast::<ARAContentNote>();
+        if event.is_null() {
+            continue;
+        }
+        // SAFETY: the plug-in's note, valid until the next call; packed, so read unaligned.
+        let note = unsafe { event.read_unaligned() };
+        let Ok(pitch) = u8::try_from(note.pitchNumber) else { continue };
+        let (at, length, volume) = (note.startPosition - start, note.noteDuration, note.volume);
+        if pitch > 127 || !(at.is_finite() && length.is_finite() && length >= 0.0 && volume.is_finite()) {
+            continue;
+        }
+        notes.push(AraNote { start: at, length, pitch, volume: volume.clamp(0.0, 1.0) });
+    }
+    // SAFETY: the reader made above, not used again.
+    unsafe { destroy(dc.reference, reader) };
+    Some((notes, total > MAX_ARA_NOTES))
+}
+
+/// A digest of a region's notes, to send them only when they change.
+fn notes_digest(notes: &[AraNote], truncated: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    truncated.hash(&mut hasher);
+    for note in notes {
+        (note.start.to_bits(), note.length.to_bits(), note.pitch, note.volume.to_bits()).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 unsafe extern "C" fn modification_changed(
     host: ARAModelUpdateControllerHostRef,
     _modification: ARAAudioModificationHostRef,
     _range: *const ARAContentTimeRange,
-    _flags: ARAContentUpdateFlags,
+    flags: ARAContentUpdateFlags,
 ) {
     // An edit in the plug-in: the project has unsaved changes.
     // SAFETY: the host ref is the document's boxed `Host`, live while the plug-in calls back.
-    if let Some(host) = unsafe { host.cast::<Host>().as_ref() } {
+    let host = unsafe { host.cast::<Host>().as_ref() };
+    if let Some(host) = host {
         host.changed.store(true, Ordering::Release);
     }
+    notes_may_have_changed(host, flags);
 }
 
 unsafe extern "C" fn region_changed(
-    _host: ARAModelUpdateControllerHostRef,
+    host: ARAModelUpdateControllerHostRef,
     _region: ARAPlaybackRegionHostRef,
     _range: *const ARAContentTimeRange,
-    _flags: ARAContentUpdateFlags,
+    flags: ARAContentUpdateFlags,
 ) {
+    // SAFETY: as in `modification_changed`.
+    notes_may_have_changed(unsafe { host.cast::<Host>().as_ref() }, flags);
 }
 
 unsafe extern "C" fn document_changed(host: ARAModelUpdateControllerHostRef) {
@@ -1094,17 +1544,95 @@ unsafe extern "C" fn document_changed(host: ARAModelUpdateControllerHostRef) {
 
 static PLAYBACK: ARAPlaybackControllerInterface = ARAPlaybackControllerInterface {
     structSize: size_of::<ARAPlaybackControllerInterface>(),
-    requestStartPlayback: Some(no_playback_request),
-    requestStopPlayback: Some(no_playback_request),
-    requestSetPlaybackPosition: Some(no_position_request),
+    requestStartPlayback: Some(start_request),
+    requestStopPlayback: Some(stop_request),
+    requestSetPlaybackPosition: Some(position_request),
     requestSetCycleRange: Some(no_cycle_request),
     requestEnableCycle: Some(no_cycle_switch),
 };
 
-// The plug-in's own transport buttons do nothing yet: Suhina's transport plays the song.
-unsafe extern "C" fn no_playback_request(_host: ARAPlaybackControllerHostRef) {}
+/// What the plug-ins asked of the transport, waiting for the main loop to send it on (#717). A
+/// plug-in may ask from any thread, so it is behind a lock; a newer position replaces one not
+/// sent yet, and a burst is cut at [`MAX_PLAYBACK_REQUESTS`].
+static PLAYBACK_REQUESTS: Mutex<Vec<AraPlayback>> = Mutex::new(Vec::new());
+const MAX_PLAYBACK_REQUESTS: usize = 16;
 
-unsafe extern "C" fn no_position_request(_host: ARAPlaybackControllerHostRef, _at: ARATimePosition) {}
+fn ask(request: AraPlayback) {
+    suhina_plugins::trace!("ara plug-in asks transport {request:?}");
+    // Sent at once: the main loop would send it only after the plug-in's click is handled.
+    if crate::send_now(&suhina_plugins::protocol::Message::AraPlayback(request)) {
+        return;
+    }
+    let mut requests = PLAYBACK_REQUESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let AraPlayback::Position(_) = request {
+        requests.retain(|r| !matches!(r, AraPlayback::Position(_)));
+    }
+    if requests.len() < MAX_PLAYBACK_REQUESTS {
+        requests.push(request);
+    }
+}
+
+/// The transport requests the plug-ins made since the last call, oldest first.
+pub(crate) fn take_playback_requests() -> Vec<AraPlayback> {
+    std::mem::take(&mut *PLAYBACK_REQUESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+}
+
+// The plug-in's own transport buttons and a click in its timeline: the engine's transport plays,
+// stops or moves, as Suhina's own buttons and ruler do.
+unsafe extern "C" fn start_request(_host: ARAPlaybackControllerHostRef) {
+    ask(AraPlayback::Start);
+}
+
+unsafe extern "C" fn stop_request(_host: ARAPlaybackControllerHostRef) {
+    ask(AraPlayback::Stop);
+}
+
+unsafe extern "C" fn position_request(_host: ARAPlaybackControllerHostRef, at: ARATimePosition) {
+    if at.is_finite() && at >= 0.0 {
+        ask(AraPlayback::Position(at));
+        hold_position(at);
+    }
+}
+
+/// The position an ARA plug-in last asked for, in seconds (as `f64` bits; NaN for none), and
+/// until when it is shown, in milliseconds since [`epoch`].
+static HELD_POSITION: AtomicU64 = AtomicU64::new(f64::NAN.to_bits());
+static HELD_UNTIL: AtomicU64 = AtomicU64::new(0);
+/// How long a position asked for is shown at most, should the engine never get there.
+const HOLD_FOR: Duration = Duration::from_secs(1);
+
+fn epoch() -> Instant {
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+fn hold_position(seconds: f64) {
+    let until = epoch().elapsed().saturating_add(HOLD_FOR).as_millis();
+    HELD_UNTIL.store(u64::try_from(until).unwrap_or(u64::MAX), Ordering::Release);
+    HELD_POSITION.store(seconds.to_bits(), Ordering::Release);
+}
+
+/// The plug-in's place while the transport is stopped: the position it asked for until the
+/// engine reports it (or a second has passed), rather than the engine's last one. The request
+/// goes to the engine and back, which takes a block or more; the plug-in drew the position it
+/// was clicked at, then the old one from the next block, then the new one: its playhead
+/// flickered back. `engine` and the result are in samples. Real-time safe.
+pub(crate) fn shown_position(engine: i64, sample_rate: f64, playing: bool) -> i64 {
+    let held = f64::from_bits(HELD_POSITION.load(Ordering::Acquire));
+    if held.is_nan() {
+        return engine;
+    }
+    let now = u64::try_from(epoch().elapsed().as_millis()).unwrap_or(u64::MAX);
+    let wanted = (held * sample_rate).round() as i64;
+    // The engine is there (within a millisecond), playing, or it took too long: its own.
+    if playing || now > HELD_UNTIL.load(Ordering::Acquire) || (engine - wanted).abs() as f64 <= sample_rate / 1000.0 {
+        HELD_POSITION.store(f64::NAN.to_bits(), Ordering::Release);
+        return engine;
+    }
+    wanted
+}
+
+// The loop (cycle) requests wait for a later step: Suhina's loop region is set in the ruler.
 
 unsafe extern "C" fn no_cycle_request(
     _host: ARAPlaybackControllerHostRef,
@@ -1118,6 +1646,24 @@ unsafe extern "C" fn no_cycle_switch(_host: ARAPlaybackControllerHostRef, _enabl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_position_asked_for_is_shown_until_the_engine_is_there() {
+        let rate = 48_000.0;
+        // Nothing asked for: the engine's position.
+        assert_eq!(shown_position(1000, rate, false), 1000);
+        // Asked for 2 s while the engine is still at its old place: 2 s is shown.
+        hold_position(2.0);
+        assert_eq!(shown_position(1000, rate, false), 96_000);
+        assert_eq!(shown_position(1512, rate, false), 96_000);
+        // The engine gets there: its own from then on, the hold let go of.
+        assert_eq!(shown_position(96_010, rate, false), 96_010);
+        assert_eq!(shown_position(1000, rate, false), 1000);
+        // Playing, the engine's position always.
+        hold_position(3.0);
+        assert_eq!(shown_position(1000, rate, true), 1000);
+        assert_eq!(shown_position(1000, rate, false), 1000);
+    }
 
     #[test]
     fn reading_fills_each_channel_with_silence_outside() {

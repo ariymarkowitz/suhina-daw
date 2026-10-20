@@ -26,7 +26,7 @@ use suhina_ui::{App, NewProject, OpenAs, Status};
 
 const USAGE: &str = "\
 usage: suhina [<project.suhina> | <project.als> | --demo] [--renderer wgpu|glow] [--no-animations]
-              [--new-instance]
+              [--new-instance] [--trace <file>]
 
   <project.suhina>   a Suhina project to open, or a Live Set (.als) to import
   --demo             open a small built-in project
@@ -35,6 +35,8 @@ usage: suhina [<project.suhina> | <project.als> | --demo] [--renderer wgpu|glow]
   --no-animations    turn the interface's animations off this time
   --new-instance     start another window even though this build is running (for
                      development); it serves no agents
+  --trace <file>     append a diagnostic log to <file>, the plug-in hosts' too (for
+                     development, docs/debugging.md); SUHINA_TRACE=<file> does the same
 While this build of Suhina is running, starting it again opens the project in the running
 window as a tab instead. Agents reach the running window with suhina-cli mcp --attach once
 Options > Settings > General > Let agents work on open projects is on.
@@ -246,6 +248,11 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             }
             "--no-animations" => {
                 parsed.animations = false;
+                continue;
+            }
+            "--trace" => {
+                let file = it.next().ok_or("--trace takes the file to write the log to")?;
+                suhina_plugins::trace::start(std::path::Path::new(file));
                 continue;
             }
             "--renderer" => {
@@ -504,7 +511,12 @@ impl Window {
     /// Decodes a session's audio, starts it playing (stopped) and shows it.
     fn show_session(&mut self, mut session: Session, mut warnings: Vec<String>, how: OpenAs) {
         let folder = session.audio_folder().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        let (audio, audio_warnings) = suhina_media::load_project_audio(session.project(), &folder);
+        // Outside the project's folder only the person's own saved files and library folders
+        // are read (`docs/spec/missing-files.md` › Project file boundaries).
+        let source = session.source().map(Path::to_path_buf);
+        let trusted = self.app.projects_mut().trusted_audio_for(source.as_deref());
+        let (audio, audio_warnings) = suhina_media::load_project_audio_trusted(session.project(), &folder, &trusted);
+        session.set_trusted(trusted);
         warnings.extend(audio_warnings);
         let waveforms = suhina_ui::kit::waveform::from_pool(&audio);
         session.set_audio(audio);

@@ -3,7 +3,7 @@ description: How arrangement clips behave when moved (along a lane, to another t
 read_when: start marker, clip offset, loop start, moving clips, clip.move, overlapping clips, clip stacking, trimming, splitting, clip.split, split at playhead, cut a clip, consolidate, clip.consolidate, join clips, render a range, bounce, allow sample stacking, allow MIDI stacking, fades, fade-in, fade-out, clip.setFades, fade handles, fade shape, fade curve, curve handle, inShape, outShape, inCurve, outCurve, linear, equal_power, fast, slow, s_curve, FadeShape, FadeCurve, play position, play start marker, ruler click, transport.setPosition, stop returns, playhead, grid, grid lines, snapping, snap to grid, launcher.setQuantization, quantisation, Alt, off the grid, markers, locators, marker row, marker.add, marker.move, marker.rename, marker.delete, marker.jump, project.markers, fold, folded group, unfold, group triangle, group lane, volume, pan, mute, solo, mixer controls, knob, the wheel over a value, deselect, click on empty space, clip note preview, short lane
 type: spec
 status: draft
-last_verified: 2026-10-19
+last_verified: 2026-10-20
 covers:
   - crates/session/src/commands.rs
   - crates/ui/src/arrangement/timeline.rs
@@ -86,13 +86,20 @@ lines show beats and bars by the zoom alone.
 ## Selecting clips
 
 A click on a clip selects it alone; **Ctrl** (Cmd) adds a clip to the selection or takes it out,
-and **Shift** takes the run of clips between the clip clicked last and this one, in the order the
-lanes draw them (top lane first, clips in their lane from left to right). Ctrl+A selects every clip
+and **Shift** takes the rectangle from the clip clicked last to this one: the lanes between them,
+as the view draws them, by the time from the earlier start to the later end, every clip that
+touches it (#694). Ctrl+A selects every clip
 in the arrangement. Pressing a clip that is part of the selection keeps the selection, so a drag can
 start there; pressing one that is not selects that clip alone. Dragging a clip of the selection
-moves all of it by the same beats, at once (`clip.moveMany {clips, beats, to_track?, stack?}`, one
-undo step, so no moved clip replaces another on the way); to another track only when the whole
-selection is on one track.
+moves all of it by the same beats, at once (`clip.moveMany {clips, beats, to_track?, tracks_by?,
+to_new_track?, stack?}`, one undo step, so no moved clip replaces another on the way). Dragged up
+or down, a selection on one track goes to the track under the pointer, and a selection on several
+tracks moves each clip by as many tracks from its own (`tracks_by`), refused where a clip would
+land on a track that cannot hold it. A clip an ARA plug-in (Melodyne) edits, going to another
+track, asks first: **Keep edits** takes its edits along and puts the plug-in on that track when it
+has none, **Copy as new** starts it there without them (`ara_edits`, ADR 0028). Dropped on the empty space under the tracks, outlined there
+as **New track** while carried, the clips (moved or copied) go to a new track of their kind made
+after the last (`to_new_track`), in the same undo step.
 
 A click on an empty spot of a lane, or on the empty space under the tracks, clears the clip
 selection (a double-click there still makes a clip, › Making an empty clip). The track
@@ -105,6 +112,13 @@ audio clip its waveform the same way ([components](../design/components.md) › 
 
 In the track headers the same keys work on tracks: a click selects one, Ctrl adds or takes one out,
 Shift takes the run of headers between the last one clicked and this one. Ctrl+G groups those.
+After a header click Delete removes the selected tracks, not a clip (a clip on the track stays
+selected for the detail area until another is picked); a click on a clip or a lane gives Delete
+back to the clips. In the Session view a header click does the same for its track (#690). The
+header shows its track's colour strongly (60 % over the panel); a selected track's is brighter
+and more saturated, with an outline in it. A track keeps the colour it shows when tracks are
+added, removed or moved: one without a colour of its own gets its place's palette colour stored
+then, in the same undo step, and a new track gets its place's colour stored as it is made.
 
 ## Clip colours
 
@@ -117,10 +131,22 @@ clips* (`clip.setColor {track, color: "none"}`) hands every clip of the track ba
 track's colour; *Rename all clips* (`track.renameClips`) names them after the track. The track
 headers are tinted with their track's colour, deeper while selected.
 
-A lane and its clips are split in two: a drag from the upper half paints a
-time selection (a text cursor) over the tracks it crosses, clips or not; from the lower half it
-moves a clip (a hand cursor) or, on an empty spot, draws a rectangle that picks whole clips and
-paints no time. A clip on a lane under 36 px moves from anywhere. With *Ctrl+drag selects time
+A clip on a lane at least 36 px tall has a name bar along its top. By default (Settings ›
+Arrangement › *Moving a clip*: **Name bar**, `clip_drag = name_bar`) a drag from the name bar
+moves the clip (a hand cursor) and a drag from its body below paints a time selection (a text
+cursor) over the tracks it crosses. **Mirror** (`clip_drag = halves`) splits the clip in two
+instead: its upper half paints time and its lower half moves it. An empty spot of a lane is split
+in two either way: its upper half paints time, its lower half draws a rectangle that picks whole
+clips and paints no time. A clip on a lane under 36 px moves from its lower half.
+
+A click on a clip's name bar picks the whole clip. A click in its body picks it too and sets the
+play start where it was clicked, on the grid (Alt: free), as a click on an empty spot of a lane
+does; a thin line (the insert marker) shows it in that lane while the play start is there, also
+while the transport plays and the playhead moves on. A clip picked this way is not lit but
+outlined, so the clip the detail area shows and Delete takes is plain to see; a clip picked whole
+is lit. The grid's lines show through a clip's body, faintly in its own colour,
+the bars a little stronger (Settings › Arrangement › *Grid in clips*, `clip_grid = on | off`,
+on by default). With *Ctrl+drag selects time
 over clips* on, a plain drag moves clips and Ctrl paints time.
 Ctrl (Cmd) held as the drag begins copies the clips instead (Shift when Ctrl selects time):
 they stay, and copies with contents of their own go where they are dropped (`clip.moveMany`
@@ -129,8 +155,19 @@ copies show where they will land. Dragging a selection draws every clip of it wh
 the clips with a line at each edge, and as a bar along the ruler.
 
 Stacked clips keep their sub-rows: a clip of a stack deleted or moved away leaves the others
-where they were, an empty row between them staying until the rows above it empty too.
+where they were, an empty row between them staying until the rows above it empty too. A new clip
+inside the span a clip had on the same track (a split's parts) takes that clip's row (#703).
 
+**Waveform zoom.** A thin slider at the outer edge of the header column's top corner, by the
+ruler, draws every audio clip's waveform in the Arrangement larger, ×1 … ×16: one zoom for all
+tracks, the display only, never the sound or a clip's gain. Drag it up or down (thirty points
+double it), scroll over it a step at a time (×1.25), double-click it for ×1; Ctrl+Alt+Up and
+Ctrl+Alt+Down step it too. It is kept as a setting (Settings › Arrangement › *Waveform zoom*,
+`waveform_zoom`, the factor).
+
+The **Hide returns** button in the header column's top corner, by the ruler, takes the return
+tracks' rows out of the view and **Show returns** brings them back; it is kept as a setting
+(Settings › Arrangement › Return tracks, `arrangement_returns`). Main's row stays.
 Return tracks, along the bottom, have a track's header: volume and pan, the on switch and solo,
 the menu, automation lanes under them (shown with the header's button), a click to select them
 (the detail area shows their devices) and a top edge that sets their height (tall enough for
@@ -141,19 +178,27 @@ while dragging, one undo step), and its top edge sets its height the same way.
 ## Clip edges
 
 A clip's left and right edges are handles (below the fade handles of an audio clip). Dragging one
-moves that edge on the grid (Shift: free) and the clip is drawn at its new length as it goes; it
-never gets shorter than a grid step (a 16th of a beat with Shift or no grid). Let go, it is
+moves that edge on the grid (Alt: free, as for every other drag) and the clip is drawn at its new
+length as it goes; it never gets shorter than a grid step (a 16th of a beat with Alt or no grid).
+Let go, it is
 `clip.trim {track, index, start?, end?}`:
 
 - The left edge moves the content with it, so what plays stays where it was; it goes no earlier
   than the content's start.
 - A clip that does not loop ends at most where its audio ends; a MIDI clip can be made as long as
   wanted, its content growing with it.
-- A looping clip goes on as far as its edge is dragged, its loop repeating.
-- The handle at a clip's lower right corner (the loop handle) turns the loop on over what
-  the clip plays now and makes the clip longer (`clip.trim` with `loop: true`).
+- A looping clip goes on as far as its edge is dragged, its loop repeating: its right edge into
+  later passes, its left edge back into earlier ones (to the song's start). Its repeats are
+  drawn as the clip itself, in its colour, one colour all along; where each pass starts it has a
+  notch cut into its top and bottom edges and a dashed line between them, so the repeats read as
+  blocks even in an empty clip (#700). A MIDI clip's notes are drawn in every pass.
+- The right edge is one handle over the clip's full height; there is no separate loop handle
+  at the corner (#700). The loop is turned on in the clip column (› Clip column in
+  [ui-clip-editor.md](ui-clip-editor.md)) or with `clip.setLoop`, and a looping clip's edge then
+  draws out its repeats.
 
-With Alt held (Settings › Arrangement › *Alt-drag on an edge stretches audio*, on by default) an
+With Ctrl and Alt held (Settings › Arrangement › *Ctrl+Alt-drag on an edge stretches audio*, on by
+default) an
 audio clip's edge stretches its audio to the new length, its pitch kept: `clip.stretch {track, index, start?, end?}` scales the content's warp markers (an unwarped
 clip is warped first) and gives the clip a content of its own when another clip plays the same.
 
@@ -167,10 +212,10 @@ not on whole clips. It is made by:
 
 - a drag from an empty spot of a lane (the rectangle's tracks and beats);
 - a drag on the ruler: that time over every track;
-- over a clip, as Settings › Arrangement › *Ctrl+drag selects time over clips* says: off (the
-  default) a drag from the upper half of a clip on a lane at least 36 px tall selects time and
-  the clip moves from its lower half; on, a drag with Ctrl held selects time anywhere and a plain
-  drag moves the clip.
+- over a clip, as Settings › Arrangement › *Moving a clip* and *Ctrl+drag selects time over
+  clips* say: off (the default) a drag from the clip's body selects time and the clip moves by
+  its name bar (with **Mirror**, from its upper and lower half); on, a drag with Ctrl held
+  selects time anywhere and a plain drag moves the clip.
 
 Its edges are on the grid (Alt: free). A click on a clip, or moving one, ends it, so clicked
 clips act whole again (Ctrl+A, Shift and Ctrl clicks still pick whole clips).
@@ -185,7 +230,7 @@ With a time selection:
 | Ctrl+V | `clip.paste {start}` | A copy from several tracks goes back to its own tracks, from the play start marker. |
 | Ctrl+E | `range.split` | Splits the clips at both edges: the span becomes clips of its own. |
 | Ctrl+D | `range.duplicate` | Puts a copy right after the span on the same tracks; the selection moves onto the copy. |
-| Ctrl+J | `clip.consolidate` | Consolidates the span on each of its tracks. |
+| Ctrl+J | `clip.consolidate` | Consolidates the span on each of its tracks; a span painted in one row of a stack, that row's clips only. |
 
 Each takes `{tracks, start, end}` and is one undo step. Closing the gap (deleting the time
 itself) is not built yet.
@@ -302,9 +347,10 @@ at that zoom (Alt held while right-clicking: exactly there).
 one new clip there. It is one undo step and returns the clip's `index`, and for audio the `file`
 written.
 
-- **What is in the range:** the enabled clips on the track's lane that overlap it. A clip
-  reaching in from before or past the range counts with the part inside it; clips outside are
-  unchanged. As with a split, a note that starts before the range is left out.
+- **What is in the range:** the enabled clips on the track's lane that overlap it, or with
+  `clips` (clip ids) only those: a time selection painted in one row of a stack consolidates that
+  row's clips and leaves the other rows as they are. A clip reaching in from before or past the
+  range counts with the part inside it; clips outside are unchanged. As with a split, a note that starts before the range is left out.
 - **MIDI clips** are joined: the new clip's content holds every note the clips play inside the
   range, where it sounds (after start markers, loops and clip ends are applied), each cut where
   its clip ends or the range ends. Gaps between clips are silent.
@@ -488,7 +534,8 @@ arrangement clips; in the Arrangement view its lane dims, and the ruler shows a
 
 **Starting inside the arrangement.** From the marker's frame on, the arrangement plays exactly as
 it would at that frame of a render from the beginning, with two exceptions: a note that started
-before the marker is not played (notes are not picked up mid-way), and a time-stretched audio clip
+before the marker and still sounds there starts at the marker (it is chased), from its attack, as
+an instrument cannot begin a sound part-way, and ends where it would have; and a time-stretched audio clip
 starts its stretcher at that point, without the audio before it, so it can differ very slightly
 for its first moments. Unwarped and re-pitched audio clips that span the marker play from where
 they are, sample for sample. The metronome counts from the marker: on a beat it clicks at once,
@@ -511,7 +558,7 @@ pass the setting **Stop** (Settings › General): **Marker** (default) or **Stay
 **Playing from the selected clip.** A clip's start is often where one wants to listen from;
 moving the marker there by hand first is a step too many. **Suhina:** the play/stop key and the
 Play button pass the setting **Play from** (Settings › General): **Selected clip** (default) or
-**Marker**, saved as `play_start = clip | marker` (the older `play_from` key, which every file got as `marker` while that was the default, is read and ignored). Whatever way clips are picked while stopped (a click, a rectangle, Ctrl+A), the play start marker also moves to the first of them.
+**Marker**, saved as `play_start = clip | marker` (the older `play_from` key, which every file got as `marker` while that was the default, is read and ignored). Whatever way clips are picked whole while stopped (a click on a name bar, a rectangle, Ctrl+A, a paste), the play start marker also moves to the first of them. A click in a clip's body picks it but sets the play start where it was clicked, and play starts there, not from the clip's start, until the clip is picked whole again.
 A loop the clip starts before still catches playback when it reaches the loop's end. With **Selected clip** and a clip
 selected in the Arrangement view, they run `transport.play {from: "clip"}` on that clip; with no
 clip selected, or while the Session view is shown (where the selection is not seen), they play
@@ -599,11 +646,13 @@ under `transport.loop` ([format](suhina-format.md)); a Live Set's arrangement lo
 
 **In the Arrangement view** the loop brace sits in a row of its own between the ruler and the
 marker row: a bar from the loop start to the loop end, bright while looping is on and dim while
-it is off. Dragging along an empty part of the row draws a new region on the grid a ruler click
+it is off. While looping is on, a line in the accent colour runs down every lane at the loop start
+and at the loop end, so the region reads in the lanes too. Dragging along an empty part of the row draws a new region on the grid a ruler click
 uses (Alt held: free) and turns looping on. Dragging within 4 px of an end of the brace moves that
 end; dragging its middle moves the whole region, keeping its length. A click on the brace, the key
 **Ctrl+L** (`transport.setLoopEnabled`, in the keymap) and a right-click on the row (**Turn loop
-on** or **Turn loop off**) turn looping on or off.
+on** or **Turn loop off**) turn looping on or off. With a time selection or clips selected, Ctrl+L
+loops their span; pressed again while the loop is on over that very span, it turns looping off.
 
 **Limits.** A time-stretched audio clip in the region is silent for a moment after each wrap in
 real-time playback, until the stretch worker has caught up with the loop start, as after any jump
@@ -654,8 +703,14 @@ output; each group's volume, mute and devices apply on the way ([ADR 0004](../de
 › 10), and solo follows the nesting: a soloed track is heard through every group above it, a
 soloed group plays everything inside it at any depth.
 
-A header shows its nesting by stepping in 8 px per level. A group that holds tracks has the fold
-triangle at the start of its header (Folded groups): the lanes of every track inside it, at any
+A header shows its nesting by stepping in 16 px per level; every header keeps the fold triangle's
+room, so a group's tracks start clearly to the right of their group, and each level of the indent
+is filled with that group's colour, so a group and its tracks read as one block. A group's menu
+has **Assign track color to all tracks and clips**, which gives every track inside it, at any depth,
+the colour the group shows, and turns the clips of the group and of those tracks back to their
+track's colour (`track.colorGroup` with `clips`, one undo step). A looping clip's notches are a
+tenth of a pass wide, from a point and a half to four points, so a zoomed-out clip keeps its body. A group that holds tracks has
+the fold triangle at the start of its header (Folded groups): the lanes of every track inside it, at any
 depth, are hidden while it is folded, and the Session view hides their columns; both views fold
 the same groups, and folding is part of the view, not an edit, so it does not undo. A dragged
 header joins the group of the lane it is let go over: above that lane, or below it from its lower
@@ -685,6 +740,13 @@ more tracks by id or name:
 A set or adjust that changes a parameter with an automation lane turns that lane off for each
 track it changes, and the answer says `"automation": "off"` ([automation](automation.md)).
 
+**A track's header** in the Arrangement view: a lane tall enough for two rows has, on the first,
+the track-on toggle (its number), solo, cue and arm, then the volume bar and the pan field, the
+level controls together; on the second, the automation lanes button under the toggle, the name,
+and the send knobs at its end, as many as leave the name its room. A shorter lane has one row:
+the buttons, the name and the automation button at its end. Taller still, the routing and the
+input lines follow below.
+
 In the Arrangement view a header's volume and pan fields and its track-on and solo buttons act on
 the whole selection while the track they belong to is part of one of two or more tracks: dragging
 one field moves every selected track's by the same amount (the others follow it as it is dragged,
@@ -693,9 +755,11 @@ off or on, and the whole list is one undo step. With one track selected, or with
 the selection, they act on that track alone, and it is heard while it is dragged: each frame sets
 the value with `continue`, so the drag is one undo step.
 
-**The wheel over a field** changes its value instead of scrolling the view: one tick of a wheel is
-one step (1 dB, or 0.02 of pan), Shift makes it ten times finer, and the view stays where it is.
-The same holds for a clip's gain field and for the Session mixer's values.
+**Alt and the wheel over a field** change its value instead of scrolling the view: one tick of a
+wheel is one step (1 dB, or 0.02 of pan), Shift as well makes it ten times finer, and the view
+stays where it is. The wheel alone scrolls the view over a field too, so scrolling down the track
+headers never moves a fader. The same holds for a clip's gain field, a send's knob, the main
+volume and the Session mixer's values; a strip's device list scrolls with the wheel itself.
 
 **Mixer controls** (Settings › Session and mixer) chooses how a track's volume and pan are
 drawn: **Field** (default), the bar and the centre bar this view has always had, or **Knob**, a
@@ -726,17 +790,19 @@ default.
 ## Showing stacked clips
 
 Where clips on a lane overlap, the lane shows them side by side in sub-rows (each clip in the
-first sub-row free at its start), so every clip stays visible and can be grabbed. A lane without
-overlaps shows one row.
+first sub-row free at its start), so every clip stays visible and can be grabbed. The rows are
+only where clips overlap: the clips that overlap one another, directly or through others, share
+the lane in as many rows as they use, and a clip that overlaps none fills the lane (#697). A thin
+line between the rows runs along the whole lane, under the clips, so each row reads as one in the
+empty stretches too.
 
 ## Folded groups
 
 A group track's header starts with a small triangle; clicking it **folds** the group. The lanes of
-the tracks inside it go away, and the group's own lane stands in for one of them, drawing that
-track's clips, waveform and colour. Which one: the track the user is working on — the header they
-clicked last, or the track of the selected clip — while it is one of the group's own, else the
-first track inside it. Clicking the triangle again opens the group. A group holding no tracks
-shows no triangle.
+the tracks inside it go away, and the group's own lane shows what is in them: a thin row for each
+track inside it that has clips, every clip a block in its colour where it plays, so the folded lane
+tells how much is in the group and where. Clicking the triangle again opens the group. A group
+holding no tracks shows no triangle.
 
 A group arrives folded when a Stems file makes one: dropping a `.stem.mp4` on a lane, a slot or
 the empty area puts its stems and their muted master in a new group, and that group opens folded,
@@ -745,11 +811,10 @@ so the whole file reads as one lane until its triangle is clicked
 
 Folding is view state, not part of the project: nothing in a saved project keeps it, so a project
 that is saved and opened shows every group open, and no command folds or opens one. A folded
-group's header stays its own — name, colour, volume, pan, mute, solo and output are the group's —
-and only the clips come from the track its row stands in for. A clip on that row is that track's
-clip: clicking it selects it, dragging it moves it, and its menu acts on it, exactly as if the lane
-were drawn. The tracks inside a folded group cannot be reached with the mouse, since none of them
-is drawn.
+group's header stays its own — name, colour, volume, pan, mute, solo and output are the group's.
+The blocks on a folded lane are a view of the clips, not the clips: to select, move or edit one,
+open the group. The tracks inside a folded group cannot be reached with the mouse, since none of
+them is drawn.
 
 ## Open
 
