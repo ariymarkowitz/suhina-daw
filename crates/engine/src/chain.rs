@@ -475,13 +475,17 @@ impl Chain {
     }
 
     /// Clears the buffer for a block of `frames` frames, whose plug-ins must answer by
-    /// `deadline` (`None` offline). Events queued since the last block stay; they are at frame
-    /// 0.
+    /// `deadline` (`None` offline). Events queued since the last block stay, at frame 0: a jump
+    /// or a stop releases notes before the block begins, while `done` still counts the previous
+    /// block, and a release left at that frame would come after the notes the new block starts.
     pub(crate) fn begin(&mut self, frames: usize, deadline: Option<Instant>) {
         if let Some(buffer) = self.buffer.get_mut(..frames.min(MAX_BLOCK) * 2) {
             buffer.fill(0.0);
         }
         self.done = 0;
+        for (frame, _) in &mut self.pending {
+            *frame = 0;
+        }
         self.stage = 0;
         self.waiting = None;
         self.sent_at = None;
@@ -1734,5 +1738,26 @@ mod sampler_regressions {
             run_device(&mut sampler, 0, &mut buffer, 0, 1024, &[], &DeviceLanes::none(), &context, 48_000.0);
         }
         assert!(buffer.iter().all(|s| *s == 0.), "one-beat slice at 120 BPM ends after half a second");
+    }
+}
+
+#[cfg(test)]
+mod jump_tests {
+    use super::*;
+
+    /// A jump releases the notes between two blocks, when `done` is still where the previous
+    /// block ended; the notes it starts come in the next block. The releases must come first.
+    #[test]
+    fn a_release_before_a_block_comes_before_the_notes_the_block_starts() {
+        let mut chain = Chain::passthrough(TrackId(0), 0);
+        chain.instrument = true;
+        chain.note_on(0, 0, 60, 1.0, 1_000_000);
+        chain.pending.clear();
+        chain.done = 1023;
+        chain.release_all(0);
+        chain.begin(1024, None);
+        chain.note_on(0, 0, 60, 1.0, 1_000_000);
+        assert!(chain.pending.iter().all(|&(frame, _)| frame == 0), "{:?}", chain.pending);
+        assert!(matches!(chain.pending.last(), Some((_, NoteEvent::On { key: 60, .. }))));
     }
 }
