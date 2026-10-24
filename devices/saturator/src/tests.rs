@@ -275,6 +275,70 @@ fn silence_stays_silent() {
     assert!(signal.iter().all(|v| *v == 0.0));
 }
 
+/// The same input processed in one call and in calls of mixed sizes comes out the same: the
+/// device keeps all its state across `process` calls, whatever size they are.
+#[test]
+fn block_sizes_do_not_change_the_sound() {
+    let settings = [(param::DRIVE, 12.0), (param::COLOR_LOW, 0.5), (param::COLOR_HIGH, 0.5), (param::TYPE, 4.0)];
+    let input = test_signal(96_000);
+    let mut whole = input.clone();
+    saturator(&settings).process(&ProcessContext::default(), &mut whole);
+    let mut chunked = input.clone();
+    let mut device = saturator(&settings);
+    let sizes = [2usize, 64, 258, 1_024, 6, 512, 1_332, 2_048, 4];
+    let (mut at, mut i) = (0, 0);
+    while at < chunked.len() {
+        let size = sizes[i % sizes.len()].min(chunked.len() - at) & !1;
+        let size = size.max(2);
+        device.process(&ProcessContext::default(), &mut chunked[at..at + size]);
+        at += size;
+        i += 1;
+    }
+    assert_eq!(whole, chunked);
+}
+
+/// Two curve changes back to back, the second while the first's fade still runs: the first
+/// morph completes and the second fades from it — no step harder than the sounds themselves.
+#[test]
+fn two_quick_curve_changes_morph_instead_of_jumping() {
+    // The largest step of a settled curve's sound: what the morph may not exceed.
+    let settled_step = |shape: f64| {
+        let mut s = saturator(&[(param::TYPE, shape)]);
+        let mut signal = sine(100.0, 0.25, 48_000, SR);
+        s.process(&ProcessContext::default(), &mut signal);
+        largest_step(&signal.as_chunks::<2>().0[4_800..])
+    };
+    for (first, second) in [(4.0, 6.0), (5.0, 6.0), (6.0, 4.0), (1.0, 7.0)] {
+        let mut s = saturator(&[]);
+        let mut signal = sine(100.0, 0.25, 48_000, SR);
+        s.process(&ProcessContext::default(), &mut signal[..2 * 24_000]);
+        s.set_param(param::TYPE, first);
+        s.process(&ProcessContext::default(), &mut signal[2 * 24_000..2 * 24_064]);
+        s.set_param(param::TYPE, second);
+        s.process(&ProcessContext::default(), &mut signal[2 * 24_064..]);
+        let frames = signal.as_chunks::<2>().0;
+        let steady = largest_step(&frames[12_000..24_000]);
+        let allowed = steady.max(settled_step(first)).max(settled_step(second));
+        let moving = largest_step(&frames[24_000..26_000]);
+        assert!(moving <= 1.05 * allowed + 1e-4, "{first} then {second}: {moving} against {allowed}");
+    }
+}
+
+/// The post clip switch on a signal that goes past the ceiling: it fades like a curve change.
+#[test]
+fn the_post_clip_switch_fades() {
+    let steep = [(param::TYPE, 7.0), (param::SHAPER_LINEAR, 1.0), (param::DRIVE, 6.0)];
+    let mut s = saturator(&steep);
+    let mut signal = sine(100.0, 1.0, 48_000, SR);
+    s.process(&ProcessContext::default(), &mut signal[..2 * 24_000]);
+    s.set_param(param::POST_CLIP, 2.0);
+    s.process(&ProcessContext::default(), &mut signal[2 * 24_000..]);
+    let frames = signal.as_chunks::<2>().0;
+    let steady = largest_step(&frames[12_000..24_000]).max(largest_step(&frames[36_000..]));
+    let moving = largest_step(&frames[24_000..25_000]);
+    assert!(moving <= 1.05 * steady + 1e-4, "{moving} against {steady}");
+}
+
 /// One instance at its defaults, then with the heaviest curve and Color on, 60 s at 48 kHz each:
 /// `cargo test --release -p suhina-device-saturator cost -- --ignored --nocapture`.
 #[test]

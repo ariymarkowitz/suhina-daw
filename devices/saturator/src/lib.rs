@@ -6,9 +6,11 @@
 //! Per side: an optional DC filter, then at twice the sample rate the Color filters (a low shelf
 //! and a bell), the drive, the curve, the Color filters' exact inverse and the post clip; then
 //! the output level and the dry/wet mix. Because the inverse filters undo the Color filters,
-//! Color changes only how hard each band is driven, never the tone of what stays clean. The dry
-//! signal is delayed to line up with the oversampled path: the device always reports
-//! [`LATENCY`] frames, and with the mix at 0 the output is the input delayed exactly.
+//! Color changes only how hard each band is driven, never the tone of what stays clean. A change
+//! of curve or post clip fades over 20 ms from the sound that is playing; one that arrives while
+//! a fade still runs waits for it, so clicking quickly through the list morphs in turn instead of
+//! jumping. The dry signal is delayed to line up with the oversampled path: the device always
+//! reports [`LATENCY`] frames, and with the mix at 0 the output is the input delayed exactly.
 
 use suhina_device_api::{
     DEFAULT_SAMPLE_RATE, Device, DeviceError, DeviceInfo, ParamBank, ParamInfo, ProcessContext, Role, Scale, Unit,
@@ -229,7 +231,10 @@ struct Frame {
     fade: f64,
     shaper: Waveshaper,
     color: bool,
-    post_clip: usize,
+    /// The curve it fades from and the curve now.
+    shapes: (Shape, Shape),
+    /// The post clip of the stream it fades from and the one it fades to.
+    posts: (usize, usize),
 }
 
 pub struct Saturator {
@@ -242,6 +247,11 @@ pub struct Saturator {
     /// The curve now, and the one it fades from.
     shape: Shape,
     previous: Shape,
+    /// The post clip of the stream it fades from, and the one it fades to.
+    post: usize,
+    post_next: usize,
+    /// A curve and post clip waiting for the running fade to finish.
+    pending: Option<(Shape, usize)>,
     /// Whether the Color filters are doing anything (they pass the signal unchanged at 0).
     color_active: bool,
     retune_in: u32,
@@ -269,6 +279,9 @@ impl Saturator {
             moving: true,
             shape: Shape::AnalogClip,
             previous: Shape::AnalogClip,
+            post: 0,
+            post_next: 0,
+            pending: None,
             color_active: false,
             retune_in: 0,
             gliding: false,
@@ -354,12 +367,47 @@ impl Saturator {
         self.moving = false;
         self.shape = Shape::from_index(self.value(param::TYPE));
         self.previous = self.shape;
+        let post = self.value(param::POST_CLIP).round() as usize;
+        self.post = post;
+        self.post_next = post;
+        self.pending = None;
         self.paths = [Path::new(sr); 2];
         self.tune();
         self.retune_in = 0;
         self.gliding = false;
         self.dry = [[0.0; DELAY]; 2];
         self.dry_at = 0;
+    }
+
+    /// A change of the curve or the post clip. When the fade is settled it applies at once and
+    /// the crossfade runs from the sound that is playing; while a fade runs, it waits for it, so
+    /// two quick changes morph in turn instead of jumping.
+    fn queue_wet_change(&mut self, shape: Option<Shape>, post: Option<usize>) {
+        let settled = self.smoothers.get(smoothed::FADE).is_some_and(Smoother::is_settled);
+        if settled {
+            let mut changed = false;
+            if let Some(new_shape) = shape.filter(|new_shape| *new_shape != self.shape) {
+                self.previous = self.shape;
+                self.shape = new_shape;
+                changed = true;
+            }
+            if let Some(new_post) = post.filter(|new_post| *new_post != self.post_next) {
+                self.post = self.post_next;
+                self.post_next = new_post;
+                changed = true;
+            }
+            if changed {
+                if let Some(fade) = self.smoothers.get_mut(smoothed::FADE) {
+                    fade.reset(0.0);
+                    // reset settles at the value it is given; arm the ramp to the settled fade.
+                    fade.set_target(1.0);
+                }
+                self.moving = true;
+            }
+        } else {
+            let (base_shape, base_post) = self.pending.unwrap_or((self.shape, self.post_next));
+            self.pending = Some((shape.unwrap_or(base_shape), post.unwrap_or(base_post)));
+        }
     }
 
     fn color_moving(&self) -> bool {
@@ -371,19 +419,26 @@ impl Saturator {
 
 /// One sample of one side through the oversampled stage.
 #[inline]
-fn shape_sample(path: &mut Path, x: f64, f: &Frame, shapes: (Shape, Shape)) -> f64 {
+fn shape_sample(path: &mut Path, x: f64, f: &Frame) -> f64 {
     let Path { oversampler, shelf, bell, unbell, unshelf, .. } = path;
     oversampler.process(x, |v| {
         let v = if f.color { bell.process(shelf.process(v)) } else { v };
         let u = f.drive * v;
-        let (before, now) = shapes;
+        let (before, now) = f.shapes;
         let mut y = now.apply(u, f.knee, &f.shaper);
         if f.fade < 1.0 {
             let old = before.apply(u, f.knee, &f.shaper);
             y = old + (y - old) * f.fade;
         }
         let y = if f.color { unshelf.process(unbell.process(y)) } else { y };
-        post_clip(f.post_clip, y)
+        let (from, to) = f.posts;
+        if from == to {
+            post_clip(from, y)
+        } else {
+            let a = post_clip(from, y);
+            let b = post_clip(to, y);
+            a + (b - a) * f.fade
+        }
     })
 }
 
@@ -408,21 +463,19 @@ impl Device for Saturator {
         }
         if index == param::TYPE {
             let shape = Shape::from_index(self.value(param::TYPE));
-            if shape != self.shape {
-                self.previous = self.shape;
-                self.shape = shape;
-                if let Some(fade) = self.smoothers.get_mut(smoothed::FADE) {
-                    fade.reset(0.0);
-                }
+            self.queue_wet_change(Some(shape), None);
+        } else if index == param::POST_CLIP {
+            let post = self.value(param::POST_CLIP).round() as usize;
+            self.queue_wet_change(None, Some(post));
+        } else {
+            let targets = self.targets();
+            for (smoother, target) in self.smoothers.iter_mut().zip(targets) {
+                smoother.set_target(target);
             }
-        }
-        let targets = self.targets();
-        for (smoother, target) in self.smoothers.iter_mut().zip(targets) {
-            smoother.set_target(target);
-        }
-        self.moving = true;
-        if self.color_moving() {
-            self.color_active = true;
+            self.moving = true;
+            if self.color_moving() {
+                self.color_active = true;
+            }
         }
     }
 
@@ -435,13 +488,31 @@ impl Device for Saturator {
     }
 
     fn process(&mut self, _context: &ProcessContext, buffer: &mut [f32]) {
-        let post = self.value(param::POST_CLIP).round() as usize;
         for frame in buffer.as_chunks_mut::<2>().0 {
             if self.moving {
                 for (value, smoother) in self.values.iter_mut().zip(&mut self.smoothers) {
                     *value = f64::from(smoother.next_value());
                 }
                 self.moving = self.smoothers.iter().any(|s| !s.is_settled());
+            }
+            // A queued curve or post clip applies once the running fade has finished; with
+            // nothing waiting, the post clip pair collapses to the one in use.
+            if self.smoothers.get(smoothed::FADE).is_some_and(Smoother::is_settled) {
+                if let Some((shape, post)) = self.pending.take() {
+                    self.previous = self.shape;
+                    self.shape = shape;
+                    self.post = self.post_next;
+                    self.post_next = post;
+                    if let Some(fade) = self.smoothers.get_mut(smoothed::FADE) {
+                        fade.reset(0.0);
+                        self.values[smoothed::FADE] = 0.0;
+                        // reset settles at the value it is given; arm the ramp to the settled fade.
+                        fade.set_target(1.0);
+                    }
+                    self.moving = true;
+                } else if self.post != self.post_next {
+                    self.post = self.post_next;
+                }
             }
             let values = self.values;
             let get = |i: usize| values.get(i).copied().unwrap_or(0.0);
@@ -472,10 +543,10 @@ impl Device for Saturator {
                     period: at(5),
                 },
                 color: self.color_active,
-                post_clip: post,
+                shapes: (self.previous, self.shape),
+                posts: (self.post, self.post_next),
             };
             let (dc, output, mix) = (get(smoothed::DC), get(smoothed::OUTPUT), get(smoothed::MIX));
-            let shapes = (self.previous, self.shape);
             for (side, sample) in frame.iter_mut().enumerate() {
                 let x = f64::from(*sample);
                 let mut dry = 0.0;
@@ -486,7 +557,7 @@ impl Device for Saturator {
                 let wet = self.paths.get_mut(side).map_or(0.0, |path| {
                     let filtered = path.dc.process(x);
                     let input = x + (filtered - x) * dc;
-                    shape_sample(path, input, &f, shapes) * output
+                    shape_sample(path, input, &f) * output
                 });
                 let mixed = if mix == 0.0 { dry } else { dry + (wet - dry) * mix };
                 *sample = mixed as f32;

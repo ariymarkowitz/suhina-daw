@@ -108,7 +108,9 @@ input (delayed by the latency) ────────────────�
 - **Changes while playing.** Drive, Output, Dry/Wet, the Bass Threshold, the Waveshaper amounts
   and the DC filter switch ramp over 20 ms; the Color amounts, frequency and width glide over
   20 ms with the filters retuned every 16 frames; a change of Type crossfades from the old curve
-  to the new one over 20 ms. Post Clip switches at the next block.
+  to the new one over 20 ms, and so does a change of Post Clip. A change that arrives while a
+  crossfade still runs waits for it, so clicking quickly through the curve list morphs in turn
+  instead of jumping (Decisions 8).
 
 ## Import
 
@@ -170,7 +172,10 @@ Each entry: what was chosen, what it costs, why.
 7. **Post clip before Output, the Analog Clip curve for Soft.** The manual says the output never
    exceeds the Output level; the order was not measured (candidate run: Measurement plan 6).
 8. **A change of Type crossfades over 20 ms.** Switching a curve abruptly clicks; the original's
-   behaviour was not measured (it needs automation during a render).
+   behaviour was not measured (it needs automation during a render). A change that arrives while
+   a crossfade runs waits for it: letting it restart the fade jumped between the two curves (a
+   pop on every quick click through the list, heard in testing). The post clip's switch fades
+   the same way instead of switching at the next block.
 
 ## Known differences
 
@@ -205,8 +210,9 @@ included); the dry path delayed exactly; each curve's small-signal gain against 
 Drive as a gain before the curve; Analog Clip's knee and ceiling; the fold and the soft sine; the
 Bass Threshold moving the knee; Color flat while the curve is straight and changing only the
 saturation; the bell at its frequency; the post clip holding the Output level; Output and the
-equal-gain mix; the DC filter; eleven changes while playing without a click; the same sound at
-44.1 and 96 kHz; silence in, silence out.
+equal-gain mix; the DC filter; eleven changes while playing without a click; two quick curve
+changes morphing in turn instead of jumping; the post clip's switch fading; mixed `process` call
+sizes leaving the sound bit-identical; the same sound at 44.1 and 96 kHz; silence in, silence out.
 
 `devices/saturator/src/golden_tests.rs`: golden renders of thirteen scenarios (the defaults,
 every curve, the waveshaper, Color, both post clips, changes while playing), compared within
