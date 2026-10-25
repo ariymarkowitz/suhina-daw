@@ -78,7 +78,7 @@ input (delayed by the latency) ────────────────�
   | Soft Sine | `sin(π/2 · u)` up to ±1, then ±1 | π/2 (+3.9 dB) |
   | Bass Shaper | `k(u, t)` with `t` the Bass Threshold as a gain: −50 dB bends from the start (`1 − e^−u`), 0 dB is a hard clip | 1 |
   | Medium Curve | `k(2u, 0.708)` | 2 (+6 dB) |
-  | Hard Curve | `6.7u / (1 + |6.7u|^1.75)^(1/1.75)` | 6.7 (+16.5 dB) |
+  | Hard Curve | `6.7u / (1 + \|6.7u\|^1.75)^(1/1.75)` | 6.7 (+16.5 dB) |
   | Sinoid Fold | `sin(π/2 · u)` without a limit: it folds back, 0 at `u` = 2, −1 at 3 | π/2 |
   | Digital Clip | `u` held to ±1 | 1 |
   | Waveshaper | see below | depends |
@@ -110,7 +110,9 @@ input (delayed by the latency) ────────────────�
   20 ms with the filters retuned every 16 frames; a change of Type crossfades from the old curve
   to the new one over 20 ms, and so does a change of Post Clip. A change that arrives while a
   crossfade still runs waits for it, so clicking quickly through the curve list morphs in turn
-  instead of jumping (Decisions 8).
+  instead of jumping (Decisions 8). Whichever of the two changes, a new crossfade starts from the
+  sound that is playing — a post clip change after a curve change has finished does not replay the
+  curve that was faded from.
 
 ## Import
 
@@ -175,7 +177,9 @@ Each entry: what was chosen, what it costs, why.
    behaviour was not measured (it needs automation during a render). A change that arrives while
    a crossfade runs waits for it: letting it restart the fade jumped between the two curves (a
    pop on every quick click through the list, heard in testing). The post clip's switch fades
-   the same way instead of switching at the next block.
+   the same way instead of switching at the next block. Every new crossfade starts from the
+   sound that is playing, whichever of Type or Post Clip changed: a post clip change after a
+   curve change has finished would otherwise replay the curve that was faded from.
 
 ## Known differences
 

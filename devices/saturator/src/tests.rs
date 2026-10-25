@@ -324,6 +324,24 @@ fn two_quick_curve_changes_morph_instead_of_jumping() {
     }
 }
 
+/// A curve change, then a post clip change after that fade has finished: the crossfade runs from
+/// the curve that is playing, so the curve it faded from does not burst back.
+#[test]
+fn a_post_clip_change_after_a_curve_change_morphs_from_the_curve_playing() {
+    let mut s = saturator(&[]);
+    let mut signal = sine(100.0, 0.25, 48_000, SR);
+    s.process(&ProcessContext::default(), &mut signal[..2 * 24_000]);
+    s.set_param(param::TYPE, 4.0);
+    // The 20 ms fade completes inside this call; the curve it faded from is not reset.
+    s.process(&ProcessContext::default(), &mut signal[2 * 24_000..2 * 25_000]);
+    s.set_param(param::POST_CLIP, 2.0);
+    s.process(&ProcessContext::default(), &mut signal[2 * 25_000..]);
+    let frames = signal.as_chunks::<2>().0;
+    let allowed = largest_step(&frames[12_000..24_000]).max(largest_step(&frames[27_000..]));
+    let moving = largest_step(&frames[24_900..26_200]);
+    assert!(moving <= 1.05 * allowed + 1e-4, "{moving} against {allowed}");
+}
+
 /// The post clip switch on a signal that goes past the ceiling: it fades like a curve change.
 #[test]
 fn the_post_clip_switch_fades() {

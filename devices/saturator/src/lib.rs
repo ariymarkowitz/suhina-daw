@@ -385,9 +385,12 @@ impl Saturator {
     fn queue_wet_change(&mut self, shape: Option<Shape>, post: Option<usize>) {
         let settled = self.smoothers.get(smoothed::FADE).is_some_and(Smoother::is_settled);
         if settled {
+            // The crossfade runs from the sound that is playing, whichever of the two changed:
+            // with the fade settled that is the curve in use, so that a post clip change after
+            // a curve change does not morph from a curve that is no longer playing.
+            self.previous = self.shape;
             let mut changed = false;
             if let Some(new_shape) = shape.filter(|new_shape| *new_shape != self.shape) {
-                self.previous = self.shape;
                 self.shape = new_shape;
                 changed = true;
             }
