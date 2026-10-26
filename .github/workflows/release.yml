@@ -200,7 +200,10 @@ jobs:
                   "target/aarch64-apple-darwin/release/$bin" \
                   "target/x86_64-apple-darwin/release/$bin"
                 lipo -info "dist/$PACKAGE/$bin"
-              done ;;
+              done
+              # Suhina.app, which Finder opens and which goes to Applications; suhina-cli beside
+              # it is a link into it (docs/releasing.md › Packages).
+              scripts/macos_app.sh "dist/$PACKAGE" "$VERSION" ;;
             *)
               for bin in "$BIN" "$APP" "$HOST"; do
                 cp "target/x86_64-unknown-linux-gnu/release/$bin" "dist/$PACKAGE/"
@@ -218,6 +221,10 @@ jobs:
           app="dist/$PACKAGE/$APP"
           host="dist/$PACKAGE/$HOST"
           if [ "$RUNNER_OS" = "Windows" ]; then exe="$exe.exe"; app="$app.exe"; host="$host.exe"; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            app="dist/$PACKAGE/Suhina.app/Contents/MacOS/$APP"
+            host="dist/$PACKAGE/Suhina.app/Contents/MacOS/$HOST"
+          fi
           output=$("$exe" --version)
           echo "$output"
           if [ "$output" != "$BIN $VERSION" ]; then
@@ -331,6 +338,11 @@ jobs:
     needs: [version, build]
     if: needs.version.outputs.nightly == 'true' && needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    # DISCORD_WEBHOOK_RELEASES is in the environment `discord`, which main may use; the nightly
+    # runs from main only.
+    environment:
+      name: discord
+      deployment: false
     permissions:
       contents: write
     concurrency:
@@ -420,7 +432,7 @@ jobs:
                 fi
               done
       # Posts the new nightly to the Discord releases channel, the secret DISCORD_WEBHOOK_RELEASES
-      # (Discord: channel settings > Integrations > Webhooks); without the secret nothing is
+      # in the environment `discord` (Discord: channel settings > Integrations > Webhooks); without the secret nothing is
       # posted. A failed post leaves the nightly published.
       - name: Tell Discord
         continue-on-error: true

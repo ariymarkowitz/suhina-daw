@@ -105,7 +105,9 @@ jobs:
             const marker = `<!-- trusted-request ${comment} -->`;
             const bot = c => c.user?.login === 'suhina-bot[bot]' && c.user?.type === 'Bot';
             const comments = await github.paginate(github.rest.issues.listComments, { ...scope, per_page: 100 });
-            if (comments.some(c => bot(c) && c.body?.endsWith(marker))) return;
+            // A test-build reply ends with its proof, so the marker sits just before it.
+            const done = comments.some(c => bot(c) && c.body?.includes(marker));
+            if (done && command !== 'test-build') return;
             const attribution = `On behalf of @${actor}`;
             let result;
             if (command === 'open-issue') {
@@ -132,15 +134,18 @@ jobs:
                   c.body.includes('<!-- trusted-build ') && !c.body.endsWith(proof))) {
                 throw new Error('This request already authorized another commit; post a new comment.');
               }
+              // One reply is both the answer and the proof; the proof stays last for the build's match.
               if (!comments.some(c => bot(c) && c.body?.endsWith(proof))) {
                 await github.rest.issues.createComment({ ...scope,
-                  body: `Test build requested for ${request.sha}.\n\n${attribution}\n\n${proof}` });
+                  body: `Requested a test build of ${request.sha}.\n\n${attribution}\n\n${marker}\n${proof}` });
               }
+              // A rerun after the label went on repeats nothing; one that failed before it adds it.
+              if (done && (pr.labels || []).some(l => l.name === 'test-build')) return;
               // Remove/re-add also lets a new request retry a failed build of the same commit.
               try { await github.rest.issues.removeLabel({ ...scope, name: 'test-build' }); }
               catch (error) { if (error.status !== 404) throw error; }
               await github.rest.issues.addLabels({ ...scope, labels: ['test-build'] });
-              result = `Requested a test build of ${request.sha}.`;
+              return;
             } else {
               await github.rest.issues.update({ ...scope, state: command === 'close' ? 'closed' : 'open' });
               result = command === 'close' ? 'Closed this issue.' : 'Reopened this issue.';

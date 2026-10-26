@@ -11,6 +11,8 @@ use std::path::PathBuf;
 /// The field a chosen path goes into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickField {
+    /// User-owned background PNG; no desktop capture.
+    BackgroundImage,
     /// Settings › General › Projects folder.
     ProjectsFolder,
     /// Settings › General › Templates folder.
@@ -29,6 +31,10 @@ pub enum PickField {
     BrowserFolder,
     /// Settings › General › NAM models folder (docs/spec/nam-amp-and-cab.md).
     NamModelsFolder,
+    /// Settings › Appearance › Themes folder.
+    ThemesFolder,
+    /// Settings › General › Settings folder.
+    DataFolder,
     /// Settings › General › IR folder (docs/spec/nam-amp-and-cab.md).
     IrFolder,
 }
@@ -36,12 +42,13 @@ pub enum PickField {
 impl PickField {
     /// Whether a folder is picked rather than a file.
     pub fn folder(self) -> bool {
-        !matches!(self, Self::StartTemplate | Self::OpenProject | Self::ExportFile)
+        !matches!(self, Self::StartTemplate | Self::OpenProject | Self::ExportFile | Self::BackgroundImage)
     }
 
     /// The dialog's title.
     pub fn title(self) -> &'static str {
         match self {
+            Self::BackgroundImage => "Background image (PNG)",
             Self::ProjectsFolder => "Projects folder",
             Self::TemplatesFolder => "Templates folder",
             Self::StartTemplate => "Template to start from",
@@ -51,6 +58,8 @@ impl PickField {
             Self::OpenProject => "Open a project",
             Self::BrowserFolder => "Add a folder to the browser",
             Self::NamModelsFolder => "NAM models folder",
+            Self::ThemesFolder => "Themes folder",
+            Self::DataFolder => "Settings folder",
             Self::IrFolder => "IR folder",
         }
     }
@@ -59,6 +68,7 @@ impl PickField {
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
             Self::ExportFile => &["wav", "flac", "ogg", "mp3"],
+            Self::BackgroundImage => &["png"],
             field if field.folder() => &[],
             _ => &["suhina", "als"],
         }
@@ -68,6 +78,7 @@ impl PickField {
     pub fn filter_label(self) -> &'static str {
         match self {
             Self::ExportFile => "Audio",
+            Self::BackgroundImage => "PNG image",
             _ => "Projects",
         }
     }

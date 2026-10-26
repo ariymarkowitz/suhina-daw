@@ -1,9 +1,9 @@
 ---
-description: Version 5 of the data-only Suhina device graph format, SDK, track loading, and device revision migrations
+description: Version 6 of the data-only Suhina device graph format, SDK, track loading, and device revision migrations
 read_when: .sd, Suhina device, device graph, device SDK, community effect, visual node, device UI
 type: spec
 status: current
-last_verified: 2026-10-22
+last_verified: 2026-10-25
 covers:
   - crates/device-sdk/src/builtin.rs
   - crates/device-sdk/Cargo.toml
@@ -13,6 +13,8 @@ covers:
   - crates/device-sdk/src/graph.rs
   - crates/device-sdk/src/midi.rs
   - crates/device-sdk/src/runtime.rs
+  - crates/device-sdk/src/native_node.rs
+  - crates/device-sdk/src/modulation.rs
   - crates/device-sdk/examples/gain.rs
   - crates/model/src/lib.rs
   - crates/project-file/src/lib.rs
@@ -32,17 +34,31 @@ validation. Parameter/UI constructors likewise configure the existing fields. Us
 helpers alone changes neither the file schema version nor the device revision. See the
 [authoring guide](../device-sdk.md#checked-rust-authoring).
 
-An `.sd` file describes a device as data. It contains no Rust source, executable code or external
-assets. The Rust SDK builds and validates the graph, writes the JSON file and can prepare the
+An `.sd` file describes a device as data. It contains no Rust source, executable code or embedded audio assets. Stable sample binding keys
+refer to immutable resources prepared by the host. The Rust SDK builds and validates the graph, writes the JSON file and can prepare the
 supported graph for audio processing.
+
+Native stereo source and effect graph nodes implement a device-neutral `NativeNode` lifecycle: preparation and
+resource binding happen off the audio thread; span preparation, rendering, note events and
+reset are allocation-free. A separate factory maps graph metadata to native implementations.
+The interpreter stores trait objects and never selects concrete instrument implementations.
+Sampler resource access is an adapter over the generic native-node binding boundary.
+
+A `native_effect` node names a trusted host kernel by `effect`. Its fixed ports are `in`,
+`control1`, `control2`, `control3` and `control4`, each a stereo signal with a zero default.
+`out` carries stereo; `left` and `right` select and duplicate one channel. Every input buffer
+has the same interleaved stereo length as the output. Kernels must overwrite their output;
+sources ignore inputs. `compile_with_native_at` resolves fresh, sample-rate-prepared kernels
+off-thread; ordinary compilation rejects unresolved kernels. File data never loads code.
+Legacy `native_device` wrappers are rejected, as on main.
 
 ## File and device versions
 
 The top-level object contains `format: "suhina-device"`, `version`, a `device` object,
 `nodes`, `connections` and optional `editor` metadata. The reader accepts file versions 1 through
-5. Writing canonical JSON gives version 5 when the device has an expanded panel
-(`device.expanded`) and version 4 otherwise, without changing its sound; a version 4 or older file
-with `device.expanded` is rejected. Older readers reject the version they do not know, preventing
+6, and a writer always writes the newest (*Versions* below); a version 4 or older file with
+`device.expanded`, or a version 5 or older file with a panel `style`, is rejected. Older readers
+reject a version they do not know, preventing
 silent loss of authoring metadata when saving. File version describes
 the JSON schema; `device.version` describes revisions of a device's identity and parameter
 contract. Files without `device.version` are revision 1. Device `id` remains stable across
@@ -83,6 +99,19 @@ Exactly one role-appropriate input/output is required, and every node must contr
 Missing references, duplicate ids, invalid ports,
 missing required inputs and cycles are rejected with node/port diagnostics. Only the `in` port
 of sample_delay/delay breaks a cycle; its input is written after all current-frame evaluations.
+Graphs execute node by node in chunks of at most 64 stereo frames, using
+node buffers and parameter timelines allocated during compilation. Native sampler sources render
+one chunk per call. Input, output, constants, parameters, gain, addition and multiplication
+select their scalar kernel once per node chunk; other scalar nodes share the frame evaluator. Transport beats and parameter smoothing still advance for every frame;
+timestamped MIDI splits processing before applying each event. Compilation finds strongly connected
+components over all signal edges, including delayed inputs, and schedules their dependency graph.
+Only feedback components execute frame by frame in the validated node order, committing their
+delay inputs after the component has evaluated each frame. Feed-forward delay nodes read and
+commit each frame within their node chunk. Other components retain block processing, so delays
+do not force unrelated nodes through the frame interpreter. If only audio input/output sit outside
+feedback components, the original frame schedule avoids unnecessary scratch copies. Feedback
+timing is unchanged.
+Processing a longer host buffer reuses the same bounded scratch storage.
 Delay time is an ordinary dependency, so a cycle through it is rejected.
 
 File size is capped at 2 MiB, graphs at 128 nodes, 640 connections and 256 parameters.
@@ -99,6 +128,22 @@ state when the embedded graph is unchanged, including effect tails and oscillato
 
 See the complete [node reference](sdk-nodes.md) and the [authoring guide](../device-sdk.md),
 including the machine-readable catalog for AI agents.
+
+## Versions
+
+The file version rises with every change to what a file holds, and every file is written as the
+newest ([ADR 0010](../decisions/0010-project-files.md) › Amendment: format versions); a reader
+refuses a newer file and reads every older one. `device.version`, the device's own revision, is
+separate (above).
+
+| Version | What it added |
+|---|---|
+| 1 | Input, gain and output nodes in a linear chain |
+| 2 | Every node kind and port connections |
+| 3 | `editor` metadata |
+| 4 | `device.version` and `migrations`, apart from the file version |
+| 5 | `device.expanded`, the expanded panel; since 2026-10-24 written by every file, not only one with an expanded panel |
+| 6 | A panel's `style`, its own style sheet (theme tiers, `docs/spec/theme-skins.md`) |
 
 ## Visual connection layout
 
@@ -152,7 +197,7 @@ Layers, component hierarchy and editable envelope documents remain separate plan
 ```json
 {
   "format": "suhina-device",
-  "version": 4,
+  "version": 5,
   "device": {
     "id": "org.example.gain",
     "version": 1,
@@ -193,7 +238,10 @@ reserves space for each slider's value so controls stay inside narrow device car
 
 All three roles execute. Instrument graphs expose `midi_key`, `midi_velocity` and `midi_gate`
 signals to the existing audio nodes to generate sound. This initial instrument runtime is
-monophonic: the latest note controls the graph, and note-off releases its gate. MIDI effects go
+monophonic for these three signals: the latest note controls them, and note-off releases the gate.
+The `sampler` source instead owns polyphonic voices and broadcasts no MIDI value signals.
+It receives timestamped events, exposes stereo audio, and requires off-thread PCM/control binding
+through `PreparedEffect::sampler_mut`; sample assets are not embedded in the file. MIDI effects go
 before the track instrument; their event buffers are prepared with the chain, so processing does
 not allocate on the audio thread. On a track with no instrument the notes they send play as the
 track's sine tones, as for built-in MIDI effects ([ADR 0004](../decisions/0004-built-in-devices.md) › 13).
@@ -285,6 +333,30 @@ gesture and resource limit. Graphics are evaluated on the UI thread and are stor
 parameters; the device's header then has a button that opens it over the main area
 ([sdk-custom-ui.md](sdk-custom-ui.md) › Compact and expanded panels).
 
+## Panel style sheets (version 6)
+
+`device.ui.style` and `device.expanded.style` are optional CSS text (at most 64 KiB, no NUL) that
+style that panel, and only that panel: presentation, never the graph, parameters or bindings. The
+host applies style tiers in order (ADR 0031 › Device panels use the same style engine):
+
+1. **Default:** Suhina's own appearance.
+2. **Theme:** the application theme's style sheet, which can reach device panels through
+   `.device-panel`, `.device-control` and the widget classes (`.knob`, `.button`, …).
+3. **Device:** this sheet, bounded to its panel: its selectors match only elements inside the panel,
+   so `.browser { … }` here changes nothing outside it.
+4. **User:** `user.css` in the themes folder, over everything, and kept when the theme changes.
+
+A higher tier wins over a lower one even against `!important`; within a tier importance,
+`@layer`, specificity and source order apply. Each control is a `.device-control` element whose id
+is the control's `id`, so `#cutoff { color: #ffd27f; accent-color: #ff8a00; }` styles the control
+`cutoff`. Built-in widgets take `color` (text and ink), `background-color` (body), `border-color`
+and `accent-color` (arc, switched-on fill) from it; what a sheet leaves out keeps the theme. A
+sheet that does not parse is ignored and the panel keeps the theme.
+
+```json
+"ui": { "size": [260, 120], "style": "#cutoff { accent-color: #ff8a00; }\n.device-control:hover { color: #ffffff; }", "controls": [ … ] }
+```
+
 ## Linked parameter edits
 
 A parameter's `ui.link` may contain `enabled_by` (a declared 0..1 Toggle id) and `peer`
@@ -298,10 +370,27 @@ reach the attached player; undo, redo and project saving preserve the pair.
 
 ## Built-in devices are not `.sd` files
 
-A built-in effect, instrument or MIDI effect is native code with a layout, never a `.sd` graph
-([ADR 0021](../decisions/0021-device-graph-files.md) › Amendment: device panels for built-in
-devices). Its layout is this format's UI part only (`ui`, `expanded` and how each parameter is
-presented), described in [sdk-custom-ui.md](sdk-custom-ui.md) › Layouts for built-in devices.
-A graph has no node that runs a built-in device. Test builds of #600 wrote built-ins as `.sd`
-wrappers around a `native_device` node; such a file is refused, and a copy of one in a project is
-not read.
+Registered built-in audio effects resolve automatically when a `.sd` graph is added and
+when track or group chains are prepared. The registry adapter supplies the `in` audio
+signal at the effect defaults; additional control connections are rejected by this
+adapter unconditionally. `Node::bind` maps parameters and does not enable control1 through control4 connections. Custom Rust hosts can still supply their own input-aware kernels. Unknown ids,
+non-effect devices and effects reporting nonzero latency are rejected before insertion;
+latency compensation between graph paths is not implemented. This never loads plug-in code.
+
+
+## Sample composition and embedded private graphs
+
+The node reference defines prepared resources, event routes, polyphonic voices, granular playback,
+and versioned components. Node `bindings` is an optional list of `{parameter,target}` objects:
+the parent parameter id maps to a private/native parameter id. Empty lists are omitted. Unknown
+parent/target ids and duplicate targets are rejected; default values are installed before rendering.
+Old files without bindings behave unchanged. New node kinds and fields are rejected by older strict
+readers instead of being silently dropped. Existing stock Sampler ids/revisions are unchanged.
+
+`Component`, `VoiceGroup` and `GrainPool` store their complete child `.sd` text. Every child validates
+independently, then expanded preparation caps nesting at four, nodes at 4096, voice capacity at 128,
+grain capacity at 256 and aggregate delay storage at 2,000,000 frames. Binding targets are validated
+against the prepared child. Sample PCM is not duplicated per instance. The resource key survives a
+round-trip; the host supplies the corresponding PreparedSamples map after relocation. Project commands bind one source named `sample` through `device.addSd` or `track.add`;
+`device.loadSample` replaces it while preserving graph state. The desktop has no resource-map
+editor. Custom Rust hosts can supply several named bindings.

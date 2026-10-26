@@ -5,33 +5,21 @@ use serde_json::{Value, json};
 use suhina_model::*;
 use suhina_session::Session;
 
+use crate::support::run;
+use suhina_test_support::ProjectBuilder;
+
 fn project() -> Project {
-    // Ids on its lanes, clips and scenes, as a session gives them.
-    let mut project = project_built();
-    assert_eq!(project.assign_ids(), Ok(()));
-    project
+    suhina_test_support::with_ids(project_built())
 }
 
 fn project_built() -> Project {
-    Project {
-        tracks: vec![Track {
-            content: ContentKinds { notes: true, audio: false },
-            channel: Some(ChannelId(1)),
-            ..Track::new(TrackId(1), "Keys")
-        }],
-        channels: vec![Channel::new(ChannelId(1), "C1")],
-        ..Project::default()
-    }
-}
-
-fn run(session: &mut Session, id: &str, params: Value) -> Result<Value, String> {
-    session.execute(id, &params).map_err(|e| e.0)
+    ProjectBuilder::new().midi_track(1, "Keys").build_without_ids()
 }
 
 #[test]
 fn lists_the_built_in_devices_and_their_parameters() {
     let mut session = Session::new(project());
-    let list = run(&mut session, "devices.list", json!({})).unwrap();
+    let list = run(&mut session, "device.list", json!({})).unwrap();
     let fm = list.as_array().unwrap().iter().find(|d| d["id"] == "fm-synth").unwrap();
     assert_eq!(fm["role"], "instrument");
     let algorithm = fm["params"].as_array().unwrap().iter().find(|p| p["id"] == "algorithm").unwrap();
@@ -293,7 +281,7 @@ fn sd_midi_effects_and_instruments_insert_on_midi_tracks_in_chain_order() {
 #[test]
 fn the_pitch_midi_effect_goes_before_the_instrument_on_midi_tracks() {
     let mut session = Session::new(project());
-    let list = run(&mut session, "devices.list", json!({})).unwrap();
+    let list = run(&mut session, "device.list", json!({})).unwrap();
     let pitch = list.as_array().unwrap().iter().find(|d| d["id"] == "pitch").unwrap();
     assert_eq!(pitch["role"], "midi_effect");
     let unit = |id: &str| pitch["params"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap()["unit"].clone();
@@ -565,7 +553,7 @@ fn plug_in_commands_need_a_plug_in_and_a_playing_project() {
 #[test]
 fn sdk_catalog_is_a_read_command_and_matches_the_sdk() {
     let mut session = Session::new(project());
-    let catalog = run(&mut session, "devices.sdNodes", json!({})).unwrap();
+    let catalog = run(&mut session, "device.sdNodes", json!({})).unwrap();
     assert_eq!(catalog["version"], suhina_device_sdk::VERSION);
     assert_eq!(catalog["nodes"].as_array().unwrap().len(), suhina_device_sdk::NODE_CATALOG.len());
     assert!(
@@ -997,18 +985,18 @@ fn a_device_moves_or_copies_to_another_track_in_one_step() {
     let other = "Bus".to_string();
     let (keys, there) = (chain(&session, "Keys"), chain(&session, &other));
     let at = keys.len() - 1;
-    run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": at, "to_track": other, "copy": true }))
+    run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": at, "toTrack": other, "copy": true }))
         .unwrap();
     assert_eq!(chain(&session, "Keys"), keys, "a copy leaves it");
     assert_eq!(chain(&session, &other).len(), there.len() + 1);
     run(&mut session, "edit.undo", json!({})).unwrap();
-    run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": at, "to_track": other })).unwrap();
+    run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": at, "toTrack": other })).unwrap();
     assert_eq!(chain(&session, "Keys").len(), keys.len() - 1, "moved away");
     assert_eq!(chain(&session, &other).last().map(String::as_str), keys.last().map(String::as_str));
     run(&mut session, "edit.undo", json!({})).unwrap();
     assert_eq!((chain(&session, "Keys"), chain(&session, &other)), (keys, there), "one step");
     assert!(
-        run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": 0, "to_track": "Keys" })).is_err()
+        run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": 0, "toTrack": "Keys" })).is_err()
     );
 }
 
@@ -1028,7 +1016,7 @@ fn an_instrument_group_moved_to_another_track_takes_its_instrument_s_place() {
     let lead = chain(&session, "Lead");
     // A group whose branches start with an instrument is an instrument: it goes where Lead's
     // instrument was, before its effects, and takes its place.
-    run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": 0, "to_track": "Lead" })).unwrap();
+    run(&mut session, "device.moveToTrack", json!({ "track": "Keys", "device": 0, "toTrack": "Lead" })).unwrap();
     let moved = chain(&session, "Lead");
     assert_eq!(moved.len(), lead.len(), "{moved:?}");
     assert_eq!(moved.first().map(String::as_str), Some("Layer"));
@@ -1091,4 +1079,125 @@ fn a_wrapper_file_is_no_longer_a_device_to_add() {
     std::fs::remove_file(&path).unwrap();
     assert!(refused.is_err(), "{refused:?}");
     assert!(session.project().channels[0].devices.is_empty());
+}
+
+#[test]
+fn composed_sampler_persists_relocates_and_renders_through_the_project_chain() {
+    let root = std::env::temp_dir().join(format!("suhina-composed-project-{}", std::process::id()));
+    let original = root.join("original");
+    let moved = root.join("moved");
+    std::fs::create_dir_all(&original).unwrap();
+    std::fs::create_dir_all(&moved).unwrap();
+    let wav = original.join("tone.wav");
+    let mut writer = hound::WavWriter::create(
+        &wav,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: 48000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        },
+    )
+    .unwrap();
+    for i in 0..4800 {
+        writer.write_sample((i as f32 * 0.07).sin() * 0.2).unwrap();
+    }
+    writer.finalize().unwrap();
+    let graph = suhina_device_sdk::sampler_template("sample", 2).unwrap();
+    let sd = original.join("sampler.sd");
+    std::fs::write(&sd, graph.to_sd().unwrap()).unwrap();
+    let mut new_track_session = Session::new(project());
+    let added = run(&mut new_track_session, "track.add", json!({"sd":sd,"sample":wav})).unwrap();
+    assert_eq!(added["device"]["kind"], "sd");
+    let mut session = Session::new(project());
+    let before = session.project().clone();
+    assert!(run(&mut session, "device.addSd", json!({"track":1,"path":sd})).is_err());
+    assert_eq!(session.project(), &before);
+    run(&mut session, "device.addSd", json!({"track":1,"path":sd,"sample":wav})).unwrap();
+    let old_graph = session.project().channels[0].devices[0].state.clone();
+    let replacement = original.join("replacement.wav");
+    std::fs::copy(&wav, &replacement).unwrap();
+    run(&mut session, "device.loadSample", json!({"track":1,"device":0,"path":replacement})).unwrap();
+    assert_eq!(session.project().channels[0].devices[0].state, old_graph);
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    let mut saved = session.project().clone();
+    let state = saved.channels[0].devices[0].state.clone();
+    saved.channels[0].devices[0].set_sample_reference("tone.wav", &wav.display().to_string());
+    assert_eq!(saved.channels[0].devices[0].state, state, "asset reference must not replace graph data");
+    saved.contents.push(ClipContent {
+        id: ContentId(1),
+        name: "Note".into(),
+        length: 1.,
+        scale: None,
+        extensions: Default::default(),
+        lanes: vec![ContentLane {
+            target: None,
+            data: LaneData::Notes(vec![Note {
+                time: 0.,
+                duration: 0.5,
+                key: 60,
+                velocity: 1.,
+                release_velocity: 0.,
+                channel: 0,
+                muted: false,
+            }]),
+        }],
+    });
+    saved.arrangement.lanes.push(ArrangementLane {
+        id: Default::default(),
+        name: "Notes".into(),
+        track: Some(TrackId(1)),
+        clips: vec![Clip {
+            id: Default::default(),
+            content: ContentId(1),
+            start: 0.,
+            length: 1.,
+            offset: 0.,
+            loop_range: None,
+            enabled: true,
+            fade_in: 0.,
+            fade_out: 0.,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            follow_action: Default::default(),
+            launch: Default::default(),
+            color: None,
+            extensions: Default::default(),
+        }],
+    });
+    saved.assign_ids().unwrap();
+    let json = suhina_project_file::to_json(&saved);
+    // Keep a reproducible fixture only when a manual QA run requests one.
+    if let Some(directory) = std::env::var_os("SUHINA_SAMPLER_QA_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::copy(&wav, directory.join("tone.wav")).unwrap();
+        std::fs::write(directory.join("sampler.suhina"), &json).unwrap();
+        std::fs::write(directory.join("sampler.sd"), graph.to_sd().unwrap()).unwrap();
+    }
+    let restored = suhina_project_file::from_json(&json).unwrap();
+    assert_eq!(restored, saved);
+    std::fs::copy(&wav, moved.join("tone.wav")).unwrap();
+    std::fs::remove_file(&wav).unwrap();
+    let (audio, warnings) = suhina_media::decode_project_audio(&restored, &moved);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let expected =
+        suhina_engine::render_offline_from(&restored, suhina_engine::RenderInputs::from_audio(&audio), 48000, 64, None)
+            .unwrap();
+    assert!(expected.iter().any(|v| v.abs() > 0.01));
+    let actual = suhina_engine::render_offline_from(
+        &restored,
+        suhina_engine::RenderInputs::from_audio(&audio),
+        48000,
+        257,
+        None,
+    )
+    .unwrap();
+    assert_eq!(expected, actual);
+    std::fs::remove_file(moved.join("tone.wav")).unwrap();
+    let (_, warnings) = suhina_media::decode_project_audio(&restored, &moved);
+    assert!(!warnings.is_empty(), "missing resource must be reported");
+    run(&mut session, "edit.undo", json!({})).unwrap();
+    assert_eq!(session.project(), &before);
+    let _ = std::fs::remove_dir_all(root);
 }

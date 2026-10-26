@@ -3,7 +3,7 @@ description: How recording works: MIDI and audio takes into a clip slot or the a
 read_when: recording, record, take, record button, clip.record, transport.record, count-in, transport.setCountIn, record.state, MIDI recording, audio recording, Recorded folder, latency compensation of a take, overdub, loopback
 type: spec
 status: current
-last_verified: 2026-10-22
+last_verified: 2026-10-24
 covers:
   - crates/engine/src/record.rs
   - crates/engine/src/record_tests.rs
@@ -79,6 +79,12 @@ the slot it started in only while it is still empty, else in the first empty slo
 else in a new scene.
 
 ### Into the arrangement
+
+While a take is running, Arrangement shows a growing recording-coloured region on its
+track, from its start to the current transport beat. This preview does not create project
+clips or undo entries. The finished clip replaces it after recording ends; notes and
+waveforms are drawn from the finished take. New recorded clips receive the corresponding
+MIDI/audio creation colour without recolouring earlier clips.
 
 `transport.record` with `on: true` records every armed track into the arrangement:
 

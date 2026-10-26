@@ -3,7 +3,7 @@ description: How third-party plug-ins are hosted out of process (process model, 
 read_when: plug-in, plugin host, CLAP, VST3, VST2, sandbox, out of process, IPC, shared memory, unsafe, plug-in crash, scanning, plug-in editor
 type: decision
 status: current
-last_verified: 2026-10-23
+last_verified: 2026-10-24
 covers:
   - crates/ipc/**
   - crates/plugins/**
@@ -84,6 +84,13 @@ workspace forbids.
    instances use it, so `InitDll`/`ModuleEntry` and `ExitDll`/`ModuleExit` run once (`clack-host`
    does the same for a CLAP entry's `init`/`deinit`). An instance whose audio thread does not
    stop when it is unloaded is stuck in the plug-in and is left as it is, so the others go on.
+   An unloaded instance's audio stops and the engine gets its answer before its editor closes:
+   the host takes the editor down and releases the plug-in from its main loop afterwards, as an
+   editor embedded in the engine's window sends that window messages while it goes, which the
+   engine answers only once it stops waiting. The engine waits for an unload at most
+   10 s (or the launch timeout, when shorter); a process that has not answered by then is stuck
+   in the plug-in's teardown and is ended, so a closed project or a removed plug-in never holds
+   up the window, and a restart then loads into a new process.
    On the engine side, `Launch::group` names the process an instance starts in: instances with
    the same host executable and group share the process a registry in `crates/plugins` keeps
    while any of them lives; `None` is a process of its own. Requests from the instances are
@@ -376,7 +383,7 @@ workspace forbids.
    intact, and the user can relink it by hand to a VST3 or CLAP version. Hosting VST2 itself is
    a separate decision (below).
 
-   *Finding the replacement* (`crates/plugins/src/matching.rs`, `plugins.check`). The catalog is
+   *Finding the replacement* (`crates/plugins/src/matching.rs`, `plugin.check`). The catalog is
    searched in order of how sure the answer is: the same id; an installed VST3 that declares it
    replaces the plug-in (`Compatibility` in `moduleinfo.json`, or the module's
    `Plugin Compatibility Class`, which the scanner asks through `IPluginCompatibility`); a VST3
@@ -443,7 +450,7 @@ workspace forbids.
      (#602; was: a file that failed is not tried again until it changes).
    - Two results are settled: not read again while the file is unchanged, and not listed
      among the failures. A file that loads and holds no audio plug-ins (a vendor's shell
-     bundle with no classes) is passed over; `plugins.list` with `ignored` lists it. A file
+     bundle with no classes) is passed over; `plugin.list` with `ignored` lists it. A file
      built only for another processor (an Intel-only plug-in on an Apple silicon Mac) is never
      loaded: its executable's header (Mach-O, PE or ELF, `suhina_plugins::arch`) says so before
      any load, and it is listed apart as `incompatible` with the processors it is built for.
@@ -454,11 +461,11 @@ workspace forbids.
      any folder, standard or added, can be switched off without removing it; its plug-ins leave
      the catalog with the next scan. VST2 folders are a format already, refused until VST2
      plug-ins are hosted, so adding them later is a matter of the scan, not of the folders.
-   - Plug-ins can be switched off (`plugins.setEnabled`, the plug-in manager). One switched off
-     stays in the catalog and in `plugins.list`, but sessions get the catalog without it: it is
+   - Plug-ins can be switched off (`plugin.setEnabled`, the plug-in manager). One switched off
+     stays in the catalog and in `plugin.list`, but sessions get the catalog without it: it is
      not offered in the browser, not found by name, and a project that uses it finds it
      missing, so it never loads. *Amended 2026-10-18.*
-   The `plugins.*` commands run scans and choose the added folders (ADR 0002 amendment); the
+   The `plugin.*` commands run scans and choose the added folders (ADR 0002 amendment); the
    folders, the catalog, the plug-ins switched off and the hosting choices are kept as JSON in
    Suhina's settings folder.
 10. **Editors** open from the host process, by default floating above Suhina's window and
@@ -628,7 +635,7 @@ workspace forbids.
   graph to graph; a restarted plug-in's processor replaces the crashed one, which goes back to
   be dropped off the audio thread.
 - **Projects.** While a project plays, the session finds each plug-in device in the catalog
-  (`plugins.check`'s matching), starts it with the saved state (and VST3 controller state) on a
+  (`plugin.check`'s matching), starts it with the saved state (and VST3 controller state) on a
   thread of its own, and hands it over; a project's plug-ins stop when it stops playing (a
   tab switch) and each keeps its last state for when it starts again, as one whose device is
   removed does for an undo. A plug-in that is not installed is *missing*: no slot, the sound

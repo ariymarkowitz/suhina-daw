@@ -8,6 +8,7 @@
 //! is dragged and made one command (`clip.setLoop`, `clip.setStart`, `clip.setLength`) when it is
 //! let go. Dragging anywhere else on the ruler zooms time (up and down) and scrolls it (sideways).
 
+use crate::kit::surface::Backgrounds as _;
 use egui::{Color32, CursorIcon, Id, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use serde_json::{Value, json};
 
@@ -352,7 +353,7 @@ pub fn interact(
 pub fn draw(ui: &Ui, ruler: Rect, axis: &Axis, shape: &ClipShape) {
     let painter = ui.painter_at(ruler);
     let row = Rect::from_min_max(ruler.min, Pos2::new(ruler.right(), ruler.top() + LOOP_ROW));
-    painter.rect_filled(row, 0.0, theme::window_background());
+    painter.fill_background(row, 0.0, theme::window_background());
     painter.hline(row.x_range(), row.bottom() - 0.5, theme::hairline(theme::border()));
 
     // The loop bar: bright while the clip loops, dim where turning the loop on would put it.
@@ -368,7 +369,7 @@ pub fn draw(ui: &Ui, ruler: Rect, axis: &Axis, shape: &ClipShape) {
     } else {
         (theme::control_background(), theme::text_hint())
     };
-    painter.rect_filled(bar, 0.0, fill);
+    painter.fill_background(bar, 0.0, fill);
     painter.rect_stroke(bar, 0.0, theme::hairline(edge), StrokeKind::Inside);
     let handle_color = if looping { theme::text_primary() } else { theme::text_hint() };
     for x in [left, right] {

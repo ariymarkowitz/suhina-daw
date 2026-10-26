@@ -52,6 +52,14 @@ macro_rules! palette {
 }
 
 palette! {
+    grid_major, "grid.major", 0x30312D,
+        "Arrangement bar lines and lane separators";
+    grid_minor, "grid.minor", 0x252622,
+        "Arrangement subdivisions between bar lines";
+    track_header_background, "track.headerBackground", 0x252421,
+        "The neutral surface behind Arrangement track controls";
+    track_header_selected, "track.headerSelectedBackground", 0x34332F,
+        "The surface behind a selected Arrangement track's controls";
     window_background, "window.background", 0x1D1C1A,
         "The window behind everything: grid, empty slots, lanes, Settings";
     panel_background, "panel.background", 0x252421,
@@ -65,7 +73,9 @@ palette! {
     control_active, "control.activeBackground", 0x45433F,
         "Selected or pressed: a selected clip or track, a dragged field";
     control_playing, "control.playingBackground", 0x4A4843,
-        "A playing clip or scene, the fill of a volume field";
+        "A playing clip or scene";
+    control_selected, "control.selectedBackground", 0xC9C4BB,
+        "The chosen option of a switch, a lit toggle, the level of a volume or pan field";
     border, "border", 0x383733,
         "Hairlines between regions and rows";
     border_strong, "border.strong", 0x45433F,
@@ -77,9 +87,23 @@ palette! {
     text_hint, "text.hint", 0x66625B,
         "Inactive text, hints and section titles";
     text_value, "text.value", 0xC9C4BB,
-        "Clip names, values on fields, the chosen option of a switch";
+        "Clip names and values on fields";
+    text_inverse, "text.inverse", 0x1D1C1A,
+        "Text on lit fills: a switch's chosen option, a lit button";
     text_playing, "text.playing", 0xFFFFFF,
         "The name of a playing clip";
+    text_on_color_light, "text.onColorLight", 0xECE8E1,
+        "Light text on dark coloured tracks, returns and clips; paired with text.onColorDark for contrast";
+    text_on_color_dark, "text.onColorDark", 0x1D1C1A,
+        "Dark text on bright coloured tracks, returns and clips; paired with text.onColorLight for contrast";
+    browser_text_primary, "browser.text.primary", 0xECE8E1,
+        "Browser selection, search input and highlighted names";
+    browser_text_secondary, "browser.text.secondary", 0x9A958C,
+        "Browser item names, categories and preview labels";
+    browser_text_hint, "browser.text.hint", 0x66625B,
+        "Browser section headings, search placeholder and hints";
+    browser_text_value, "browser.text.value", 0xC9C4BB,
+        "Browser values and active preview controls";
     accent, "accent", 0xA6A3FF,
         "The playhead, queued clips, a key being set";
     selection, "selection", 0xE3C86A,
@@ -100,14 +124,18 @@ palette! {
         "Behind a track header's pan field";
     pan_centre, "pan.centre", 0x55524C,
         "The centre mark of a pan field";
+    midi_clip_default, "clip.midiDefault", 0x4FC3F7,
+        "RGB colour copied only to newly created MIDI tracks and clips; existing tracks and clips never change";
+    audio_clip_default, "clip.audioDefault", 0xFF9A3C,
+        "RGB colour copied only to newly created audio tracks and clips; existing tracks and clips never change";
     track_color_1, "track.1", 0xFF9A3C,
-        "The first default track colour: new tracks take them in turn; also effects in the browser";
+        "Colour-picker swatch 1; also effects in the browser (legacy track token)";
     track_color_2, "track.2", 0xF2D541,
-        "The second default track colour; also MIDI files in the browser";
+        "Colour-picker swatch 2; also MIDI files in the browser (legacy track token)";
     track_color_3, "track.3", 0x4FC3F7,
-        "The third default track colour; also samples in the browser";
+        "Colour-picker swatch 3; also samples in the browser (legacy track token)";
     track_color_4, "track.4", 0xB38BFF,
-        "The fourth default track colour; also instruments and presets in the browser";
+        "Colour-picker swatch 4; also instruments and presets in the browser (legacy track token)";
     track_color_5, "track.5", 0x7FDB5A,
         "A colour the track colour palette offers";
     track_color_6, "track.6", 0xFF6FA8,
@@ -180,6 +208,7 @@ thread_local! {
     /// The colours in use. The UI draws on one thread; tests each get their own, so a test that
     /// changes the theme does not change another's.
     static PALETTE: Cell<Palette> = const { Cell::new(Palette::DARK) };
+    static PALETTE_REVISION: Cell<u64> = const { Cell::new(0) };
 }
 
 /// The colours in use.
@@ -187,8 +216,40 @@ pub fn palette() -> Palette {
     PALETTE.with(Cell::get)
 }
 
+pub(crate) fn local_palette(palette: Palette) {
+    PALETTE.with(|p| p.set(palette));
+}
+
+/// Scoped CSS overrides must never roll back a user theme change made while drawing.
+pub(crate) fn palette_revision() -> u64 {
+    PALETTE_REVISION.with(Cell::get)
+}
+
+/// Whether a background of the theme in use lets the desktop show through the window.
+pub fn see_through() -> bool {
+    let p = palette();
+    [
+        p.window_background,
+        p.panel_background,
+        p.panel_hover,
+        p.control_background,
+        p.control_hover,
+        p.control_active,
+        p.control_playing,
+        p.control_selected,
+        p.track_header_background,
+        p.track_header_selected,
+        p.pan_background,
+        p.track_muted,
+        p.recording_background,
+    ]
+    .iter()
+    .any(|color| color.a() < 255)
+}
+
 /// Draws with `palette` from the next frame on: the tokens and egui's own visuals.
 pub fn set_palette(ctx: &egui::Context, palette: Palette) {
+    PALETTE_REVISION.with(|revision| revision.set(revision.get().wrapping_add(1)));
     PALETTE.with(|p| p.set(palette));
     ctx.all_styles_mut(|style| visuals(&mut style.visuals, &palette));
     ctx.request_repaint();
@@ -197,31 +258,141 @@ pub fn set_palette(ctx: &egui::Context, palette: Palette) {
 /// The id of the default theme, Suhina Dark, in the settings file.
 pub const BUILT_IN: &str = "suhina-dark";
 
-/// The themes that come with Suhina besides Suhina Dark, as theme files: id and text.
+/// The themes that come with Suhina besides Suhina Dark: id, `theme.css` and `layout.css` (empty
+/// when it has none), as a theme's folder holds them. Their artwork and Meadow's background are
+/// attached by `built_in_themes`.
 /// Dracula, Nord, Catppuccin and Solarized are popular open palettes (MIT, their licences in
 /// `themes/licenses/`), mapped onto Suhina's tokens.
-const BUILT_IN_FILES: [(&str, &str); 8] = [
-    ("editor-dark", include_str!("../../themes/editor-dark.json")),
-    ("suhina-light", include_str!("../../themes/suhina-light.json")),
-    ("high-contrast", include_str!("../../themes/high-contrast.json")),
-    ("dracula", include_str!("../../themes/dracula.json")),
-    ("nord", include_str!("../../themes/nord.json")),
-    ("catppuccin-mocha", include_str!("../../themes/catppuccin-mocha.json")),
-    ("catppuccin-latte", include_str!("../../themes/catppuccin-latte.json")),
-    ("solarized-dark", include_str!("../../themes/solarized-dark.json")),
+const BUILT_IN_FILES: [(&str, &str, &str); 15] = [
+    ("suhina-studio-dark", include_str!("../../themes/suhina-studio-dark.theme.css"), ""),
+    ("suhina-studio-light", include_str!("../../themes/suhina-studio-light.theme.css"), ""),
+    ("editor-dark", include_str!("../../themes/editor-dark.theme.css"), ""),
+    ("suhina-light", include_str!("../../themes/suhina-light.theme.css"), ""),
+    ("high-contrast", include_str!("../../themes/high-contrast.theme.css"), ""),
+    ("dracula", include_str!("../../themes/dracula.theme.css"), ""),
+    ("nord", include_str!("../../themes/nord.theme.css"), ""),
+    ("catppuccin-mocha", include_str!("../../themes/catppuccin-mocha.theme.css"), ""),
+    ("catppuccin-latte", include_str!("../../themes/catppuccin-latte.theme.css"), ""),
+    ("solarized-dark", include_str!("../../themes/solarized-dark.theme.css"), ""),
+    ("suhina-glass", include_str!("../../themes/suhina-glass.theme.css"), ""),
+    ("suhina-forest-amber", include_str!("../../themes/suhina-forest-amber.theme.css"), ""),
+    (
+        "suhina-sheet",
+        include_str!("../../themes/suhina-sheet.theme.css"),
+        include_str!("../../themes/suhina-sheet.layout.css"),
+    ),
+    (
+        "suhina-meadow",
+        include_str!("../../themes/suhina-meadow.theme.css"),
+        include_str!("../../themes/suhina-meadow.layout.css"),
+    ),
+    (
+        "suhina-blocks",
+        include_str!("../../themes/suhina-blocks.theme.css"),
+        include_str!("../../themes/suhina-blocks.layout.css"),
+    ),
 ];
+
+const SHEET_SVGS: &[(&str, &str)] = &[
+    ("fader.cap", include_str!("../../../../assets/themes/sheet/fader.cap.svg")),
+    ("fader.rail", include_str!("../../../../assets/themes/sheet/fader.rail.svg")),
+    ("knob.body", include_str!("../../../../assets/themes/sheet/knob.body.svg")),
+    ("knob.pointer", include_str!("../../../../assets/themes/sheet/knob.pointer.svg")),
+    ("button", include_str!("../../../../assets/themes/sheet/button.svg")),
+    ("play", include_str!("../../../../assets/themes/sheet/play.svg")),
+    ("stop", include_str!("../../../../assets/themes/sheet/stop.svg")),
+    ("record", include_str!("../../../../assets/themes/sheet/record.svg")),
+    ("solo", include_str!("../../../../assets/themes/sheet/solo.svg")),
+    ("arm", include_str!("../../../../assets/themes/sheet/arm.svg")),
+    ("cue", include_str!("../../../../assets/themes/sheet/cue.svg")),
+    ("track.midi", include_str!("../../../../assets/themes/sheet/track.midi.svg")),
+    ("track.audio", include_str!("../../../../assets/themes/sheet/track.audio.svg")),
+    ("track.name", include_str!("../../../../assets/themes/sheet/track.name.svg")),
+    ("track.body", include_str!("../../../../assets/themes/sheet/track.body.svg")),
+    ("meter", include_str!("../../../../assets/themes/sheet/meter.svg")),
+];
+
+const MEADOW_SVGS: &[(&str, &str)] = &[
+    ("fader.cap", include_str!("../../../../assets/themes/meadow/fader.cap.svg")),
+    ("fader.rail", include_str!("../../../../assets/themes/meadow/fader.rail.svg")),
+    ("knob.body", include_str!("../../../../assets/themes/meadow/knob.body.svg")),
+    ("knob.pointer", include_str!("../../../../assets/themes/meadow/knob.pointer.svg")),
+    ("button", include_str!("../../../../assets/themes/meadow/button.svg")),
+    ("track.midi", include_str!("../../../../assets/themes/meadow/track.midi.svg")),
+    ("track.body", include_str!("../../../../assets/themes/meadow/track.body.svg")),
+];
+
+const BLOCKS_SVGS: &[(&str, &str)] = &[
+    ("fader.cap", include_str!("../../../../assets/themes/blocks/fader.cap.svg")),
+    ("fader.rail", include_str!("../../../../assets/themes/blocks/fader.rail.svg")),
+    ("knob.body", include_str!("../../../../assets/themes/blocks/knob.body.svg")),
+    ("knob.pointer", include_str!("../../../../assets/themes/blocks/knob.pointer.svg")),
+    ("button", include_str!("../../../../assets/themes/blocks/button.svg")),
+    ("track.midi", include_str!("../../../../assets/themes/blocks/track.midi.svg")),
+    ("track.audio", include_str!("../../../../assets/themes/blocks/track.audio.svg")),
+    ("track.name", include_str!("../../../../assets/themes/blocks/track.name.svg")),
+    ("track.body", include_str!("../../../../assets/themes/blocks/track.body.svg")),
+    ("track.body.color-ff9a3c", include_str!("../../../../assets/themes/blocks/track.body.color-ff9a3c.svg")),
+    ("track.body.color-f2d541", include_str!("../../../../assets/themes/blocks/track.body.color-f2d541.svg")),
+    ("track.body.color-4fc3f7", include_str!("../../../../assets/themes/blocks/track.body.color-4fc3f7.svg")),
+    ("track.body.color-b38bff", include_str!("../../../../assets/themes/blocks/track.body.color-b38bff.svg")),
+    ("track.body.color-7fdb5a", include_str!("../../../../assets/themes/blocks/track.body.color-7fdb5a.svg")),
+    ("track.body.color-e5484d", include_str!("../../../../assets/themes/blocks/track.body.color-e5484d.svg")),
+    ("track.body.color-80ada1", include_str!("../../../../assets/themes/blocks/track.body.color-80ada1.svg")),
+    ("track.body.color-a84f4f", include_str!("../../../../assets/themes/blocks/track.body.color-a84f4f.svg")),
+];
+
+fn meadow_background() -> Option<std::sync::Arc<str>> {
+    static BACKGROUND: std::sync::OnceLock<Option<std::sync::Arc<str>>> = std::sync::OnceLock::new();
+    BACKGROUND
+        .get_or_init(|| super::skin::encode_png(include_bytes!("../../../../assets/themes/meadow/meadow.png")).ok())
+        .clone()
+}
 
 /// The themes that come with Suhina, Suhina Dark first, with their ids. They do not change;
 /// editing one makes a copy.
 pub fn built_in_themes() -> Vec<(&'static str, Theme)> {
     let mut themes = vec![(BUILT_IN, Theme::default())];
-    themes.extend(BUILT_IN_FILES.iter().map(|(id, text)| (*id, Theme::from_json(text).0)));
+    themes.extend(BUILT_IN_FILES.iter().map(|(id, sheet, layout)| {
+        let mut theme = from_sheet(sheet, layout).0;
+        if matches!(*id, "suhina-sheet" | "suhina-meadow" | "suhina-blocks") {
+            theme.skin.assets = SHEET_SVGS.iter().map(|(role, svg)| ((*role).into(), (*svg).into())).collect();
+            if *id == "suhina-meadow" {
+                theme.skin.assets.extend(MEADOW_SVGS.iter().map(|(role, svg)| ((*role).into(), (*svg).into())));
+                theme.skin.background = meadow_background();
+            } else if *id == "suhina-blocks" {
+                theme.skin.assets.extend(BLOCKS_SVGS.iter().map(|(role, svg)| ((*role).into(), (*svg).into())));
+            }
+        }
+        (*id, theme)
+    }));
     themes
+}
+
+/// A theme from its own sheet (`theme.css`) and Suhina's `layout.css` beside it, with warnings
+/// about what could not be read. Artwork and the background stay as paths for the theme's files
+/// to resolve.
+pub fn from_sheet(sheet: &str, layout: &str) -> (Theme, Vec<String>) {
+    let mut theme = Theme::default();
+    let mut warnings = Vec::new();
+    match super::theme_vars::read(sheet) {
+        Ok((declared, base, notices)) => {
+            theme.vars.declared = std::sync::Arc::new(declared);
+            theme.vars.base = std::sync::Arc::new(base);
+            warnings.extend(notices);
+        }
+        Err(error) => warnings.push(error),
+    }
+    warnings.extend(super::theme_vars::resolve(&mut theme));
+    warnings.extend(super::theme_css::read_host_rules(&mut theme, sheet));
+    warnings.extend(super::theme_css::apply(&mut theme, layout));
+    theme.skin.css = Some(sheet.into());
+    (theme, warnings)
 }
 
 /// Whether `id` names a theme that comes with Suhina.
 pub fn is_built_in(id: &str) -> bool {
-    id.eq_ignore_ascii_case(BUILT_IN) || BUILT_IN_FILES.iter().any(|(b, _)| id.eq_ignore_ascii_case(b))
+    id.eq_ignore_ascii_case(BUILT_IN) || BUILT_IN_FILES.iter().any(|(b, _, _)| id.eq_ignore_ascii_case(b))
 }
 
 /// A named set of colours, kept in a theme file:
@@ -231,19 +402,44 @@ pub fn is_built_in(id: &str) -> bool {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
+    pub skin: super::skin::Skin,
+    pub transparent_rgb: std::collections::BTreeMap<String, [u8; 3]>,
     pub name: String,
     pub colors: Palette,
+    /// None inherits the application's global material strengths.
+    pub liquid: Option<super::liquid::Options>,
+    pub gradients: super::gradient::Gradients,
+    /// The theme's custom properties and the chosen variant's values (`theme_vars`).
+    pub vars: super::theme_vars::Vars,
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Self { name: "Suhina Dark".into(), colors: Palette::DARK }
+        Self {
+            name: "Suhina Dark".into(),
+            colors: Palette::DARK,
+            liquid: None,
+            gradients: Default::default(),
+            transparent_rgb: Default::default(),
+            skin: Default::default(),
+            vars: Default::default(),
+        }
     }
 }
 
 impl Theme {
+    pub fn rgba(&self, key: &str, color: Color32) -> [u8; 4] {
+        let mut rgba = color.to_srgba_unmultiplied();
+        if color.a() == 0
+            && let Some(rgb) = self.transparent_rgb.get(key)
+        {
+            rgba[..3].copy_from_slice(rgb);
+        }
+        rgba
+    }
+
     /// Reads a theme file. Tokens it leaves out keep Suhina Dark's colour, so a file only needs
-    /// the colours it changes; unknown tokens and values that are not `#RRGGBB` are skipped with
+    /// the colours it changes; unknown tokens and values that are not `#RRGGBB` or `#RRGGBBAA` are skipped with
     /// a warning. A `"$schema"` or `"description"` is allowed and ignored.
     pub fn from_json(text: &str) -> (Self, Vec<String>) {
         let mut theme = Self::default();
@@ -261,18 +457,104 @@ impl Theme {
         match root.get("colors") {
             Some(Value::Object(colors)) => {
                 for (key, value) in colors {
+                    let canonical = RENAMED.iter().find(|(old, _)| *old == key).map_or(key.as_str(), |(_, new)| *new);
                     let parsed = value.as_str().and_then(parse_hex);
-                    match (theme.colors.token_mut(key), parsed) {
-                        (Some(slot), Some(color)) => *slot = color,
+                    match (theme.colors.token_mut(canonical), parsed) {
+                        (Some(slot), Some(color)) => {
+                            *slot = color;
+                            theme.transparent_rgb.remove(canonical);
+                            if let Some([r, g, b, 0]) = value.as_str().and_then(parse_rgba)
+                                && [r, g, b] != [0, 0, 0]
+                            {
+                                theme.transparent_rgb.insert(canonical.to_string(), [r, g, b]);
+                            }
+                        }
                         (None, _) => warnings.push(format!("{key} is not a colour token")),
-                        (Some(_), None) => warnings.push(format!("{key}: {value} is not a #RRGGBB colour")),
+                        (Some(_), None) => {
+                            warnings.push(format!("{key}: {value} is not a #RRGGBB or #RRGGBBAA colour"))
+                        }
                     }
+                }
+                // Older palettes only supplied the numbered colour-picker swatches.
+                if !colors.contains_key("clip.midiDefault") {
+                    theme.colors.midi_clip_default = theme.colors.track_color_3;
+                }
+                if !colors.contains_key("clip.audioDefault") {
+                    theme.colors.audio_clip_default = theme.colors.track_color_1;
+                }
+                // Older files drew these with a background and a text colour.
+                if !colors.contains_key("text.inverse") {
+                    let [r, g, b, _] = theme.colors.window_background.to_srgba_unmultiplied();
+                    let [r, g, b] = theme.transparent_rgb.get("window.background").copied().unwrap_or([r, g, b]);
+                    theme.colors.text_inverse = Color32::from_rgb(r, g, b);
+                }
+                if !colors.contains_key("control.selectedBackground") {
+                    theme.colors.control_selected = theme.colors.text_value;
+                }
+                // Keep old themes visually identical until these independent roles are edited.
+                for (key, source, value) in [
+                    ("browser.text.primary", "text.primary", theme.colors.text_primary),
+                    ("browser.text.secondary", "text.secondary", theme.colors.text_secondary),
+                    ("browser.text.hint", "text.hint", theme.colors.text_hint),
+                    ("browser.text.value", "text.value", theme.colors.text_value),
+                    ("text.onColorLight", "text.primary", theme.colors.text_primary),
+                    ("text.onColorDark", "window.background", theme.colors.window_background),
+                ] {
+                    if !colors.contains_key(key)
+                        && let Some(slot) = theme.colors.token_mut(key)
+                    {
+                        *slot = value;
+                        if let Some(rgb) = theme.transparent_rgb.get(source).copied() {
+                            theme.transparent_rgb.insert(key.to_string(), rgb);
+                        }
+                    }
+                }
+                // Text never takes a see-through background's alpha.
+                if !colors.contains_key("text.onColorDark") {
+                    let [r, g, b, _] = theme.colors.text_on_color_dark.to_srgba_unmultiplied();
+                    let [r, g, b] = theme.transparent_rgb.remove("text.onColorDark").unwrap_or([r, g, b]);
+                    theme.colors.text_on_color_dark = Color32::from_rgb(r, g, b);
                 }
             }
             Some(_) => warnings.push("the theme's colors are not an object".into()),
             None => {}
         }
-        let known = |k: &str| matches!(k, "name" | "colors" | "description" | "$schema");
+        if let Some(value) = root.get("liquid") {
+            if let Some(values) = value.as_object() {
+                let mut options = super::liquid::Options::default();
+                for (key, slot) in
+                    [("panels", &mut options.panels), ("tracks", &mut options.tracks), ("clips", &mut options.clips)]
+                {
+                    match values.get(key).and_then(Value::as_u64).filter(|n| *n <= 100) {
+                        Some(n) => *slot = n as u8,
+                        None => warnings.push(format!("liquid.{key} must be a number from 0 to 100")),
+                    }
+                }
+                theme.liquid = Some(options);
+            } else {
+                warnings.push("liquid must be an object of panels, tracks and clips strengths".into());
+            }
+        }
+        if let Some(value) = root.get("gradients") {
+            theme.gradients = super::gradient::Gradients::from_json(value, &mut warnings);
+        }
+        if let Some(value) = root.get("skin") {
+            theme.skin = super::skin::Skin::from_json(value, &mut warnings);
+        }
+        let known = |k: &str| {
+            matches!(
+                k,
+                "advanced-stylesheet"
+                    | "stylesheet"
+                    | "skin"
+                    | "name"
+                    | "colors"
+                    | "liquid"
+                    | "gradients"
+                    | "description"
+                    | "$schema"
+            )
+        };
         for key in root.keys().filter(|k| !known(k)) {
             warnings.push(format!("{key} is not part of a theme"));
         }
@@ -285,87 +567,78 @@ impl Theme {
             .colors
             .tokens()
             .into_iter()
-            .map(|(key, _, color)| (key.to_string(), Value::String(hex(color))))
+            .map(|(key, _, color)| (key.to_string(), Value::String(hex_rgba(self.rgba(key, color)))))
             .collect();
         let mut root = Map::new();
+        if self.skin != super::skin::Skin::default() {
+            root.insert("skin".into(), self.skin.to_json());
+        }
         root.insert("name".into(), Value::String(self.name.clone()));
         root.insert("colors".into(), Value::Object(colors));
+        if self.gradients != super::gradient::Gradients::default() {
+            root.insert("gradients".into(), self.gradients.to_json());
+        }
+        if let Some(options) = self.liquid {
+            root.insert(
+                "liquid".into(),
+                serde_json::json!({ "panels": options.panels, "tracks": options.tracks, "clips": options.clips }),
+            );
+        }
         serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_default()
     }
 }
 
-/// The README that goes with the theme template: the file format and every token, written so a
-/// person or an AI agent can make a theme from it alone.
+/// Original paint-only example, shared by the editor and portable packages.
+pub const GLOSS_EXAMPLE: &str = include_str!("../../themes/dark-gloss.css");
+
+/// Optional native Session density, shared by the editor and exported packages.
+pub const COMPACT_SESSION_EXAMPLE: &str = include_str!("../../themes/compact-session.css");
+
+/// Optional panels own their dimensions so closed panels leave no fixed-size track.
+pub const WORKSPACE_GRID_EXAMPLE: &str = "/* CSS owns panel geometry; removing these rules restores splitters. */\n#workspace { display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-rows:minmax(0, 1fr) auto; gap:8px; }\n#panel-browser { grid-column:2; grid-row:1 / -1; width:240px; }\n#panel-main { grid-column:1; grid-row:1; }\n#panel-detail { grid-column:1; grid-row:2; height:180px; }\n";
+
+/// The README shipped with themes: the format, capabilities and generated palette reference.
 pub fn template_readme() -> String {
-    let mut text = String::from(
-        "# Suhina theme template\n\
-\n\
-A Suhina theme is one JSON file. `template.json` beside this README is Suhina Dark with every\n\
-colour written out; copy it, give it a name and change the colours.\n\
-\n\
-## The file\n\
-\n\
-```json\n\
-{\n  \"name\": \"Night Blue\",\n  \"colors\": {\n    \"window.background\": \"#14161A\",\n    \"accent\": \"#7FD1B9\"\n  }\n}\n\
-```\n\
-\n\
-- `name`: what Settings shows. Any text.\n\
-- `colors`: token name to colour. Every colour is `#RRGGBB` (six hex digits, no alpha).\n\
-- A token left out keeps Suhina Dark's colour, so a theme may list only what it changes.\n\
-- An unknown token or a colour that is not `#RRGGBB` is skipped, and Suhina shows a warning.\n\
-- Nothing else belongs in the file (`description` and `$schema` are allowed and ignored).\n\
-\n\
-## Installing it\n\
-\n\
-Save it as `<id>.json` in Suhina's `themes` folder (Settings › Appearance › Theme › Open folder\n\
-shows it), or drop the file on Suhina's window. The file name without `.json` is the theme's\n\
-id: letters, digits and `-`, for example `night-blue.json`. Pick it in Settings › Appearance ›\n\
-Theme. While it is in use, every save of the file shows within a second.\n\
-\n\
-## Making a good theme\n\
-\n\
-- The backgrounds go in steps: `window.background` (furthest back), then `panel.background`,\n\
-  `control.background`, `control.activeBackground` and `control.playingBackground`. Keep each a\n\
-  little lighter than the one before in a dark theme, a little darker in a light one.\n\
-- Each `*.hoverBackground` is one small step from the background it hovers over.\n\
-- `text.primary` must read well on every background; `text.secondary` a little less, `text.hint`\n\
-  least (it is for hints and inactive text). Keep `text.primary` on `window.background` at a\n\
-  contrast of at least 7:1 and `text.hint` at 3:1.\n\
-- `text.value` is drawn on `control.background` and is the fill of the chosen option of a switch,\n\
-  whose label is then drawn in `window.background`: the two must contrast.\n\
-- `accent` marks the playhead, queued clips and a key being set; it should stand out from every\n\
-  background. `recording` is also used for errors.\n\
-- Track and clip colours come from the project, not the theme.\n\
-\n\
-## Tokens\n\
-\n\
-| Token | Suhina Dark | Used for |\n\
-|---|---|---|\n",
-    );
+    let mut text = String::from(include_str!("../../themes/THEME-PACKAGE-README.md"));
+    text.push_str("\n\n## Palette token reference\n\n| Token | Suhina Dark | Used for |\n|---|---|---|\n");
     for (key, purpose, color) in Palette::DARK.tokens() {
         text.push_str(&format!("| `{key}` | `{}` | {purpose} |\n", hex(color)));
     }
     text
 }
 
-/// `#RRGGBB`, as theme files write a colour.
+/// Opaque `#RRGGBB`, or `#RRGGBBAA` when opacity is present.
 pub fn hex(color: Color32) -> String {
-    format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b())
+    hex_rgba(color.to_srgba_unmultiplied())
 }
 
-/// Reads `#RRGGBB` (the `#` may be left out).
+pub fn hex_rgba([r, g, b, a]: [u8; 4]) -> String {
+    if a == 255 { format!("#{r:02X}{g:02X}{b:02X}") } else { format!("#{r:02X}{g:02X}{b:02X}{a:02X}") }
+}
+
+/// Reads `#RRGGBB` or `#RRGGBBAA` (the `#` may be left out).
 pub fn parse_hex(text: &str) -> Option<Color32> {
+    let [r, g, b, a] = parse_rgba(text)?;
+    Some(Color32::from_rgba_unmultiplied(r, g, b, a))
+}
+
+pub fn parse_rgba(text: &str) -> Option<[u8; 4]> {
     let digits = text.trim().strip_prefix('#').unwrap_or(text.trim());
-    if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !matches!(digits.len(), 6 | 8) || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    u32::from_str_radix(digits, 16).ok().map(rgb)
+    let value = u32::from_str_radix(digits, 16).ok()?;
+    Some(if digits.len() == 6 {
+        [(value >> 16) as u8, (value >> 8) as u8, value as u8, 255]
+    } else {
+        [(value >> 24) as u8, (value >> 16) as u8, (value >> 8) as u8, value as u8]
+    })
 }
 
-/// Text drawn on `fill`: `text.primary` or `window.background`, whichever stands out more from
+/// Text drawn on `fill`: the independent light or dark coloured-surface text role, whichever stands out more from
 /// it, so a name stays readable on any track colour of any theme.
 pub fn text_on(fill: Color32) -> Color32 {
-    let (light, dark) = (text_primary(), window_background());
+    let (light, dark) = (text_on_color_light(), text_on_color_dark());
     if contrast(fill, light) >= contrast(fill, dark) { light } else { dark }
 }
 
@@ -388,7 +661,7 @@ pub const ROW: f32 = 20.0;
 /// A row of the browser's lists and tree.
 pub const BROWSER_ROW: f32 = 17.0;
 pub const MENU_BAR: f32 = 20.0;
-pub const CONTROL_BAR: f32 = 28.0;
+pub const CONTROL_BAR: f32 = 40.0;
 pub const STATUS_BAR: f32 = 20.0;
 pub const TRACK_COLUMN: f32 = 116.0;
 pub const RETURN_COLUMN: f32 = 84.0;
@@ -399,37 +672,45 @@ pub const TOGGLE: f32 = 18.0;
 pub const PAD: f32 = 6.0;
 
 /// Text sizes: UI text, small values and labels, rulers and key labels.
-pub const TEXT: f32 = 11.0;
-pub const TEXT_SMALL: f32 = 10.0;
+pub const TEXT: f32 = 12.0;
+pub const TEXT_SMALL: f32 = 11.0;
 pub const TEXT_TINY: f32 = 9.0;
 
 pub fn ui_font(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Proportional)
+    FontId::new(super::style_class::font_size(size), FontFamily::Proportional)
 }
 
 /// Every number, time and position is monospaced.
 pub fn mono_font(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Monospace)
+    FontId::new(super::style_class::font_size(size), FontFamily::Monospace)
 }
 
 pub fn hairline(color: Color32) -> Stroke {
     Stroke::new(1.0, color)
 }
 
-/// The UI typeface: Encode Sans Semi Expanded (SIL Open Font License 1.1,
-/// `fonts/encode-sans/OFL.txt`).
-const UI_FONT: &[u8] = include_bytes!("../../fonts/encode-sans/EncodeSansSemiExpanded-Regular.ttf");
+/// The default UI typeface, shared with the website (SIL Open Font License 1.1).
+pub(crate) const UI_FONT: &[u8] = include_bytes!("../../fonts/manrope/Manrope-Variable.ttf");
+/// Preserve the previous UI font as an embedded alternative and glyph fallback.
+const LEGACY_UI_FONT: &[u8] = include_bytes!("../../fonts/encode-sans/EncodeSansSemiExpanded-Regular.ttf");
 /// Numbers, times and positions: IBM Plex Mono (SIL Open Font License 1.1,
 /// `fonts/ibm-plex-mono/OFL.txt`).
-const MONO_FONT: &[u8] = include_bytes!("../../fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf");
+pub(crate) const MONO_FONT: &[u8] = include_bytes!("../../fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf");
 
-/// egui's fonts with ours first: Encode Sans for UI text, IBM Plex Mono for numbers. egui's own
+/// egui's fonts with ours first: Manrope for UI text, IBM Plex Mono for numbers. egui's own
 /// fonts stay behind them for characters ours lack.
 fn fonts() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert("encode-sans".into(), std::sync::Arc::new(egui::FontData::from_static(UI_FONT)));
+    let manrope = egui::FontData::from_static(UI_FONT).tweak(egui::FontTweak {
+        coords: egui::epaint::text::VariationCoords::new([(b"wght", 500.0)]),
+        ..Default::default()
+    });
+    fonts.font_data.insert("manrope".into(), std::sync::Arc::new(manrope));
+    fonts.font_data.insert("encode-sans".into(), std::sync::Arc::new(egui::FontData::from_static(LEGACY_UI_FONT)));
     fonts.font_data.insert("ibm-plex-mono".into(), std::sync::Arc::new(egui::FontData::from_static(MONO_FONT)));
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "encode-sans".into());
+    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "manrope".into());
+    fonts.families.insert(FontFamily::Name("encode-sans".into()), vec!["encode-sans".into()]);
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "ibm-plex-mono".into());
     fonts
 }
@@ -467,6 +748,7 @@ fn visuals(visuals: &mut egui::Visuals, p: &Palette) {
     visuals.panel_fill = p.panel_background;
     visuals.window_fill = p.panel_background;
     visuals.extreme_bg_color = p.window_background;
+    visuals.text_edit_bg_color = Some(Color32::TRANSPARENT);
     visuals.faint_bg_color = p.panel_background;
     visuals.window_stroke = hairline(p.border);
     visuals.window_corner_radius = egui::CornerRadius::ZERO;
@@ -498,153 +780,5 @@ fn visuals(visuals: &mut egui::Visuals, p: &Palette) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_theme_that_comes_with_suhina_sets_every_token() {
-        let tokens: Vec<&str> = Palette::DARK.tokens().iter().map(|(key, _, _)| *key).collect();
-        for (id, text) in BUILT_IN_FILES {
-            let (_, warnings) = Theme::from_json(text);
-            assert!(warnings.is_empty(), "{id}: {warnings:?}");
-            let colors = match serde_json::from_str::<Value>(text) {
-                Ok(Value::Object(root)) => root.get("colors").and_then(Value::as_object).cloned().unwrap_or_default(),
-                _ => Map::new(),
-            };
-            for token in &tokens {
-                assert!(colors.contains_key(*token), "{id} leaves out {token}");
-            }
-        }
-    }
-
-    #[test]
-    fn track_and_kind_colours_keep_their_values_in_suhina_dark() {
-        let dark = Palette::DARK;
-        let tracks = [
-            dark.track_color_1,
-            dark.track_color_2,
-            dark.track_color_3,
-            dark.track_color_4,
-            dark.track_color_5,
-            dark.track_color_6,
-            dark.track_color_7,
-            dark.track_color_8,
-        ];
-        let expected = [0xFF9A3C, 0xF2D541, 0x4FC3F7, 0xB38BFF, 0x7FDB5A, 0xFF6FA8, 0x5C8DFF, 0x2FD9C4].map(rgb);
-        assert_eq!(tracks, expected);
-        assert_eq!((dark.kind_kick, dark.kind_other), (rgb(0xD06E5E), rgb(0x8A8680)));
-        // A theme can change them like any other token.
-        let (theme, warnings) =
-            Theme::from_json(r##"{ "colors": { "track.1": "#010203", "kind.snare": "#040506" } }"##);
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!((theme.colors.track_color_1, theme.colors.kind_snare), (rgb(0x010203), rgb(0x040506)));
-    }
-
-    #[test]
-    fn a_theme_survives_a_round_trip() {
-        let mut theme = Theme { name: "Night".into(), colors: Palette::DARK };
-        theme.colors.accent = rgb(0x12AB9F);
-        theme.colors.window_background = rgb(0x000000);
-        assert_eq!(Theme::from_json(&theme.to_json()), (theme, Vec::new()));
-    }
-
-    #[test]
-    fn a_theme_file_needs_only_the_colours_it_changes() {
-        let (theme, warnings) = Theme::from_json(r##"{ "name": "Blue", "colors": { "accent": "#3366ff" } }"##);
-        assert!(warnings.is_empty());
-        assert_eq!(theme.name, "Blue");
-        assert_eq!(theme.colors.accent, rgb(0x3366FF));
-        assert_eq!(theme.colors.window_background, Palette::DARK.window_background);
-    }
-
-    #[test]
-    fn bad_values_keep_the_built_in_colours() {
-        let text =
-            r##"{ "name": 3, "colors": { "accent": "blue", "surface.9": "#000000", "border": "#12345" }, "font": 1 }"##;
-        let (theme, warnings) = Theme::from_json(text);
-        assert_eq!(theme, Theme::default());
-        assert_eq!(warnings.len(), 5, "{warnings:?}");
-        assert_eq!(Theme::from_json("[1, 2]").1.len(), 1);
-        assert_eq!(Theme::from_json("{ not json").0, Theme::default());
-    }
-
-    #[test]
-    fn colours_are_written_and_read_as_hex() {
-        assert_eq!(hex(rgb(0x1D1C1A)), "#1D1C1A");
-        assert_eq!(parse_hex("#a6a3ff"), Some(rgb(0xA6A3FF)));
-        assert_eq!(parse_hex("A6A3FF"), Some(rgb(0xA6A3FF)));
-        assert_eq!(parse_hex("#A6A3F"), None);
-        assert_eq!(parse_hex("#GGGGGG"), None);
-        assert_eq!(parse_hex("#+1+2+3"), None);
-    }
-
-    #[test]
-    fn files_with_the_first_token_names_still_read() {
-        let (theme, warnings) =
-            Theme::from_json(r##"{ "colors": { "surface.0": "#010203", "line": "#040506", "accent": "#070809" } }"##);
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(theme.colors.window_background, rgb(0x010203));
-        assert_eq!(theme.colors.border, rgb(0x040506));
-        assert_eq!(theme.colors.accent, rgb(0x070809));
-        let mut copy = Palette::DARK;
-        for (old, new) in RENAMED {
-            assert!(copy.token_mut(new).is_some(), "{new} is not a token");
-            assert!(Palette::DARK.tokens().iter().all(|(key, _, _)| *key != old), "{old} is still a token");
-        }
-    }
-
-    #[test]
-    fn the_themes_that_come_with_suhina_read_whole() {
-        let themes = built_in_themes();
-        assert_eq!(themes.first().map(|(id, _)| *id), Some(BUILT_IN));
-        for (id, text) in BUILT_IN_FILES {
-            let (theme, warnings) = Theme::from_json(text);
-            assert!(warnings.is_empty(), "{id}: {warnings:?}");
-            // Every colour is written out, so none falls back to Suhina Dark by mistake.
-            let listed = serde_json::from_str::<Value>(text).ok().and_then(|v| v.get("colors").cloned());
-            assert_eq!(listed.and_then(|c| c.as_object().map(Map::len)), Some(Palette::DARK.tokens().len()), "{id}");
-            assert!(is_built_in(id));
-            assert_ne!(theme.name, Theme::default().name);
-        }
-        assert!(!is_built_in("night"));
-    }
-
-    #[test]
-    fn the_readme_names_every_token() {
-        let readme = template_readme();
-        for (key, purpose, color) in Palette::DARK.tokens() {
-            assert!(readme.contains(&format!("| `{key}` | `{}` | {purpose} |", hex(color))), "{key}");
-        }
-    }
-
-    #[test]
-    fn every_token_has_its_own_name() {
-        let tokens = Palette::DARK.tokens();
-        let mut keys: Vec<_> = tokens.iter().map(|(key, _, _)| *key).collect();
-        keys.sort_unstable();
-        keys.dedup();
-        assert_eq!(keys.len(), tokens.len());
-    }
-
-    #[test]
-    fn text_on_a_colour_is_the_text_token_that_stands_out_more() {
-        // The default track colours are light: names on them are dark.
-        for fill in [Palette::DARK.track_color_1, Palette::DARK.track_color_8] {
-            assert_eq!(text_on(fill), window_background(), "{fill:?}");
-            assert!(contrast(fill, text_on(fill)) >= 4.5, "{fill:?}");
-        }
-        assert_eq!(text_on(rgb(0x202020)), text_primary());
-        assert!((contrast(rgb(0x000000), rgb(0xFFFFFF)) - 21.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn the_palette_in_use_changes_with_the_theme() {
-        let ctx = egui::Context::default();
-        let mut night = Palette::DARK;
-        night.accent = rgb(0x00FF00);
-        set_palette(&ctx, night);
-        assert_eq!(accent(), rgb(0x00FF00));
-        set_palette(&ctx, Palette::DARK);
-        assert_eq!(accent(), Palette::DARK.accent);
-    }
-}
+#[path = "theme_tests.rs"]
+mod tests;

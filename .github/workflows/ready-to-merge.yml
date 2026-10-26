@@ -27,10 +27,13 @@ name: Ready to merge
 # It acts with a short-lived token of the repository's GitHub App (the one docs-generated.yml
 # pushes with), not GITHUB_TOKEN: GitHub starts no workflows for a merge made through
 # GITHUB_TOKEN, and the workflows on main must run after every merge. Setup: the app has
-# Repository permissions › Contents: Read and write and Pull requests: Read and write; its public
+# Repository permissions › Contents, Pull requests and Issues: Read and write; its public
 # Client ID is the DOCS_BOT_CLIENT_ID variable and its key the DOCS_BOT_PRIVATE_KEY secret in `docs-bot`
 # (pull_request_target runs on main, which the environment allows); Settings › General › Allow
-# auto-merge is on.
+# auto-merge is on. The queue merges as the app, and GitHub closes the issues a description
+# closes (`Closes #N`) as the one who merged: without Issues, they stay open and nothing reports it.
+# A permission added to the app reaches the token only once the organisation's installation
+# accepts it (Settings › GitHub Apps › suhina-docs-bot › Configure › Accept new permissions).
 
 on:
   pull_request_target:

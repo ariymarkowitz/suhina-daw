@@ -52,6 +52,10 @@ pub use protocol::{ParamInfo, Placement};
 /// Blocks in a row without an answer after which a running host counts as hung.
 pub const HUNG_AFTER: u32 = 32;
 
+/// The longest an instance's unload is waited for (or the launch timeout, when shorter): a host
+/// stuck in a plug-in's teardown then ends instead of holding up the window that let it go.
+const UNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Editor closings (and sizes, and latencies) remembered for instances that have not asked yet.
 const MAX_CLOSED_EDITORS: usize = 4096;
 
@@ -1161,15 +1165,19 @@ impl Plugin {
         } else if current {
             let instance = self.instance;
             let unload = Message::Unload { instance };
-            let _ = locked.request(
+            let unloaded = locked.request(
                 Some(instance),
                 &unload,
                 "unload",
-                self.launch.timeout,
+                self.launch.timeout.min(UNLOAD_TIMEOUT),
                 |m| matches!(m, Message::Unloaded { instance: i } if *i == instance),
             );
             locked.take_closed(instance);
             locked.take_latency(instance);
+            if matches!(unloaded, Err(PluginError::Timeout(_))) {
+                // Stuck in the old instance's teardown: the new one starts in a new process.
+                locked.end();
+            }
         }
         let instance = next_instance();
         let (generation, latency, edits_clips, link) = locked.load(&self.launch, instance)?;
@@ -1208,7 +1216,7 @@ impl Drop for Plugin {
             Some(instance),
             &Message::Unload { instance },
             "unload",
-            self.launch.timeout,
+            self.launch.timeout.min(UNLOAD_TIMEOUT),
             |m| matches!(m, Message::Unloaded { instance: i } if *i == instance),
         );
         group.take_closed(instance);

@@ -21,7 +21,8 @@ name: Test build links
 # the bot (secret DISCORD_BOT_TOKEN, variables DISCORD_GUILD_ID and DISCORD_TESTING_FORUM_ID) finds
 # the pull request's thread, `#<number> …`, and the webhook (secret DISCORD_WEBHOOK_TESTING) posts
 # into it, or opens it when there is none. Without them nothing is posted, and a failed post fails
-# nothing else. See docs/releasing.md › Discord.
+# nothing else. The secrets are in the environment `discord`, which main may use. See
+# docs/releasing.md › Discord.
 #
 # Run by hand (Actions › Test build links › Run workflow, a maintainer only), it posts the builds
 # already linked from open pull requests, or from the numbers given, the same way
@@ -81,6 +82,10 @@ jobs:
       group: test-build-links-${{ github.event.workflow_run.pull_requests[0].number || format('{0}:{1}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
+    # For the Discord secrets only: no deployment is recorded on the pull request.
+    environment:
+      name: discord
+      deployment: false
     permissions:
       actions: read
       contents: read
@@ -254,6 +259,9 @@ jobs:
     # Authorization comes from the repository variable MAINTAINERS.
     if: github.event_name == 'workflow_dispatch' && needs.roles.outputs.actor == 'true'
     runs-on: ubuntu-latest
+    environment:
+      name: discord
+      deployment: false
     permissions:
       contents: read
       issues: read

@@ -6,6 +6,7 @@
 //! click opens the palette from (`docs/design/components.md` › Colour palette). Picking a colour
 //! is the `track.setColor` command, one undo step.
 
+use crate::kit::surface::Backgrounds as _;
 use egui::{Color32, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 use serde_json::json;
 use suhina_engine::model::{Rgb, TrackId};
@@ -84,7 +85,7 @@ pub fn swatch_row(ui: &mut Ui, current: Option<Rgb>) -> Option<Rgb> {
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(SWATCH), Sense::click());
         response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, any_open, "Any colour"));
         let fill = motion::mix(theme::control_background(), theme::control_hover(), widgets::hover(ui, &response));
-        ui.painter().rect_filled(rect, 0.0, fill);
+        ui.painter().fill_background(rect, 0.0, fill);
         widgets::text_in(
             ui.painter(),
             rect,

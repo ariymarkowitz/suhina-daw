@@ -3,7 +3,7 @@ description: Author data-only effects, MIDI effects and instruments in Rust or w
 read_when: make an effect, MIDI effect or instrument, SDK tutorial, .sd example, node discovery
 type: howto
 status: current
-last_verified: 2026-10-21
+last_verified: 2026-10-24
 covers:
   - crates/device-sdk/src/author.rs
   - crates/device-sdk/src/ui/widgets.rs
@@ -13,6 +13,7 @@ covers:
   - crates/device-sdk/examples/distortion.rs
   - crates/device-sdk/examples/delay.rs
   - crates/device-sdk/examples/compressor.rs
+  - crates/device-sdk/examples/sampler_composition.rs
   - crates/device-sdk/examples/catalog.rs
   - crates/device-sdk/examples/validate.rs
   - crates/device-sdk/examples/ui_controls.rs
@@ -99,7 +100,8 @@ Version 4 also preserves visual connection authoring through `graph.editor`:
 routes referencing existing `Connection` endpoints. Optional anchors are node-local pixel
 offsets; bend points are graph coordinates. See the [format contract](spec/sd-device-format.md#visual-connection-layout).
 This stores a future editor's layout; the current app still shows the read-only node list.
-File versions 1 through 3 remain readable, and serialization writes version 4. Older device files
+File versions 1 through 4 remain readable, and serialization writes version 5
+([format contract](spec/sd-device-format.md#versions)). Older device files
 without `device.version` load as revision 1.
 
 ```sh
@@ -108,7 +110,7 @@ cargo run -p suhina-device-sdk --example validate -- target/sdk-examples/wire-la
 ```
 An author writes Rust that assembles a graph from supported nodes; Suhina runs the graph as data.
 Use [the format specification](spec/sd-device-format.md) and [node reference](spec/sdk-nodes.md).
-Audio effects, MIDI effects and monophonic instruments execute. Parameters, nodes and device ids
+Audio effects, MIDI effects, monophonic MIDI-value instruments and polyphonic sampler and voice graphs execute. Parameters, nodes and device ids
 are stable saved identifiers.
 
 Generate the MIDI examples with:
@@ -175,16 +177,16 @@ this never removes their processing. The examples expose only their main process
 ## Workflow for AI agents
 
 1. Read the format and node reference. Obtain the current catalog with the read command
-   `devices.sdNodes {}` via MCP `command_run`.
+   `device.sdNodes {}` via MCP `command_run`.
    Offline, `cargo run -p suhina-device-sdk --example catalog` prints the same node records as JSON.
    Each record gives its kind, Rust variant, ports, units, optional defaults, processing rules
    and a minimal JSON node-kind example. Waveform/filter choices and graph limits are returned
-   by `devices.sdNodes` alongside the records. Do not invent unsupported node kinds or ports.
+   by `device.sdNodes` alongside the records. Do not invent unsupported node kinds or ports.
 2. Assemble an effect graph. Give every node and parameter a unique stable id. Declare a
    parameter for each user control. Prefer an existing example with similar signal flow.
    Every node must reach the output, including the audio input. For an unconnected optional
    input the catalog default applies; a required input must have exactly one connection.
-3. Save with `write_file` or author equivalent version 4 JSON. Call `validate` or run the
+3. Save with `write_file` or author equivalent version 5 JSON. Call `validate` or run the
    validation example before adding the effect. Errors identify missing ids/ports, undelayed
    cycles and memory requests; fix those directly. A minimal catalog example describes
    `NodeKind`; wrap it with `id` when placing it in the JSON nodes array.
@@ -233,7 +235,7 @@ use the existing control behaviour, including keyboard edits and default reset. 
 local to a parameter and do not modify the global theme. The `ui_controls` example generates
 a single-column canvas with styled controls sized for a narrow device panel. Existing project devices embed their graph; import
 the new file as a new device to use its changed layout. Agents can obtain defaults and enum
-choices from `devices.sdNodes`.
+choices from `device.sdNodes`.
 
 `background` colours widget bodies; `panel_color` colours the entire cell independently.
 
@@ -290,7 +292,7 @@ normal parameter command, smoothing and undo; a two-axis gesture has one undo en
 ### Information for agents
 
 Read [the complete custom UI contract](spec/sdk-custom-ui.md), then the example source and public
-Rust types in `crates/device-sdk/src/ui.rs`. `devices.sdNodes` includes primitive/gesture names,
+Rust types in `crates/device-sdk/src/ui.rs`. `device.sdNodes` includes primitive/gesture names,
 default canvas values and image budgets. Create artwork yourself or use user-supplied licensed assets.
 Do not attach external paths or executable code to the device. Keep parameter ids stable, validate
 with the `validate` example, and rebuild the `.sd` after editing the Rust authoring source.
@@ -382,3 +384,54 @@ parameter; pressing the active tab returns to zero. Sampler uses this to switch
 between its normal controls, envelopes and LFO without changing audio parameters.
 
 `Widget::Envelope` provides a theme-aware point editor for cumulative ADSR or bipolar Attack/Decay envelopes; the sampler demonstrates both, with separate numeric readouts.
+
+## Compose a sample source
+
+Run `cargo run -p suhina-device-sdk --example sample_source` from the repository
+root. The example constructs a Sampler source, multiplies its stereo output by
+a graph parameter, binds a generated one-second sine sample off the audio thread,
+and renders timestamped note events. It prints 48000 frames and a nonzero peak.
+See [Sampler](spec/sampler.md#composable-sample-source-first-stage) for the
+source-binding contract. The built-in Sampler remains native code with an SDK panel.
+
+## Trusted native graph effects
+
+Use `NodeKind::NativeEffect { effect }` to wire a trusted host effect into a graph.
+Connect audio to `in`; the four optional `control1` through `control4` inputs carry
+additional stereo signals and default to zero. Prepare with `compile_with_native_at`
+and a host resolver that returns a fresh `NativeNode` prepared for the supplied sample rate.
+The kernel receives five read-only interleaved stereo input buffers and a separate output
+buffer of equal length. It must overwrite output without allocating, locking or doing I/O.
+This host API does not load third-party plug-ins, and ordinary `compile_at` rejects
+unresolved effects. MIDI events and reset use the same lifecycle as native sources.
+
+Registered built-in audio effects resolve automatically when a `.sd` graph is added and
+when track or group chains are prepared. The registry adapter supplies the `in` audio
+signal at the effect defaults; additional control connections are rejected by this
+adapter; named `Node::bind(parent, target)` parameter bindings are supported. Custom Rust hosts can still supply their own input-aware kernels. Unknown ids,
+non-effect devices and effects reporting nonzero latency are rejected before insertion;
+latency compensation between graph paths is not implemented. This never loads plug-in code.
+
+
+## Compose editable samplers
+
+Run from the repository root:
+
+```sh
+cargo run -p suhina-device-sdk --example sampler_composition -- target/sampler-composition
+```
+
+The example writes five `.sd` files and five audible `.wav` renders: loops, reverse, slices,
+granular and tempo. Each definition round-trips and runs with the same deterministic source bound
+as `sample`. `sampler_template` and `granular_template` return editable DeviceGraph values with
+standard parameter panels; their private voices use the same public node catalogue. To use real
+samples, decode them off-thread in your host, make SampleAsset values, insert stable binding names
+into PreparedSamples, and call `compile_with_samples_at`. For registered/custom native effects,
+use `compile_with_samples_and_native_at` with a trusted resolver. A missing binding is an error;
+a prepared graph retains its original resource after replacing the host map. Retire it off-thread.
+The desktop `device.addSd` path does not yet provide a resource-map editor for these compositions.
+
+`NodeInfo::output_type` and the JSON catalogue's `output_types` describe event/resource/signal
+ports identically to validation. Named outputs include per-voice gate/trigger/release, envelope
+completion, read positions and grain overflow. Components store their name, version, child graph,
+parameters and optional panel as data, with independent state for every prepared instance.

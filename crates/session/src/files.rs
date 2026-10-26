@@ -218,7 +218,7 @@ pub(crate) fn add_track(session: &mut Session, params: &Value) -> Result<Value, 
                         .ok_or_else(|| format!("no built-in effect, instrument or plug-in {id:?}"))?;
                     let plugin =
                     env.catalog.find(id).or_else(|| env.catalog.plugins().find(|p| p.spec() == id)).ok_or_else(
-                        || format!("no built-in effect, instrument or plug-in {id:?}; devices.list and plugins.list list them"),
+                        || format!("no built-in effect, instrument or plug-in {id:?}; device.list and plugin.list list them"),
                     )?;
                     Some(if crate::is_instrument(plugin) { Role::Instrument } else { Role::Effect })
                 }
@@ -268,6 +268,11 @@ pub(crate) fn add_track(session: &mut Session, params: &Value) -> Result<Value, 
         }
         if let Some(path) = sd {
             device_params["path"] = json!(path);
+        }
+        if sd.is_some()
+            && let Some(sample) = text(params, "sample")?
+        {
+            device_params["sample"] = json!(sample);
         }
         added = match (device, sd) {
             (_, Some(_)) => crate::devices::add_sd(session, &device_params)?,

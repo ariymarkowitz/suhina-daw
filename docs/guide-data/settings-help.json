@@ -868,51 +868,77 @@
     ]
   },
   "Arrangement/Tracks/new_track_colour": {
-    "sourceFingerprint": "8d2cb6d9efde9d5984130eaa6afd94184f0df991b710c278d321a3061b70e6c8",
-    "summary": "Give new tracks successive palette colors or one fixed palette color.",
-    "description": "The palette is the theme’s set of track colors. This chooses how a new track gets its initial color. Existing tracks retain their stored colors when the preference changes or tracks are reordered. You can still set a track’s color individually.",
+    "sourceFingerprint": "383a4a56f1bfa2e6159503ad9aad0d33587d103879f7341bbc420672f0f5386c",
+    "summary": "Choose whether new track colours follow their type or share one default.",
+    "description": "Sets the initial colour of newly created tracks from the active theme. Existing tracks retain their stored colours when this setting or the theme changes. Change the MIDI and audio defaults in Themes > Edit current theme > Tracks & clips; tracks can also be coloured individually.",
     "options": [
       {
-        "name": "Alternating",
-        "description": "Choose a palette color by the new track’s position. This is the default."
+        "name": "By clip type",
+        "description": "Use the theme MIDI default for MIDI tracks and audio default for audio tracks. This is the default."
       },
       {
-        "name": "Fixed",
-        "description": "Give each new track the palette’s first color."
+        "name": "One colour",
+        "description": "Use the theme MIDI default for all new tracks."
       }
     ],
-    "whenToChange": "Choose Alternating to distinguish adjacent tracks quickly, or Fixed when you prefer assigning your own colors after creation.",
+    "whenToChange": "Use By clip type to distinguish MIDI and audio tracks, or One colour for a uniform starting colour.",
     "references": [
       "crates/ui/src/settings/settings_rows.rs",
-      "crates/ui/src/settings.rs",
+      "crates/ui/src/app.rs",
+      "crates/ui/src/settings/themes.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Arrangement/Tracks/new_clip_colour": {
+    "sourceFingerprint": "1cd2e73ccfc9438982a2e0f0767e55e264f46223206e13f08edec745b0958369",
+    "summary": "Choose whether a new clip takes its track's colour or the theme's clip default.",
+    "description": "Sets the colour a newly made clip starts with: one drawn with a double-click, recorded, or made from a file. Existing clips keep their stored colours when this setting, a track's colour or the theme changes, and copies and pasted clips keep the colour they had. Clips can still be coloured individually.",
+    "options": [
+      {
+        "name": "Track colour",
+        "description": "Give a new clip the colour its track has at that moment. This is the default."
+      },
+      {
+        "name": "Theme default",
+        "description": "Give a new MIDI clip the theme's MIDI clip default and a new audio clip its audio clip default, whatever the track's colour."
+      }
+    ],
+    "whenToChange": "Keep Track colour so clips match the track they are on; choose Theme default when every new clip should start in the theme's MIDI or audio colour.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
       "crates/ui/src/settings/view_settings.rs",
       "crates/ui/src/app.rs",
-      "crates/ui/src/arrangement/arrangement_view.rs",
-      "docs/spec/arrangement-editing.md"
+      "crates/session/src/lib.rs",
+      "docs/spec/theme-skins.md"
     ]
   },
   "Arrangement/Tracks/track_headers": {
     "sourceFingerprint": "836455800937f61a56189fe8d17ea11795f5f4726737b996885673a487dec04b",
-    "summary": "Place Arrangement track names and controls on the left or right of the timeline.",
-    "description": "Track headers contain each track’s name and controls. This moves their column to the selected edge of the Arrangement timeline. It does not reorder tracks, move the browser, or change the Session view’s columns. Browser side is a separate preference.",
+    "summary": "Place Arrangement track names and controls on the left or right of the timeline, or where the theme puts them.",
+    "description": "Track headers contain each track’s name and controls. This moves their column to the chosen edge of the Arrangement timeline. Theme, the default, uses the side the theme in use gives (a theme says it with --suhina-track-headers in its sheet) and the right when it gives none; the headers then move when you change theme. Left and Right are your own choice and stay whatever theme is in use. Moving the headers with the button in the view's corner sets Left or Right. It does not reorder tracks, move the browser, or change the Session view’s columns. Browser side is a separate preference.",
     "options": [
       {
+        "name": "Theme",
+        "description": "Follow the theme in use: its side, or the right when it gives none. This is the default."
+      },
+      {
         "name": "Left",
-        "description": "Show the header column on the left of the Arrangement lanes."
+        "description": "Show the header column on the left of the Arrangement lanes, whatever the theme says."
       },
       {
         "name": "Right",
-        "description": "Show the header column on the right. This is the default."
+        "description": "Show the header column on the right, whatever the theme says."
       }
     ],
-    "whenToChange": "Choose the side that keeps track controls closest to where you usually work on the timeline.",
+    "whenToChange": "Choose Left or Right to keep track controls on the side you usually work on, whatever theme you use; keep Theme to let each theme decide.",
     "references": [
       "crates/ui/src/settings/settings_rows.rs",
       "crates/ui/src/settings.rs",
       "crates/ui/src/settings/view_settings.rs",
       "crates/ui/src/app.rs",
       "crates/ui/src/arrangement/arrangement_view.rs",
-      "docs/spec/arrangement-editing.md"
+      "docs/spec/arrangement-editing.md",
+      "crates/ui/src/kit/style_class.rs"
     ]
   },
   "Arrangement/Tracks/arrangement_returns": {
@@ -965,7 +991,7 @@
   "Session/Mixer/mixer_controls": {
     "sourceFingerprint": "626d8445acd1303f1516666ae2909995e29966d1cf29cdcf1133226ce0e01436",
     "summary": "Show track volume and pan as value fields or knobs.",
-    "description": "Volume sets a track’s level and pan sets its left/right balance. This changes how their controls are drawn, including the Arrangement track headers, without changing the values or sound. Both styles support dragging. Use Ctrl plus the mouse wheel over a value to adjust it instead of scrolling; Ctrl is Cmd on macOS and adding Shift makes the adjustment finer.",
+    "description": "Volume sets a track’s level and pan sets its left/right balance. This changes how their controls are drawn, including the Arrangement track headers, without changing the values or sound. Both styles support dragging. Use Ctrl plus the mouse wheel over a value to adjust it instead of scrolling; Ctrl is Cmd on macOS and adding Shift makes the adjustment finer. In Session, Knob changes pan and compact-volume controls; the tall channel fader remains a fader. A narrow themed pan control shows the dial alone, while a wider control retains the value beside it. A theme can override pan presentation through canonical .pan { --suhina-appearance: knob; } or field. Native or no override preserves this preference.",
     "options": [
       {
         "name": "Field",
@@ -984,7 +1010,9 @@
       "crates/ui/src/app.rs",
       "crates/ui/src/arrangement/arrangement_view.rs",
       "docs/spec/arrangement-editing.md",
-      "crates/ui/src/kit/widgets.rs"
+      "crates/ui/src/kit/widgets.rs",
+      "crates/ui/src/session/mixer_strip.rs",
+      "docs/spec/ui-session-view.md"
     ]
   },
   "ClipEditor/Piano roll/piano_roll_top": {
@@ -1501,18 +1529,27 @@
     ]
   },
   "Theme/Theme/theme": {
-    "sourceFingerprint": "e516b56c81ec152dca39879226b7cfbb3e891000dd35765817c1a2276f974d9c",
-    "summary": "Select a theme and edit or manage its interface colors.",
-    "description": "A theme is a set of interface colors. Click a theme in the list to use it. Colours lists editable swatches with their purpose and color value; changing a built-in theme’s color first makes a personal copy. A personal theme can be renamed using its name field. Duplicate creates an editable copy; Reload reads theme files again; Open folder shows their location; Back up creates a zip of the theme files; Export template creates a starter theme and format instructions. Dropping a theme file or a zip of themes onto Suhina adds it. These controls affect appearance rather than audio or musical project data.",
+    "sourceFingerprint": "97029a5ae55e2fa09b1059f56800a7b0f19cb8637cd00bb0b8aae731b5def9f7",
+    "summary": "Select, edit and package interface themes and their variants, SVG/PNG controls, meters and native layouts.",
+    "description": "Select a preview card to apply a theme immediately. The active theme has a larger preview. Existing tracks and clips keep their stored colours. Edit current theme opens grouped colour controls with opacity for surface colours; changes save live: colours and other settings are saved in a variant of the theme (Custom, made the first time), never in the theme's own file, so a built-in theme needs no copy for them; moving controls or changing artwork of a built-in theme creates a personal copy. A theme with variants shows a row of swatches under its card, the theme's own values first; select a swatch to use that variant. With a variant in use, the name field renames the variant. Theme settings lists the settings a theme declares itself with @property, each with a control for its type (colour, a number in its range, a choice or checked text), saved in the variant in use. Tracks & clips sets the MIDI and audio colours used for future creations. Surface gradients offers independent Panel, Track and Clip overlays, each with a toggle, direction and 2–8 colour/opacity stops. Gradients work without GPU liquid, but reduced effects and high contrast suppress materials. Liquid inherits the global strengths unless Use global liquid settings is turned off to save per-theme overrides; GPU and accessibility restrictions still apply. Save as new theme creates another copy; Reset changes restores the palette captured on entering the editor and its liquid inheritance. Restore built-in offers Save a copy & restore, Restore without a copy, or Cancel restore; existing custom files remain in the library. More provides New variant (starting from the values in use), Duplicate, Reload, Open folder, Back up and Export template. Dropping a theme file or a zip of themes onto Suhina adds it. Interface changes do not alter audio. Select a numbered stop on the shared colour ramp, or drag it to set its position. Only the selected stop shows colour, position and opacity controls. Add selects the new stop; Remove deletes the selected stop while retaining at least two. Direction is separate below. Colour popups have an opaque background for readability. Controls, meters and toolbar adds continuous, segmented, needle and signal-driven artwork-frame meter appearances; the needle display uses existing dBFS measurements, not calibrated analogue VU. Use editable SVG controls installs original vector examples; Restore standard controls removes overrides. Typed SDK device-panel knobs, dials and buttons use the same SVG artwork while retaining labels, readouts and native parameter gestures. Named device-panel/device-control scopes expose semantic classes and scoped palette/text styling. Custom toolbar layout stores order and visibility in the theme. Right-click the top control bar, choose Edit toolbar, drag labelled modules, then Done; the editor also has visibility checkboxes and move arrows. A customized bar scrolls horizontally when narrow. Edit an SVG control accepts self-contained vector markup and reports invalid artwork. Native CSS applies settings and layout written in the earlier form and reports unsupported declarations: settings go to the variant in use and layout to layout.css. Each theme is a folder: theme.css, its style sheet as its author wrote it, which Suhina reads and never rewrites; variants/NAME.json, values for the theme's settings; layout.css, what Suhina's editors set beyond settings (placements, toolbar, artwork, name); and SVG/PNG resources. Settings are custom properties: a core set every theme has (palette tokens, meter, artwork frame rate, liquid, gradients, background strength, Session geometry) and any the theme declares with @property. A built-in theme's variants are kept in a folder of its id without a copy of its CSS. Changes saved outside Suhina appear within a second, and a save over an unread outside edit of a variant file is refused so the file is kept. Themes saved by earlier versions (JSON, or a theme.css that imports advanced.css) are converted once after a read-back check, keeping the originals in the theme's legacy folder; one that does not read without warnings stays as it is. Reset changes also restores the skin captured on entering the editor. Backups hold each theme folder as it is, variants included; the template ZIP holds an editable theme with an example variant, artwork, CSS, layout and background images. The Theme style sheet section explains theme.css, opens the themes folder and lists the sheet's notices; the sheet is edited in a text editor. Suhina's own style engine with Taffy layout reads it. It computes modern scoped colour, font and radius styles, and Flex/Grid positions for toolbar module ids. Workspace panel ids are panel-browser, panel-main and panel-detail under workspace. Authored layout declarations opt into CSS geometry, preserving native visibility; CSS-owned sizes disable the native browser/detail splitters. Removing the layout rules restores native placement and saved sizes. Bars and floating windows remain host-managed. This adapter is experimental: the host controls toolbar height. A retained native scope tree supports child and sibling selectors, named track, clip, slot and scene roles, and hover/active/disabled/focus for connected controls. Changes publish on the following repaint. Connected panels pass authored text colour, font size and radius to ordinary egui widgets while preserving native defaults elsewhere. Connected surfaces paint linear, radial and conic gradients, including repeating forms, with CSS colour interpolation and transparency. Radial/conic gradients resolve authored origins, radii and angles against each surface and use bounded cached spatial textures. Session, Arrangement, clip and piano editors, bars, shared numeric fields and choice fields pass their scoped styles to ordinary egui widgets. CSS transitions and keyframes animate connected paint properties using the native frame clock. Turning off animations or selecting high contrast suppresses CSS motion. Structure changes restart animations; geometry animation and the reduced-motion media feature are not connected. Connected surfaces also paint bounded inset/outset box shadows with offsets, spread, currentColor and approximate Gaussian blur, using cached textures and native clipping. Some raw controls, transforms and filters still need integration. The Theme style sheet section reports source-line notices for known unsupported effects and font declarations; these notices are not a complete CSS validator. Source is bounded to 128 KiB and 64 nested blocks/functions. Styles without toolbar layout declarations preserve the ordinary bar arrangement; customized bars scroll when narrow. These limits appear beside the editor. Conditional styles stay in the theme's sheet; a variant's values apply over them. Toolbar edit mode preserves the real controls and existing native or CSS layout. Its overlay shows an 8 point snap grid. Done saves module offsets to the theme, Cancel or Escape discards the draft, and entering and leaving without changes preserves the layout. Offsets remain relative to native or CSS anchors and are saved as toolbar offset-<module> declarations in layout.css. Missing SVG roles inherit the embedded Suhina default artwork. Reference SVG files and a pristine default ZIP are created under themes/_defaults. Valid edits to reference SVGs are saved as numbered Suhina Default (modified N) themes before restoring the originals; select the new theme in the gallery to use it. Malformed edits within the resource limit are preserved in a recovery ZIP before restoration. Deleted defaults are recreated from the app. Ordinary user theme SVGs remain directly editable. Portable theme ZIPs include inherited artwork and a shared README.md for human and AI authors, covering what, why, how, when, supported customization and limitations. The native centred toolbar exposes the same module ids as custom layouts; paint-only module rules keep native geometry. Transport controls expose control-play, control-stop and control-record ids. Shared native and SDK button SVG bodies respect CSS corner radii and compose with gradient/shadow layers below their glyphs and labels. Shared native text helpers and SDK vector labels render up to four inherited/currentColor text-shadow layers without changing glyph layout or hit targets. Zero blur uses one draw per layer; blur uses a fixed nine-tap weighted approximation, limited to 32 points and offsets of 256 points. Ordinary egui text that bypasses the helper still needs integration. The dark gloss example in a theme package's examples folder supplies original paint-only metallic gradients, rounded SVG-backed buttons and box/text shadows without reflow. Controls are placed by hand with .control-NAME rules for offsets, dimensions, bottom anchoring and volume direction; matching instances share the rule. The visual placement editor (Edit interface) has been removed for now, while layout moves to plain CSS. Session mixer name, colour stripe, pan, volume and meter support independent placement and sizing; Arrangement name, colour, volume, pan and meter are connected too. A horizontal Session fader changes the rail, cap, scale and drag axis together. MIDI/audio icons use replaceable track.midi/track.audio SVG roles. Track name and body artwork may select raw colour and state variants, with up to 32 contiguous SVG/PNG frames at 1-30 fps (skin.artwork-fps); disabling animations freezes frame zero. SDK device controls, labels and panels use device-<control-id> placement names. Their drawing and hit areas move/scale together while parameter ids and commands remain native. Long/non-ASCII ids get stable bounded names. Native project shortcuts are suppressed while placing controls. PNG control artwork preserves authored colours and alpha; each image is limited to 8 MiB compressed, 4096 pixels per axis and 4 million pixels, with a combined inline-artwork budget of 16 MiB. SVG remains self-contained and does not embed images. Frames meter style selects contiguous meter.frame-0 through meter.frame-31 artwork by the louder measured peak over -70 to +6 dBFS, independently of animation settings and artwork fps. Missing or invalid sequences fall back to native continuous bars. Native clip indication, accessible measurements and click-to-reset remain active. Arrangement fold, enable, automation, input/output routing, send navigation and individual return-slot sends are connected too. Individual sends use mixer-send-1 or arrangement-send-1 and subsequent slot numbers, following native return order. Load compact Session geometry under Native CSS supplies theme-owned track/return/scene widths (64-512 points), slot heights (16-64) and header heights (20-64), saved as the --session-* settings. Use auto to remove an override; absent values retain native defaults. Drawing, scrolling and drop/input targets share the new dimensions. Mixer height retains its existing divider and preference. Session and Arrangement remain separate views; this does not add the separately planned mixer view. Mixer bodies and name surfaces consume their own CSS backgrounds and effects. Meter-vertical and meter-horizontal contain meter-level materials whose gradients stay anchored to the full dBFS scale while native peak/RMS extents and opacity reveal the signal; outset shadows glow around the lit region. Empty rails and segment gaps remain empty. Inline PNG artwork does not prevent applying native CSS edits. Full browser/clip/scene, raw-widget and floating-window placement coverage remains in progress. Fader scale labels/ticks can be placed independently using mixer-volume-scale and styled through fader-scale. Their placement does not change parameter gestures. Compact Session CSS stores pan appearance in the theme through .pan { --suhina-appearance: knob; }. Field forces a numerical pan field; native retains the global preference. This override applies to Session and Arrangement and travels in exported CSS. Meter intensity in the theme editor dims measured ink, artwork and glow from 0-100%, saved as the --meter-intensity setting. Clip warnings, native bar rails and audio measurements stay unchanged. Frame images dim as a whole, including any authored background. This is opacity rather than saturation; gradient and palette colours remain independently editable. Advanced meter-level opacity also applies to native bars, hold marks and needles. Transparent CSS fills suppress native fill fallback. Suhina Sheet is a built-in playful spreadsheet-style theme with green chrome, white cells, compact Session geometry and original SVG controls. Duplicate it to edit its CSS, or export it to get its CSS and all 16 SVG roles together. Suhina Meadow supplies classic blue/cream paper controls over an original generated green-hill image. Its embedded wallpaper and effective SVG controls travel in theme exports; the empty workspace reveals the private image through translucent blue/cream glass panels. Meadow enables liquid strengths of 48/24/12 for panels/tracks/clips; actual liquid requires animations and a supported GPU renderer. Adapters without encoded/linear texture-view aliases retain alpha/CSS materials. Suhina Blocks adds original brown plank CSS, stone-like controls and eight colour-keyed pixel track textures, without a landscape or background PNG. Canonical track-column --suhina-track-artwork: on extends track.body behind Session slots. Empty slots preserve artwork while native hover, stop marks and launch/drop commands remain active. Native custom properties inherit from the nearest authored ancestor.",
     "options": [],
-    "whenToChange": "Pick a theme that is comfortable to read, then duplicate it before tailoring colors for your workspace.",
+    "whenToChange": "Choose a comfortable theme and, when it has them, a variant, then use Edit current theme to tailor its colours, gradients, liquid and the settings it offers; those changes are kept in a variant, so the theme itself stays as it came. Save a copy before restoring if you want an additional version of your current work.",
     "references": [
       "crates/ui/src/settings/settings_rows.rs",
       "crates/ui/src/settings.rs",
       "crates/ui/src/settings/settings_view.rs",
       "crates/ui/src/settings/themes.rs",
       "docs/design/brief.md",
-      "docs/design/components.md"
+      "docs/design/components.md",
+      "docs/spec/ui-settings.md",
+      "crates/ui/src/kit/skin.rs",
+      "crates/ui/src/kit/theme_css.rs",
+      "crates/ui/src/settings/skin_editor.rs",
+      "docs/spec/theme-skins.md",
+      "crates/ui/src/kit/native_css.rs",
+      "docs/decisions/0030-native-theme-css.md",
+      "crates/ui/src/kit/theme_vars.rs",
+      "docs/decisions/0031-style-sheets.md"
     ]
   },
   "Shortcuts/Keys/keymap.json": {
@@ -1547,6 +1584,432 @@
       "docs/shortcuts.md"
     ]
   },
+  "Arrangement/Clips/waveform_colour": {
+    "sourceFingerprint": "940e5ead73e92210fd0617211cf77594b0d3d26fa40c4c7cd9d3055464e0f9dd",
+    "summary": "Choose the colour of Arrangement waveforms and note previews.",
+    "description": "Controls the ink used for audio waveforms, MIDI note previews and ARA note overlays in Arrangement. Changes apply immediately to existing clips. Clip names keep their automatic contrast; the sound and project data do not change. Only Theme lets the active theme choose the ink; the other choices override the theme.",
+    "options": [
+      {
+        "name": "Theme",
+        "description": "Use the colour the active theme gives waveforms and notes (its .clip-waveform and .clip-notes colour), and dark ink when the theme gives none. This is the default."
+      },
+      {
+        "name": "Auto",
+        "description": "Choose contrasting light or dark ink from each clip background."
+      },
+      {
+        "name": "Light",
+        "description": "Use the same light ink on every clip."
+      },
+      {
+        "name": "Dark",
+        "description": "Use the same dark ink on every clip."
+      },
+      {
+        "name": "Custom",
+        "description": "Use Custom waveform and note colour; selecting this reveals its picker."
+      }
+    ],
+    "whenToChange": "Keep Theme to see waveforms and notes as the theme designed them; use Auto for contrasting ink on differently coloured clips, or select one ink colour of your own.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/view_settings.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md",
+      "docs/spec/theme-skins.md"
+    ]
+  },
+  "Arrangement/Clips/waveform_custom_colour": {
+    "sourceFingerprint": "b9c6278afa632a490c7593be4a1629a7a29954c0e55551e7d05f6a33edc026cf",
+    "summary": "Choose the custom ink for waveforms and note previews.",
+    "description": "This opaque colour picker appears when Waveform and note colour is Custom. Choose an RGB colour with the picker; the hexadecimal value is displayed beside it. Changes apply immediately to Arrangement waveforms, MIDI previews and ARA notes. The saved colour has no effect in Auto, Light or Dark mode.",
+    "options": [],
+    "whenToChange": "Select Custom first, then choose ink that is readable against your clip backgrounds.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/view_settings.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Clips/audio_clip_colour_strength": {
+    "sourceFingerprint": "3cb754e1123db5e2c0e8b993aa654a93f3d65de81f8a4134a4c5d21b4e7bf579",
+    "summary": "Adjust how strongly audio clips show their assigned colour.",
+    "description": "A 0–100% slider mixes the theme surface with the audio clip colour: 0% uses the surface and 100% uses the full assigned colour. The default is 82%. Existing audio clip fills update immediately without changing their stored colours, MIDI clip strength or audio.",
+    "options": [],
+    "whenToChange": "Lower this for softer audio clip fills, or raise it to make their colours more prominent.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/view_settings.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Tracks/track_header_colour_strength": {
+    "sourceFingerprint": "cc22790241cbb3d51545e4b17b10aa9c2b239de84e67089ec4409cf0ce6aa310",
+    "summary": "Adjust how strongly track headers show their assigned colour.",
+    "description": "A 0–100% slider mixes the theme surface with each track header colour. At 0% the surface dominates; at 100% the full assigned colour is used. The default is 82%. Changes apply immediately without recolouring stored tracks or changing clip strength.",
+    "options": [],
+    "whenToChange": "Lower this to soften headers, or raise it to make tracks easier to distinguish.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/view_settings.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Track sizes/arrangement_track_size": {
+    "sourceFingerprint": "717640224f18489ae4f20f8ffe8b47d60642f9c3718e1499a5806d8d1796c54f",
+    "summary": "Choose the default Arrangement height for ordinary tracks.",
+    "description": "Applies the selected named height immediately to all ordinary tracks, replacing their previous manual height overrides. Newly created rows of this kind use it too. Heights of return tracks stay unchanged. Customize the named heights with the height controls below; this changes the view rather than project data or undo history.",
+    "options": [
+      {
+        "name": "Tiny",
+        "description": "The smallest named row, initially 14 pixels."
+      },
+      {
+        "name": "Compact",
+        "description": "A compact row, initially 20 pixels; the default for returns."
+      },
+      {
+        "name": "Small",
+        "description": "A small row, initially 40 pixels; the default for ordinary tracks."
+      },
+      {
+        "name": "Medium",
+        "description": "A medium row, initially 64 pixels."
+      },
+      {
+        "name": "Large",
+        "description": "The largest named row, initially 104 pixels."
+      }
+    ],
+    "whenToChange": "Choose a smaller size to fit more rows, or a larger size for clearer clip detail.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/track_sizes.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Track sizes/arrangement_return_size": {
+    "sourceFingerprint": "d1bee0e3f43681e39570e752e22ec4027a2c9c35b36984953f724c369ec936c2",
+    "summary": "Choose the default Arrangement height for return tracks.",
+    "description": "Applies the selected named height immediately to all return tracks, replacing their previous manual height overrides. Newly created rows of this kind use it too. Heights of ordinary tracks stay unchanged. Customize the named heights with the height controls below; this changes the view rather than project data or undo history.",
+    "options": [
+      {
+        "name": "Tiny",
+        "description": "The smallest named row, initially 14 pixels."
+      },
+      {
+        "name": "Compact",
+        "description": "A compact row, initially 20 pixels; the default for returns."
+      },
+      {
+        "name": "Small",
+        "description": "A small row, initially 40 pixels; the default for ordinary tracks."
+      },
+      {
+        "name": "Medium",
+        "description": "A medium row, initially 64 pixels."
+      },
+      {
+        "name": "Large",
+        "description": "The largest named row, initially 104 pixels."
+      }
+    ],
+    "whenToChange": "Choose a smaller size to fit more rows, or a larger size for clearer clip detail.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/track_sizes.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Track sizes/arrangement_sizes_advanced": {
+    "sourceFingerprint": "916762583074faa5bb35f6361c0da54c30343990fc5d00d2e5c796a4101c985e",
+    "summary": "Show exact pixel heights for the named track sizes.",
+    "description": "Off shows sliders without numeric units for the five named heights. On replaces them with editable pixel fields. Both modes enforce the same ordering and bounds; switching modes does not reset heights.",
+    "options": [
+      {
+        "name": "Off",
+        "description": "Tune heights using sliders without showing pixels. This is the default."
+      },
+      {
+        "name": "On",
+        "description": "Edit each named height directly in pixels."
+      }
+    ],
+    "whenToChange": "Turn this on when you want to enter exact heights.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/track_sizes.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Track sizes/arrangement_size_heights": {
+    "sourceFingerprint": "f2aba39c10102eaf404f7ff07079cf71c8063b0f517e3194ab749de09f84f1a3",
+    "summary": "Customize the Tiny Arrangement row height.",
+    "description": "The initial Tiny height is 14 pixels. Its control keeps it at least 14 pixels and below Compact. Advanced track sizes shows an exact pixel field; otherwise use the slider. Changes update matching named row heights immediately and preserve manually sized rows that do not match a named height. The five heights are saved together.",
+    "options": [],
+    "whenToChange": "Adjust this when the named size is useful but you want a different amount of vertical space.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/track_sizes.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Track sizes/Compact height": {
+    "sourceFingerprint": "bc72002b85c58592db4b47a39dccd8e5f219038e13a8de5b21cef5eee831d8ba",
+    "summary": "Customize the Compact Arrangement row height.",
+    "description": "The initial Compact height is 20 pixels. Its control keeps it above Tiny and below Small. Advanced track sizes shows an exact pixel field; otherwise use the slider. Changes update matching named row heights immediately and preserve manually sized rows that do not match a named height. The five heights are saved together.",
+    "options": [],
+    "whenToChange": "Adjust this when the named size is useful but you want a different amount of vertical space.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/track_sizes.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Track sizes/Small height": {
+    "sourceFingerprint": "8abcee97af25cb1ef2206cbaf4023cc88829a8de52c9d41f9c086b1177ce4c96",
+    "summary": "Customize the Small Arrangement row height.",
+    "description": "The initial Small height is 40 pixels. Its control keeps it above Compact and below Medium. Advanced track sizes shows an exact pixel field; otherwise use the slider. Changes update matching named row heights immediately and preserve manually sized rows that do not match a named height. The five heights are saved together.",
+    "options": [],
+    "whenToChange": "Adjust this when the named size is useful but you want a different amount of vertical space.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/track_sizes.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Track sizes/Medium height": {
+    "sourceFingerprint": "1d8d31528e43003fd6e50da1f42cfde7549d516ce3cc45536416eed7663a6c8c",
+    "summary": "Customize the Medium Arrangement row height.",
+    "description": "The initial Medium height is 64 pixels. Its control keeps it above Small and below Large. Advanced track sizes shows an exact pixel field; otherwise use the slider. Changes update matching named row heights immediately and preserve manually sized rows that do not match a named height. The five heights are saved together.",
+    "options": [],
+    "whenToChange": "Adjust this when the named size is useful but you want a different amount of vertical space.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/track_sizes.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Arrangement/Track sizes/Large height": {
+    "sourceFingerprint": "c7cdce4e070c629f65297475e2195f54b474ea57f31cc1c0c9859b4a8e59990f",
+    "summary": "Customize the Large Arrangement row height.",
+    "description": "The initial Large height is 104 pixels. Its control keeps it above Medium and at most 400 pixels. Advanced track sizes shows an exact pixel field; otherwise use the slider. Changes update matching named row heights immediately and preserve manually sized rows that do not match a named height. The five heights are saved together.",
+    "options": [],
+    "whenToChange": "Adjust this when the named size is useful but you want a different amount of vertical space.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/track_sizes.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "docs/spec/arrangement-editing.md"
+    ]
+  },
+  "Appearance/Liquid (experimental)/liquid_panel_strength": {
+    "sourceFingerprint": "df96bf57b722303c2540782940662b9338374d32e518ed9682958b1b260c394c",
+    "summary": "Set the global panel liquid strength.",
+    "description": "Controls the transparency and edge refraction of the Settings backdrop through the theme tint. A detached Settings window keeps a solid background. This experimental 0–100% slider defaults to 0%, which disables the material. It requires the GPU renderer and Animations on; a high-contrast theme suppresses it. Switching from OpenGL to GPU requires an app restart. A theme with its own liquid overrides uses those values instead; enable Use global liquid settings in its editor to use these sliders. Changes apply live and do not affect audio. Strength controls remain editable without the GPU renderer; values are saved for later. The material itself requires GPU rendering and Animations; switch renderer and restart to see it. These global sliders are disabled while the current theme supplies liquid overrides. Enable Use global liquid settings in the theme editor to edit and apply them again.",
+    "options": [],
+    "whenToChange": "Increase this to preview a translucent Settings surface. Keep 0% for a flat surface.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "crates/ui/src/kit/liquid.rs",
+      "docs/spec/ui-settings.md",
+      "docs/design/glass-rendering.md"
+    ]
+  },
+  "Appearance/Liquid (experimental)/liquid_track_strength": {
+    "sourceFingerprint": "c7edd51b686a09733fa1ef2b588d87f3a9be5aea74c676b02e19e0cf7149c284",
+    "summary": "Set the global track liquid strength.",
+    "description": "Controls reflections and edge refraction on MIDI and audio track headers. Track labels and controls are painted sharply afterward. This experimental 0–100% slider defaults to 0%, which disables the material. It requires the GPU renderer and Animations on; a high-contrast theme suppresses it. Switching from OpenGL to GPU requires an app restart. A theme with its own liquid overrides uses those values instead; enable Use global liquid settings in its editor to use these sliders. Changes apply live and do not affect audio. Strength controls remain editable without the GPU renderer; values are saved for later. The material itself requires GPU rendering and Animations; switch renderer and restart to see it. These global sliders are disabled while the current theme supplies liquid overrides. Enable Use global liquid settings in the theme editor to edit and apply them again.",
+    "options": [],
+    "whenToChange": "Increase this to add a reflective coating to track headers. Keep 0% for a flat surface.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "crates/ui/src/kit/liquid.rs",
+      "docs/spec/ui-settings.md",
+      "docs/design/glass-rendering.md"
+    ]
+  },
+  "Appearance/Liquid (experimental)/liquid_clip_strength": {
+    "sourceFingerprint": "9058ef0b5cfa46c0200f80c00e601abeddacbbda69503fe8a24c07362f777d0b",
+    "summary": "Set the global clip liquid strength.",
+    "description": "Controls reflections and edge refraction on clip bodies. Notes, waveforms and labels are painted sharply afterward. This experimental 0–100% slider defaults to 0%, which disables the material. It requires the GPU renderer and Animations on; a high-contrast theme suppresses it. Switching from OpenGL to GPU requires an app restart. A theme with its own liquid overrides uses those values instead; enable Use global liquid settings in its editor to use these sliders. Changes apply live and do not affect audio. Strength controls remain editable without the GPU renderer; values are saved for later. The material itself requires GPU rendering and Animations; switch renderer and restart to see it. These global sliders are disabled while the current theme supplies liquid overrides. Enable Use global liquid settings in the theme editor to edit and apply them again. Clip reflections and rims use a gentler optical range than panels to keep dense arrangements readable, including at 100 percent.",
+    "options": [],
+    "whenToChange": "Increase this to add a reflective coating to clips. Keep 0% for a flat surface.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings/settings_view.rs",
+      "crates/ui/src/kit/liquid.rs",
+      "docs/spec/ui-settings.md",
+      "docs/design/glass-rendering.md"
+    ]
+  },
+  "Arrangement/Pasting/replace_clip": {
+    "sourceFingerprint": "87531b7ddf069b2f2000f2a957f0e8b71945ac8c68a7868d28d57d4d3c9caadb",
+    "description": "When enabled, pasting with one arrangement clip selected removes that destination and places the clipboard clips at its start. Off pastes after the selected clip. Clicking empty arrangement space chooses that track and beat instead. Undo restores the replaced clip.",
+    "whenToChange": "Enable when replacing phrases in place; leave off to append after a selected clip.",
+    "options": [
+      {
+        "name": "Off",
+        "description": "Paste after the selected clip."
+      },
+      {
+        "name": "On",
+        "description": "Replace the selected destination at its start."
+      }
+    ],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Appearance/Background/background_image": {
+    "sourceFingerprint": "37fdef83b1d8ad95be653aaa87d53ea35171ee01364be50a33cd91bf3b7a67a9",
+    "description": "Choose a user-owned PNG or type its path. Clear the field to remove it and restore desktop transparency where the GPU host supports it. While displayed, surfaces blend over the image even on transparent hosts. The image is drawn over an opaque fill, so the desktop does not show through it, and nothing is captured from the screen. Images are decoded away from the UI thread, limited to 32 MiB and 8192 pixels per axis, and displayed at up to 1600 pixels per axis. High Contrast suppresses the image. If loading fails, repair the PNG and choose it again with Browse to retry; failures are not retried continuously.",
+    "whenToChange": "Choose an image when you want a private decorative backdrop behind neutral panels.",
+    "options": [],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Appearance/Background/background_tint": {
+    "sourceFingerprint": "c3d42417d2389b0c19dc7d63bc3468a577f8e716c7d75f479ff8ceeecf40d63b",
+    "description": "Set neutral main-window surface opacity over the selected background image, from 0 to 100 percent. At 100 percent opaque theme surfaces cover the image; lower values reveal the selected image rather than the desktop, including on transparent GPU hosts. Settings uses its original theme surface with Panel liquid independently. Text, controls, track and clip colours are unchanged. Has no effect without a loaded image.",
+    "whenToChange": "Increase for stronger separation and readability, or decrease to reveal more of your image.",
+    "options": [],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Appearance/Background/background_blur": {
+    "sourceFingerprint": "46d40d4788a13c70f2c73e35e80ac483697a4ce4864fe305151c15b60bc0db41",
+    "description": "Blur the selected image by 0 to 40 logical display pixels. The source is decoded once and cached; filtering runs in one background worker and obsolete results are discarded. Liquid captures release obsolete GPU texture registrations rather than retaining earlier background versions. Zero bypasses blur. It never samples the desktop. Has no effect without a loaded image.",
+    "whenToChange": "Increase when background details distract from text and controls.",
+    "options": [],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Appearance/Menu bar/menu_bar": {
+    "sourceFingerprint": "e894f56c19f517c2a8fa958d55ec1e00aae4a095b67743bc8acff78b9505ab3b",
+    "description": "Shows File, Edit, View, Projects, Options and Help at the top of the window. On macOS the menu bar at the top of the screen has the same menus and items, so the window's own bar is off by default there; on Windows and Linux it is the only menu bar and is on by default. Keys work either way.",
+    "whenToChange": "Turn it on in macOS to keep the menus beside the window; turn it off on Windows or Linux only if you use keys for everything.",
+    "options": [
+      {
+        "name": "Off",
+        "description": "No menu bar in the window."
+      },
+      {
+        "name": "On",
+        "description": "The menu bar shows under the title bar."
+      }
+    ],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "crates/ui/src/app/menus.rs",
+      "apps/suhina/src/mac_menu.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Appearance/Application bar/app_name_centered": {
+    "sourceFingerprint": "2b2b70626478e0673196c8faf63662e552b926ccfe67ad052b4a88b88b882c09",
+    "description": "Place the always-visible Suhina name at the left or centre of the application bar. Project fields have their own position; fields sharing a position appear together. Long project names are clipped before they overlap controls. The bar shows on Windows only, where it is the window's title bar; Linux and macOS keep the system's title bar.",
+    "whenToChange": "Choose the location you find easiest to identify when switching windows.",
+    "options": [
+      {
+        "name": "Left",
+        "description": "Show Suhina on the left."
+      },
+      {
+        "name": "Centre",
+        "description": "Show Suhina in the centre."
+      }
+    ],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Appearance/Application bar/bar_project_name": {
+    "sourceFingerprint": "003c64294aad7b15d786b805eeb2663876544e6c47ffd27b81758dfae406bf03",
+    "description": "Show the active project name and its unsaved marker in the application bar. This affects only the optional project information; Suhina remains visible.",
+    "whenToChange": "Enable when working with multiple projects or disable for a quieter bar.",
+    "options": [
+      {
+        "name": "Off",
+        "description": "Hide the project name."
+      },
+      {
+        "name": "On",
+        "description": "Show the project name and unsaved marker."
+      }
+    ],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Appearance/Application bar/bar_project_timing": {
+    "sourceFingerprint": "8fed4a07ee774c4258a053dc5b36ca121180223fa493f05c758918d0861f5332",
+    "description": "Show the active project tempo in beats per minute and its time signature in the application bar. The fields use Project information position and are omitted when no project is open.",
+    "whenToChange": "Enable for a compact timing reference alongside the project name.",
+    "options": [
+      {
+        "name": "Off",
+        "description": "Hide project timing."
+      },
+      {
+        "name": "On",
+        "description": "Show tempo and time signature."
+      }
+    ],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
+  "Appearance/Application bar/bar_project_centered": {
+    "sourceFingerprint": "b851f1fbf4c5f277d0fdecb1a3c7d0430a1a58d2257842ef7c218a6991a87ac8",
+    "description": "Place enabled project fields at the left or centre, independently of the application name. Fields placed together share a single group and long names are clipped inside it.",
+    "whenToChange": "Choose Centre to separate project information from a left-aligned Suhina name.",
+    "options": [
+      {
+        "name": "Left",
+        "description": "Show project fields on the left."
+      },
+      {
+        "name": "Centre",
+        "description": "Show project fields in the centre."
+      }
+    ],
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/app.rs",
+      "docs/spec/ui-settings.md"
+    ]
+  },
   "Export/MCP write permissions/mcp_project_folder": {
     "sourceFingerprint": "30c921230b0703d21dfd0b270f2a1d20be0509af39997d58f693e0edde8b9e3a",
     "description": "Allow attached agents to write in the folder of the project they act on, including its subfolders. This is on by default. Turn it off to require an explicitly added folder for writes. An unsaved project has no project folder. This does not restrict exports you choose yourself in File > Export.",
@@ -1578,6 +2041,34 @@
       "crates/ui/src/settings.rs",
       "crates/automation/src/workspace.rs",
       "crates/automation/src/server.rs"
+    ]
+  },
+  "Theme/Folder/themes_folder": {
+    "sourceFingerprint": "3d6f208565c8cbb83a69e607f97a5e59107557bd98d0061b8b427b96ee805209",
+    "summary": "Choose the folder Suhina keeps its themes in and reads them from.",
+    "description": "Every theme you make, duplicate or bring in is a folder inside this one, and Suhina watches it, so a theme edited in another program changes the window within about a second. Choose another folder with Browse, or go back to the default (the themes folder in Suhina's data) with Reset; the path is not typed, so it cannot change by accident. Before anything changes Suhina asks whether to move your themes there. If you agree, it makes a backup of the current themes folder beside it (named with the date and time), moves the themes into the new folder (files the new folder has already are kept) and reads them from there at once. Inside the folder, a theme's own folder may be a link (a symbolic link, or a junction on Windows) to a folder elsewhere. The SUHINA_THEMES environment variable, when it is set, wins over this setting.",
+    "options": [],
+    "whenToChange": "Change this when you want to edit themes in a folder another program can reach, such as one in Documents. Apps installed from the Microsoft Store may only see their own copy of the app data folder, so a folder outside it lets them edit your themes. It also helps when you keep themes on another drive or share one folder between test builds.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings.rs",
+      "crates/ui/src/app.rs::themes_folder",
+      "apps/suhina/src/main.rs::sync_themes",
+      "docs/spec/theme-skins.md"
+    ]
+  },
+  "General/Projects/Settings folder": {
+    "sourceFingerprint": "a7b708a738cef54333720953893d60e9d9d5d2423dff0d7bc1793a3449d3084c",
+    "summary": "Choose the folder Suhina keeps its settings, keys, recent projects and themes in.",
+    "description": "Suhina keeps its settings, its keyboard shortcuts, the list of recent projects and the themes folder in its data folder. Choose another folder with Browse, or go back to the default (Suhina's folder of your app data) with Reset; the path is not typed, so it cannot change by accident. Before anything changes Suhina asks whether to move these files there. If you agree, it makes a backup of them beside the current folder (named with the date and time), moves them into the new folder (files the new folder has already are kept) and uses it at once; a small file in the default folder remembers where it is for the next start. Projects, samples and plug-ins are not moved. Starting Suhina with --data-dir <folder> or the SUHINA_DATA environment variable wins over this setting.",
+    "options": [],
+    "whenToChange": "Change this to keep Suhina's settings and themes where another program can reach them, such as in Documents (apps installed from the Microsoft Store may only see their own copy of the app data folder), on another drive, or in a folder you back up or sync.",
+    "references": [
+      "crates/ui/src/settings/settings_rows.rs",
+      "crates/ui/src/settings.rs",
+      "apps/suhina/src/data_folder.rs",
+      "apps/suhina/src/main.rs::move_data_folder",
+      "docs/spec/ui-settings.md"
     ]
   }
 }

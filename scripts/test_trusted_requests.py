@@ -179,8 +179,16 @@ class TrustedRequests(unittest.TestCase):
     def test_build_binds_head(self):
         request = {'command':'test-build','actor':'Trusted','comment':12,'number':4,'sha':'a'*40}
         result = self.act(request=request)
-        self.assertEqual([c['name'] for c in result['calls']], ['comment','removeLabel','addLabels','comment'])
-        self.assertIn('<!-- trusted-build '+ 'a'*40, result['calls'][0]['args']['body'])
+        self.assertEqual([c['name'] for c in result['calls']], ['comment','removeLabel','addLabels'])
+        reply = result['calls'][0]['args']['body']
+        self.assertIn('On behalf of @Trusted', reply)
+        self.assertIn('<!-- trusted-request 12 -->', reply)
+        self.assertTrue(reply.endswith('<!-- trusted-build '+ 'a'*40 +' Trusted 12 -->'))
+        # A rerun: the reply exists, so no second one; the label goes on only when it is missing.
+        posted = {'body': reply}
+        self.assertEqual(self.act(request=request,comments=[posted],pr={'labels':[{'name':'test-build'}]})['calls'], [])
+        self.assertEqual([c['name'] for c in self.act(request=request,comments=[posted])['calls']],
+                         ['removeLabel','addLabels'])
         self.assertEqual(self.act(request=request,head='b'*40)['calls'], [])
         self.assertEqual(self.act(request=request,pr={'state':'closed'})['calls'], [])
         old = {'body':'<!-- trusted-build '+ 'b'*40 +' Trusted 12 -->'}

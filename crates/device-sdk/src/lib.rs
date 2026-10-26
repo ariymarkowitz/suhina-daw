@@ -4,8 +4,9 @@
 //! Build, validate, save, and run data-only Suhina device graphs (`.sd`).
 //!
 //! Version 4 separates device revisions from the file format version; version 5 adds an
-//! optional expanded panel. A validated graph compiles off the audio thread into a processor
-//! whose `process` method performs no allocation. File versions 1 through 5 remain readable.
+//! optional expanded panel; version 6 a panel style sheet. A validated graph compiles off the
+//! audio thread into a processor whose `process` method performs no allocation. File versions
+//! 1 through 6 remain readable.
 
 use std::fmt;
 use std::io::Read;
@@ -18,22 +19,29 @@ pub mod builtin;
 pub mod editor;
 mod graph;
 mod midi;
+mod modulation;
+pub mod native_node;
 mod nodes;
 mod runtime;
+pub mod sample_resource;
 pub mod sampler;
 pub mod ui;
 pub use midi::PreparedMidiEffect;
-pub use nodes::{FilterMode, NODE_CATALOG, NodeInfo, NodeKind, PortInfo, Waveform, node_reference_markdown};
+pub use nodes::granular::{grain_template, template as granular_template};
+pub use nodes::templates::sampler_template;
+pub use nodes::{
+    FilterMode, NODE_CATALOG, NodeInfo, NodeKind, PortInfo, SampleInfoField, Waveform, node_reference_markdown,
+};
 pub use runtime::PreparedEffect;
 pub use suhina_device_api::ProcessContext;
 
 pub const EXTENSION: &str = "sd";
 pub const FORMAT: &str = "suhina-device";
-/// The newest file version this crate reads. A file is written as version 4 unless it needs
-/// version 5 (an expanded panel), so an older Suhina still opens it.
-pub const VERSION: u32 = 5;
-/// The version a file without an expanded panel is written as.
-const COMPACT_VERSION: u32 = 4;
+/// The version every file is written as, and the newest this crate reads. It rises with every
+/// change to what a file holds, so an older Suhina refuses a newer file rather than dropping
+/// what it does not know (ADR 0010 › Amendment: format versions, `docs/spec/sd-device-format.md`
+/// › Versions). Files of every earlier version are still read. Version 6 adds a panel's style sheet.
+pub const VERSION: u32 = 6;
 pub const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_NODES: usize = 128;
 pub const MAX_CONNECTIONS: usize = MAX_NODES * 5;
@@ -200,9 +208,17 @@ fn default_smoothing_ms() -> f64 {
     20.0
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParameterBinding {
+    pub parameter: String,
+    pub target: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub id: String,
+    pub bindings: Vec<ParameterBinding>,
     pub kind: NodeKind,
     pub visible: bool,
 }
@@ -417,6 +433,9 @@ impl DeviceGraph {
         if file.version < 5 && file.device.expanded.is_some() {
             return Err(DeviceSdkError("an expanded panel requires .sd version 5".into()));
         }
+        if file.version < 6 && file.device.ui.iter().chain(file.device.expanded.iter()).any(|ui| ui.style.is_some()) {
+            return Err(DeviceSdkError("a panel style sheet requires .sd version 6".into()));
+        }
         if file.version == 1
             && (file
                 .nodes
@@ -547,17 +566,27 @@ impl Parameter {
 }
 
 impl Node {
+    pub fn bind(mut self, parameter: impl Into<String>, target: impl Into<String>) -> Self {
+        self.bindings.push(ParameterBinding { parameter: parameter.into(), target: target.into() });
+        self
+    }
+
     pub fn new(id: impl Into<String>, kind: NodeKind) -> Self {
-        Self { id: id.into(), kind, visible: true }
+        Self { id: id.into(), kind, visible: true, bindings: Vec::new() }
     }
     pub fn audio_input(id: impl Into<String>) -> Self {
-        Self { id: id.into(), kind: NodeKind::AudioInput, visible: true }
+        Self { id: id.into(), kind: NodeKind::AudioInput, visible: true, bindings: Vec::new() }
     }
     pub fn gain(id: impl Into<String>, parameter: impl Into<String>) -> Self {
-        Self { id: id.into(), kind: NodeKind::Gain { parameter: parameter.into() }, visible: true }
+        Self {
+            id: id.into(),
+            kind: NodeKind::Gain { parameter: parameter.into() },
+            visible: true,
+            bindings: Vec::new(),
+        }
     }
     pub fn audio_output(id: impl Into<String>) -> Self {
-        Self { id: id.into(), kind: NodeKind::AudioOutput, visible: true }
+        Self { id: id.into(), kind: NodeKind::AudioOutput, visible: true, bindings: Vec::new() }
     }
 }
 
@@ -626,6 +655,8 @@ struct ParameterV1 {
 #[derive(Serialize, Deserialize)]
 struct NodeV1 {
     id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bindings: Vec<ParameterBinding>,
     #[serde(default = "default_visible", skip_serializing_if = "is_visible")]
     visible: bool,
     #[serde(flatten)]
@@ -645,11 +676,16 @@ impl From<&DeviceGraph> for FileV1 {
         let nodes = graph
             .nodes
             .iter()
-            .map(|node| NodeV1 { id: node.id.clone(), visible: node.visible, kind: node.kind.clone() })
+            .map(|node| NodeV1 {
+                id: node.id.clone(),
+                visible: node.visible,
+                kind: node.kind.clone(),
+                bindings: node.bindings.clone(),
+            })
             .collect();
         Self {
             format: FORMAT.into(),
-            version: if graph.expanded.is_some() { VERSION } else { COMPACT_VERSION },
+            version: VERSION,
             device: DeviceV1 {
                 ui: graph.ui.clone(),
                 expanded: graph.expanded.clone(),
@@ -711,7 +747,7 @@ impl From<FileV1> for DeviceGraph {
             nodes: file
                 .nodes
                 .into_iter()
-                .map(|node| Node { id: node.id, visible: node.visible, kind: node.kind })
+                .map(|node| Node { id: node.id, visible: node.visible, kind: node.kind, bindings: node.bindings })
                 .collect(),
             connections: file.connections,
         }
@@ -846,22 +882,41 @@ mod tests {
         assert_eq!(old.device_version, 1);
         let encoded = old.to_sd().expect("legacy graph upgrades to current format");
         let json: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
-        assert_eq!(json["version"], 4, "a file without an expanded panel stays version 4");
+        assert_eq!(json["version"], VERSION, "every file is written as the current version");
         assert_eq!(json["device"]["version"], 1);
         assert_eq!(DeviceGraph::from_sd(&encoded), Ok(old));
     }
 
     #[test]
-    fn an_expanded_panel_round_trips_as_version_5_and_older_versions_refuse_it() {
+    fn a_panel_style_sheet_round_trips_as_version_6_and_older_versions_refuse_it() {
+        let mut graph = gain_graph();
+        let style = "#gain { color: #ff8800; }\n";
+        graph.ui = Some(ui::DeviceUi { style: Some(style.into()), ..ui::DeviceUi::default() });
+        let encoded = graph.to_sd().unwrap();
+        let json: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(json["version"], 6);
+        assert_eq!(json["device"]["ui"]["style"], style);
+        assert_eq!(DeviceGraph::from_sd(&encoded), Ok(graph.clone()));
+        assert!(DeviceGraph::from_sd(&encoded.replace("\"version\": 6", "\"version\": 5")).is_err());
+        // Without a style sheet the file stays version 4, and the key is not written.
+        let plain = gain_graph().to_sd().unwrap();
+        assert!(!plain.contains("\"style\""));
+        let mut huge = graph;
+        huge.ui = Some(ui::DeviceUi { style: Some("a".repeat(ui::MAX_STYLE_BYTES + 1)), ..ui::DeviceUi::default() });
+        assert!(huge.validate().is_err());
+    }
+
+    #[test]
+    fn an_expanded_panel_round_trips_and_older_versions_refuse_it() {
         let mut graph = gain_graph();
         graph.ui = Some(ui::DeviceUi { size: [260., 168.], ..ui::DeviceUi::default() });
         graph.expanded = Some(ui::DeviceUi { size: [720., 400.], ..ui::DeviceUi::default() });
         let encoded = graph.to_sd().unwrap();
         let json: serde_json::Value = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(json["version"], 5);
+        assert_eq!(json["version"], VERSION);
         assert_eq!(json["device"]["expanded"]["size"], serde_json::json!([720.0, 400.0]));
         assert_eq!(DeviceGraph::from_sd(&encoded), Ok(graph.clone()));
-        assert!(DeviceGraph::from_sd(&encoded.replace("\"version\": 5", "\"version\": 4")).is_err());
+        assert!(DeviceGraph::from_sd(&encoded.replace("\"version\": 6", "\"version\": 4")).is_err());
         // The expanded panel is checked against the parameters like the compact one.
         let mut bad = graph;
         bad.expanded = Some(ui::DeviceUi { hidden_parameters: vec!["missing".into()], ..ui::DeviceUi::default() });

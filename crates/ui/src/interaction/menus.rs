@@ -160,6 +160,10 @@ pub fn midi_monitor_explanation(monitor: Monitor) -> &'static str {
 
 /// Input monitoring is independent of record arm and headphone cue.
 pub fn midi_monitor_choices(ui: &mut Ui, track: TrackId, monitor: Monitor, actions: &mut Vec<Action>) {
+    // `.popup` styles the menu, `button:checked` its chosen row.
+    let _style = crate::kit::style_class::enter("popup");
+    let mut styled_ui = crate::kit::style_class::ui(ui);
+    let ui = &mut *styled_ui;
     ui.set_min_width(280.0);
     ui.set_max_width(280.0);
     ui.label(egui::RichText::new("Hear your MIDI keyboard").strong());
@@ -194,6 +198,9 @@ pub fn midi_monitor_choices(ui: &mut Ui, track: TrackId, monitor: Monitor, actio
 /// chosen, if it is not there now), none; then every channel or one. A pick runs
 /// `track.setMidiInput`.
 pub fn midi_input_choices(ui: &mut Ui, track: TrackId, input: &MidiInput, ports: &[String], actions: &mut Vec<Action>) {
+    let _style = crate::kit::style_class::enter("popup");
+    let mut styled_ui = crate::kit::style_class::ui(ui);
+    let ui = &mut *styled_ui;
     let text = |t: &str| egui::RichText::new(t).font(theme::ui_font(theme::TEXT_SMALL));
     let mut pick = |ui: &mut Ui, label: &str, on: bool, params: serde_json::Value| {
         if ui.selectable_label(on, text(label)).clicked() && !on {
@@ -240,7 +247,10 @@ pub fn track_menu(ui: &mut Ui, menu: &TrackMenu<'_>, actions: &mut Vec<Action>) 
     // Name: edited in place, applied with Enter.
     let id = Id::new(("rename", track));
     let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| menu.name.to_string());
-    let response = ui.add(egui::TextEdit::singleline(&mut text).hint_text("Name").desired_width(200.0));
+    let response = crate::kit::widgets::text_input(
+        ui,
+        egui::TextEdit::singleline(&mut text).hint_text("Name").desired_width(200.0),
+    );
     if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
         let name = text.trim();
         if !name.is_empty() && name != menu.name {
@@ -409,7 +419,8 @@ pub fn clip_menu(
     } else if let [(_, clip)] = clips {
         let id = Id::new(("clip-rename", clip.0));
         let mut draft: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| name.to_string());
-        let field = ui.add(egui::TextEdit::singleline(&mut draft).id(id).desired_width(140.0));
+        let field =
+            crate::kit::widgets::text_input(ui, egui::TextEdit::singleline(&mut draft).id(id).desired_width(140.0));
         ui.ctx().data_mut(|d| d.insert_temp(id, draft.clone()));
         field.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("Rename clip {}", name))
@@ -509,7 +520,10 @@ pub fn scene_menu(ui: &mut Ui, menu: &SceneMenu<'_>, actions: &mut Vec<Action>) 
     for (key, current, hint) in fields {
         let id = Id::new(("scene-field", key, scene));
         let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| current.clone());
-        let response = ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint).desired_width(f32::INFINITY));
+        let response = crate::kit::widgets::text_input(
+            ui,
+            egui::TextEdit::singleline(&mut text).hint_text(hint).desired_width(f32::INFINITY),
+        );
         if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
             if text.trim() != current {
                 actions.extend(scene_field_action(key, scene, &text));
@@ -616,7 +630,8 @@ pub fn slot_menu(
     } else if has_clip {
         let id = Id::new(("slot-rename", track, scene));
         let mut draft: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| name.to_string());
-        let field = ui.add(egui::TextEdit::singleline(&mut draft).id(id).desired_width(140.0));
+        let field =
+            crate::kit::widgets::text_input(ui, egui::TextEdit::singleline(&mut draft).id(id).desired_width(140.0));
         ui.ctx().data_mut(|d| d.insert_temp(id, draft.clone()));
         field.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("Rename clip {}", name))

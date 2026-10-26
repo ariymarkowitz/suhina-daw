@@ -140,6 +140,31 @@ refused or suspended, never by losing its edits.
 
 ## What works now
 
+- Theme skins: editable SVG/PNG controls with colour/state variants and image sequences, configurable level-meter presentation including signal-driven artwork frames and theme-owned intensity, theme-owned toolbar layouts and native element placement, and portable CSS/JSON/SVG/PNG packages with live literal-value synchronization. Suhina's own style engine (`suhina-style`, no browser engine) adds a retained native style tree, cascade layers, variables, calc(), media ranges, linear/radial/conic gradients, color-mix(), bounded box shadows, paint transitions/keyframes, Flex/Grid toolbar/workspace panel layout and persistent anchors between controls. Bar/window geometry, remaining raw controls and further CSS effects still need integration.
+- Theme states and tracks: `:checked`, `:selected`, `:playing`, `:recording`, `:armed` and `:muted` in theme CSS, a track's colour as `--track-colour`, name colours, per-view track artwork, each bar's own separator line, styled menus, and a least Arrangement header width; a crash leaves a file in the data folder's `crashes/`.
+- Theme control shapes: buttons, the toolbar's fields and the volume and pan fields take their background, border, corner radius, thickness and shadows from the theme's CSS (`#arrangement-volume`, `.value-fill`, `volume.track` artwork and the rest); a workspace panel can float over the view; a theme can put the Arrangement track headers on a side; Settings › Themes has a search.
+- Theme presentation: native Session column widths and row heights come from the theme's CSS; mixer/name backgrounds consume authored materials, and stereo meter gradients retain fixed dBFS colour positions with native peak/RMS opacity and lit-region glow. Fader scales move independently of the rail/cap.
+
+- Forest Amber, the green-and-white Suhina Sheet, blue/cream glass Suhina Meadow and brown pixel-textured Suhina Blocks are available as built-in themes. Sheet and Meadow include compact Session geometry, native CSS and original editable SVG controls; Meadow embeds an original generated green-hill background and liquid settings. Blocks uses brown plank CSS without landscape wallpaper, plus colour-keyed SVG track textures.
+
+- Private image backgrounds use a cached source and display-scaled, alpha-correct blur; Settings keeps its own readable material. Native Mica has been removed.
+
+- Theme variants: a theme's settings are CSS custom properties, the core set every theme has and any it declares with `@property` (shown under Theme settings with a control for its type). A variant (`variants/<id>.json`) holds other values for them, such as a light and a dark version of one theme; the picker shows a swatch per variant, and editing a theme's settings saves a variant, so built-in themes need no copy for it.
+- Theme packages: Export theme… writes one theme as a `.theme.suhina` file with a SHA-256 manifest; dropping or opening one brings it in after checking every file, and `suhina-cli theme pack` and `theme validate` do the same from a terminal.
+- Theme reach: sends, the add-track buttons, the ruler, loop bar and play position, clip parts and states (`:playing`, `:recording`), level-bar handles, fader sizes, a placeable mixer divider, the piano roll (grid, keys, notes with the clip's colour, tools), each built-in device's panel (`#device-compressor`), and the ordinary buttons and fields in Settings, dialogs and pages take the theme's CSS; artwork reads the theme's variables, draws text and can be nine-sliced. New clips take their track's colour (New clip colour).
+- Theme customization includes independent Browser/coloured-surface text, alpha-preserving gradients, editable liquid strengths, a private image backdrop and configurable application-bar identity/project information.
+- Private image backgrounds retain image compositing on transparent GPU windows; narrow Arrangement headers keep names, recording controls and meters separate.
+
+- SDK sampler graphs can bind a sample while being added to a track; project saving,
+  relocation and missing-file relinking retain the graph and its source separately.
+
+- **Sampler graph building blocks:** typed sample resources, routed events, private voice/grain
+  graphs, envelopes, loops, slicing, deterministic modulation, native stretch, versioned components
+  and editable sampler/granular templates are executable through the Rust SDK host API.
+
+- **Composable SDK sample source:** Rust-authored instrument graphs can bind PCM to
+  independent polyphonic `sampler` nodes and process their audio with ordinary SDK nodes.
+
 - **Device SDK authoring:** checked Rust graph handles, parameter-source helpers and standard
   panel-control constructors produce the same data-only `.sd` devices and use the existing runtime.
 
@@ -170,6 +195,8 @@ refused or suspended, never by losing its edits.
 - A nightly build of `main` for Linux, Windows and macOS, with the desktop app, the CLI and the
   plug-in host, published every night as the `nightly` release
   ([`docs/releasing.md`](docs/releasing.md#nightly)).
+- On macOS the desktop app is `Suhina.app`, opened from Finder and dragged to Applications, with
+  the CLI and the plug-in host inside it ([`docs/releasing.md`](docs/releasing.md#packages)).
 - Clean-room rules for people and agents ([`CONTRIBUTING.md`](CONTRIBUTING.md)) and the agent
   guide ([`AGENTS.md`](AGENTS.md)): no panics, no `unsafe` outside the two plug-in hosting crates, real-time safety, sandboxed plug-ins.
 - Contributor process: DCO sign-off, a pull request template with a clean-room confirmation and a
@@ -382,7 +409,7 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
 ### M6 Plug-ins (in progress)
 - CLAP and VST3 plug-ins run in `suhina-plugin-host` processes, never in Suhina's: by
   default one process per plug-in file, or per vendor, or one per instance
-  (`plugins.setHosting`); a crash or hang costs that plug-in's sound, not the project
+  (`plugin.setHosting`); a crash or hang costs that plug-in's sound, not the project
   ([ADR 0006](docs/decisions/0006-plug-in-hosting.md)). The host runs on Linux, Windows and
   macOS (editors on macOS still to come).
 - An opened Live Set's plug-ins play in the app: each is found among the installed ones (a VST3
@@ -545,7 +572,7 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
   and a failed file is read again with its **Scan again**
   ([spec](docs/spec/plugin-manager.md)).
 - Plug-in **folders per format**: each added folder for CLAP, VST3 or both, any folder switched
-  off without removing it (`plugins.setFolderEnabled`); VST2 folders are ready for when VST2
+  off without removing it (`plugin.setFolderEnabled`); VST2 folders are ready for when VST2
   plug-ins are hosted.
 - Plug-in **scans try failures again**: a file that failed is read once more, one at a time, in
   the same scan, and later scans try it again (one that hung at most once a day); a file that
@@ -587,8 +614,9 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
 - The whole window zooms from 50 % to 200 % (Ctrl and + or -, Cmd on macOS; Ctrl and 0 for
   100 %; View › Zoom in and Settings › Appearance › Zoom), and the zoom is kept for the next run
   ([spec](docs/spec/window-zoom.md)).
-- **Themes**: every colour comes from the theme in use, a JSON file in the `themes` folder
-  (`{ "name": …, "colors": { "accent": "#A6A3FF", … } }`); track colours and the sample map's
+- **Themes**: every colour comes from the theme in use, a folder with a `theme.css` in the
+  `themes` folder (`theme { name: …; } :root { --accent: #A6A3FF; … }`), which Suhina never
+  rewrites; themes from earlier versions are converted once, keeping the originals; track colours and the sample map's
   kind colours are theme tokens too (`track.1`–`track.8`, `kind.*`). Nine come with Suhina (Suhina
   Dark and Light, Editor Dark, High Contrast, Dracula, Nord, Catppuccin Mocha and Latte, Solarized
   Dark). Settings › Appearance › Theme picks one, changes its colours, renames, duplicates, reads
@@ -646,7 +674,7 @@ From Live Sets we authored ourselves in Live 12.4 ([format spec](docs/spec/als-f
 - A clip dropped over others replaces what it covers (shortens, splits or removes them), or
   stacks with them when Allow sample / MIDI stacking is on; stacked clips share the lane in
   sub-rows ([spec](docs/spec/arrangement-editing.md)).
-- A plug-in scan notes which VST3 plug-ins support ARA (`plugins.list` shows `ara`), and such a
+- A plug-in scan notes which VST3 plug-ins support ARA (`plugin.list` shows `ara`), and such a
   plug-in is never given a host process of its own, since its document and every instance
   editing it share one ([ADR 0028](docs/decisions/0028-ara-hosting.md)).
 - A plug-in that edits clips (ARA, such as a pitch editor) on an audio track is loaded with the

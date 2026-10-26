@@ -3,7 +3,7 @@ description: Functional spec of the main window and the Session view: regions, c
 read_when: Session view, main window layout, clip slot behaviour, scene launch, launch keys, mapping mode, Map button, Ctrl+M, mixer section, browser structure
 type: spec
 status: draft
-last_verified: 2026-10-23
+last_verified: 2026-10-24
 covers:
   - crates/ui/src/session/session_view.rs
   - crates/ui/src/session/mixer_strip.rs
@@ -30,6 +30,17 @@ structure and behaviour; colours, sizes and look come from [`docs/design/brief.m
 Items marked **(to observe)** still need checking in Live.
 
 ## Window regions
+
+Session and Arrangement remain separate views. Optional theme-owned Session density
+sets track/return/scene widths and header/slot heights through `skin.session` and
+canonical native CSS; omitted values preserve the default sizes below. Painting,
+scrolling and clip/file drop targets share these dimensions. The existing mixer-height
+divider remains independent. See [theme skins](theme-skins.md#session-density-and-meter-materials).
+The existing knob/field preference applies to the Session pan face as well as compact
+volume: a knob uses the same native pan input area and command. A narrow themed pan
+area shows the dial alone; a wider one keeps the value beside it.
+Canonical `.pan { --suhina-appearance: knob; }` or `field` can override that preference
+as portable theme data in either view. `native` restores the global preference.
 
 From top to bottom:
 
@@ -89,6 +100,12 @@ this list and `docs/design/components.md` differ, components.md describes Suhina
 
 ## Session view
 
+A theme can opt slot columns into colour/state-keyed `track.body` SVG/PNG artwork
+using canonical `.track-column { --suhina-track-artwork: on; }`. The image stays
+behind cells; empty slots retain the texture, with native stop marks and hover
+feedback. Launch, selection, mapping and drop geometry are unchanged. Omission or
+`off` retains native slot fills. See [theme skins](theme-skins.md).
+
 A grid. **Columns are tracks** in project order: regular tracks, then a gap, then return tracks,
 then the main track at the far right. **Rows are scenes.** The main track's column holds the scene
 launch buttons, numbered from 1; an extra empty area below the last scene accepts drops to
@@ -111,8 +128,9 @@ Double-clicking selects the track and shows its devices in the detail area, open
 area if it was hidden ([clip editor](ui-clip-editor.md) › Where it opens); renaming stays in the
 menu.
 Dropping a device or file from the browser on the empty area right of the last track creates a
-new track; the area also has **+ MIDI track**, **+ Audio track** and **+ Return track** buttons,
-and a right-click there offers the three inserts ([browser](browser.md) ›
+new track; the area also has **+ MIDI track**, **+ Audio track** and **+ Return track** buttons
+(the view scrolls far enough past the last track for them to keep their width however many
+tracks there are), and a right-click there offers the three inserts ([browser](browser.md) ›
 Files). A file dropped on a slot or below the stop row becomes a clip in that slot (scenes are
 added below when needed); a device dropped on a column joins the track's chain. Samples and MIDI
 files dragged from the system's file manager land the same way ([browser](browser.md) › Files
@@ -270,13 +288,22 @@ scene can change it.
 
 One knob per return track (A, B, …). Return tracks show pre/post toggles on the main column.
 
-**Built:** the send knobs sit in a row of their own in the channel strip, above the pan knob,
-as many as fit (four in a track column; none in a return column), once the mixer is tall enough
-for them (Mixer › the channel strip); the pre/post
-choice is in each knob's right-click menu rather than on the main column, and a dot under the
-knob marks a send before the fader. Behaviour and commands: [sends and returns](sends-and-returns.md).
+**Built:** sends form a horizontal row below the track on/solo/cue/arm buttons. Two
+labelled fields fit side by side; further destinations continue to the right. Scrolling over
+this row moves it horizontally without scrolling the Session grid or changing a send level.
+The pre/post choice is in each field's right-click menu; a dot marks a pre-fader send.
+Behaviour and commands: [sends and returns](sends-and-returns.md).
 
 ### Mixer (toggleable, resizable height)
+
+Session strips and their name surfaces use the theme’s Track liquid coating, including returns;
+Main uses the same coating over its neutral surface. Vertical faders have a dark unfilled rail,
+a quiet numbered dB scale (0, −6, −12, −24 and −∞) and a 20 × 26 px shaped handle, alongside wider stereo meters (14 px).
+The fader stays on the left on ordinary tracks; returns and Main centre the fader, with its meter to the right.
+Pan spans the strip width. Session columns retain their original widths; their sends form a
+single horizontal row below the toggle buttons, with two fields visible and independent horizontal scrolling to further destinations. Sends show their return letter and dB value. Pan and sends share their drawing with Arrangement.
+The handle has a solid theme-tinted face, upper and lower bevels, a small shadow and a recessed centre marker. Its centre indicates the gain; the rail stays dark and unfilled.
+The same fader and meter layout is used on tracks, returns and Main.
 
 Per track, top to bottom: pan, volume with numeric field and meter ([level
 meters](level-meters.md)), track on/off (shows the
@@ -307,15 +334,14 @@ vertical channel strip under its slots, and the strip shows more the taller the 
   return's letter), solo, cue, arm (on tracks that play notes or audio), and a volume control. At
   the least height the volume is a compact value across the strip, dragged up or down.
 - **As it grows**, it adds in this order: a vertical **volume fader** with the track's level meter
-  beside it and its dB value over it (the fader replaces the compact value); the **pan** knob
-  with its value; the **send** knobs; the track's **name** at the top; under it the track's
+  beside it and its dB value over it (the fader replaces the compact value); the full-width **pan** field
+  with its value; the **send** fields; the track's **name** at the top; under it the track's
   **output**; at the tallest heights a scrollable list of the track's **devices and
   plug-ins**; and on a track that plays audio the **input's block** above the on/solo/cue/arm
   row (Audio From and the monitor's In / Auto / Off buttons, [I/O](#io-section-below-the-grid-per-track-toggleable)).
   Shrinking drops them in the reverse
   order. Height the strip has beyond what its parts need goes to the fader, and once the device
-  list shows, to the list after the fader is tall enough. A strip without sends (a return, or no
-  returns in the project) gives that row to the fader.
+  list shows, to the list after the fader is tall enough. Every strip reserves the same 26 px footer below the toggles when sends are shown, keeping faders and toggles aligned across tracks, returns and Main.
 - **The fader** is dragged up or down (Shift for finer), and the wheel over it moves it a dB at
   a time; every frame of a drag is heard, and the drag is one undo step (`track.setVolume` with
   `tracks` and `continue`). A double-click sets it back to 0 dB, as the Arrangement headers do.
@@ -426,3 +452,5 @@ Canvas backgrounds, embedded images and custom parameter controls are described 
 width by default; `viewport_size` overrides the preferred body width and height in both chain
 orientations. Constrained views scroll the contents. Custom controls use the same parameter commands,
 undo history and smoothing as stock controls.
+
+The column header shows the track type before its name: a miniature keyboard for MIDI, a waveform for audio, and both for mixed-content tracks. This remains visible when the mixer is collapsed. Groups retain their fold arrow and returns do not receive a MIDI/audio marker. The marker is read-only; clicking or dragging the header still selects or moves the track.

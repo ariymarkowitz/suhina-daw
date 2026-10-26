@@ -25,6 +25,18 @@
   the `last_verified` line of a document you change (it is stamped with the day of the merge).
   [`docs/README.md`](docs/README.md) says what an ADR, a spec and a system document each hold and
   how an ADR is amended; `python scripts/docs.py check` checks it.
+- **Settings help:** adding, removing, moving, renaming or changing a setting includes its website
+  help in the same pull request, automatically for agents. Read
+  [`docs/spec/settings-guide-export.md`](docs/spec/settings-guide-export.md), review the control
+  and implementation, and update `docs/guide-data/settings-help.json` with descriptions, choice
+  explanations, defaults, dependencies, when-to-change guidance, references and status. Review
+  behavior changes even when the source fingerprint stays unchanged; update fingerprints only
+  after checking the text. Migrate moved IDs and remove deleted entries. Run
+  `python scripts/settings_guide.py` and commit its `docs/guide-data/settings.json` output too;
+  this export is intentionally tracked. Verify with `python scripts/settings_guide.py --check`
+  and `python -m unittest discover -s scripts -p 'test_settings_guide.py'`. Check all changed
+  settings, not only the first reported error; do not defer the help to another repository,
+  a follow-up or a separate request.
 - **Parity measurement:** a pull request that adds, changes or removes something a user can do
   updates its coverage in `scripts/parity/score.py` (and `scripts/parity/devices.json` for a
   built-in effect or instrument) in the same pull request, and leaves the numbers in
@@ -244,6 +256,12 @@ contributor's pull request also needs a maintainer's approving review of the sam
 but a maintainer takes the label off, so new commits are never merged unread; taking the label off
 by hand stops the merge. Only a maintainer adds it: an agent never adds `ready to merge`, also not
 when asked to finish a pull request.
+
+**Workflows and scripts need the owner's review.** A pull request that changes `.github/` or
+`scripts/` runs with the repository's secrets once it is on `main`, so
+[`.github/CODEOWNERS`](.github/CODEOWNERS) names the repository owner for them and the main
+ruleset requires a code owner's approval: `ready to merge` alone does not merge such a change, also
+not one from another maintainer.
 
 ## Clean-room
 

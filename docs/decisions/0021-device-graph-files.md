@@ -3,7 +3,7 @@ description: A data-only versioned graph format and Rust SDK for community-autho
 read_when: .sd, Suhina device SDK, device graph, community device, graph effect
 type: decision
 status: current
-last_verified: 2026-10-21
+last_verified: 2026-10-24
 covers:
   - crates/device-sdk/src/builtin.rs
   - crates/device-registry/src/lib.rs
@@ -32,7 +32,7 @@ Version 3 added optional [visual connection layouts](../spec/sd-device-format.md
 node rectangles, wire bends and port anchors. Version 4 separates the file schema version from
 the device revision and adds data-only parameter-id migrations. Versions 1 through 3 remain
 readable. Version 5 adds an optional expanded panel ([amendment](#amendment-device-panels-for-built-in-devices-2026-10-19), 7);
-a file is written as version 5 only when it has one, and as version 4 otherwise, so old readers
+a file is always written as version 5 ([Versions](../spec/sd-device-format.md#versions)), so old readers
 reject a document they would misread instead of silently dropping metadata. Interactive graph editing remains deferred. Only supported, strictly validated
 authoring fields are accepted.
 
@@ -85,13 +85,16 @@ authoring fields are accepted.
   shared local group origins flatten to the same absolute panel bounds without serializing
   a layout tree or changing draw/focus order.
 
-- SDK authors compose effects, MIDI effects and monophonic instruments from supported primitives and distribute one self-contained
+- SDK authors compose effects, MIDI effects and polyphonic instruments from supported primitives and distribute one self-contained
   `.sd` file, with generated parameter UI and a read-only node list.
-- Node contracts are available in the SDK's JSON catalog and the read command `devices.sdNodes`
+- Node contracts are available in the SDK's JSON catalog and the read command `device.sdNodes`
   through MCP command dispatch. The same catalog generates the node reference table;
   tests reject stale documentation. [The authoring guide](../device-sdk.md) includes AI workflows.
 - The graph runs in offline and real-time chains without loading community Rust code.
-- Executable custom DSP, polyphonic instruments, spectral processing, oversampling and
+- Instrument graphs may also compose polyphonic `sampler` sources whose PCM and controls
+  are bound through the prepared Rust API off the audio thread. Source assets are not embedded
+  in `.sd` yet; the stock instrument remains native code with an SDK panel.
+- Executable custom DSP, spectral processing, oversampling and
   graph editing remain outside this data-only effect implementation. Delay memory and node
   counts are bounded, but graph admission is not a hardware CPU deadline guarantee.
 
@@ -163,8 +166,8 @@ generated `.sd` wrappers that the combined build (#726, from #600) had added are
    `device.setParam`, so automation, presets and undo do not depend on which is open.
 7. **Format version 5.** The expanded panel is the optional field `device.expanded` in `.sd`
    file version 5, and `device.ui` is the compact panel. Older readers reject version 5, as they
-   reject version 4 now, rather than drop the field on saving; a file without an expanded panel is
-   still written as version 4. Built-in layouts never meet an older Suhina, since they are loaded
+   reject version 4 now, rather than drop the field on saving; every file is written as version 5,
+   with or without an expanded panel ([Versions](../spec/sd-device-format.md#versions)). Built-in layouts never meet an older Suhina, since they are loaded
    by id from the Suhina that ships them.
 8. **The browser stays by role.** Instruments and Effects list built-in devices,
    `.sd` files and plug-ins together by role, as [browser.md](../spec/browser.md) describes; a
@@ -176,3 +179,18 @@ generated `.sd` wrappers that the combined build (#726, from #600) had added are
 10. **Not now:** layouts by others for a built-in device (#617), pages of a fixed number of
     controls for devices with many parameters, and a mark for parameters that cannot be
     automated (#669), which show and edit like the others meanwhile.
+
+## Amendment: sample resources and private graphs (#733)
+
+Prepared immutable resources are referenced by stable sample keys, never by runtime pointers in .sd.
+Hosts own decoding, relinking, replacement and disposal; missing bindings are explicit preparation
+errors. Resources are shared across private instances. MIDI routes are typed separately from numeric
+signals; timestamp order is retained, including bounded sustain-release batches. VoiceGroup owns
+bounded private voice graphs with explicit VoiceOutput completion. GrainPool similarly owns fixed
+private grain slots and drops new starts when full. Components embed a positive version and their
+internal definition so loading cannot silently pick a newer external dependency. Named parameters,
+fixed typed public ports and optional embedded panels use the same metadata in Rust and tooling.
+Nesting and aggregate node/voice/grain/delay budgets are enforced off-thread; recursion cannot enter
+processing. All node implementations remain under nodes/, and the generic scheduler depends only
+on the NativeNode lifecycle. Editable templates are distinct devices, not equivalent expansions of
+the stock sampler; the stock parameter, project and import contracts remain intact.

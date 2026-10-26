@@ -195,6 +195,14 @@ fn a_lane_at_its_least_height_still_shows_its_notes() {
     let short = h.get_by_label(CLIP).rect();
     assert!(short.height() < 21.0, "the lane is at its least height: {short:?}");
     assert!(note_marks(&h, short) > 0, "a 20 px lane still shows its clip's notes");
+    let volume = h.get_by_label("Drums volume").rect();
+    let header = h.get_by_label("Track Drums").rect();
+    assert!(volume.width() >= 48.0, "a compact lane keeps a usable volume field");
+    assert!(header.contains_rect(volume), "the volume hit area stays inside the compact header");
+    let automation = h.get_by_label("Show automation of Drums").rect();
+    let toggle = h.get_by_label("Turn Drums off").rect();
+    assert!(automation.right() <= toggle.left(), "automation stays at the left in compact mode");
+    assert!(header.contains_rect(automation), "automation remains visible inside the compact header");
 }
 
 // 2. The piano roll's least height, and closing it with the splitter.
@@ -455,7 +463,9 @@ fn a_click_on_empty_arrangement_space_clears_the_clip_selection() {
     let empty = h
         .query_all_by_label_contains("Lane ")
         .map(|n| n.rect())
-        .flat_map(|lane| (0..100).map(move |i| pos2(lane.left() + 4.0 + i as f32 * 10.0, lane.center().y)))
+        .flat_map(|lane| {
+            (0..100).map(move |i| pos2(lane.left() + 4.0 + i as f32 * (lane.width() - 8.0) / 100.0, lane.center().y))
+        })
         .find(|p| !clips.iter().any(|c| c.expand(2.0).contains(*p)) && p.x < SIZE.0 - 8.0)
         .expect("an empty spot on some lane");
     click(&mut h, empty);

@@ -161,8 +161,9 @@ CHAPTERS = [
      "quantisation, slots and scenes launched from computer keys. Missing velocity amount, clip "
      "offset/nudge, launching from live MIDI notes, follow-action multiplier and scene follow actions."),
     (17, "Routing and I/O", 22, 0.39, "partial",
-     "Track output to main or a group (track.setOutput); MIDI controllers play the armed tracks, "
-     "or the selected one with auto-arm on (Settings › MIDI, #834), "
+     "Track output to main or a group (track.setOutput); MIDI controllers play the armed tracks "
+     "and, with auto-arm on, the selected one as well (while a take records, arming "
+     "does not follow the selection, Settings > MIDI, #834), with MIDI monitoring Auto / In / Off per track, "
      "each track choosing its MIDI port and channel (track.setMidiInput), with the mod wheel, "
      "pitch bend and aftertouch reaching the instrument alongside notes (#812); an audio input "
      "device with a channel or pair per track and monitoring Auto / In / Off "
@@ -245,7 +246,7 @@ CHAPTERS = [
      "graphical envelope stages with cumulative timing and directly draggable points, persistent waveform with grouped granular controls and a shared six-shape pitch/filter/volume/pan LFO with Random, Hz/time/beat-synced rates, independent source and loop-edge fades and tempo-synchronised sample Warp using editable original BPM; five pitch-preserving modes currently share one stretcher; no multisample zones, "
      "drum sampler, wavetable, subtractive or physical modelling yet."),
     (32, "Max for Live", 6, 0.05, "planned",
-     "ADR 0021 defines data-only .sd graphs with a Rust SDK, DSP runtime and custom UI nodes; "
+     "ADR 0021 defines data-only .sd graphs with a Rust SDK, DSP runtime and custom UI nodes; typed sample resources, polyphonic voice/grain subgraphs, slicing, stretch and versioned components are executable through the Rust host API; "
      "visual graph editing is planned. Imported Max devices remain placeholders; no Max runtime."),
     (33, "Max for Live Devices", 35, 0.00, "absent", "Not applicable until Max for Live exists."),
     (34, "MIDI and Key Remote Control", 9, 0.25, "partial",

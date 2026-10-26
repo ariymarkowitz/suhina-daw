@@ -3,7 +3,7 @@ description: How versions are numbered, how release builds, the nightly and test
 read_when: release, version, release candidate, tag, binaries, release workflow, nightly, past nightlies, development build, download, test build, pull request build, try a pull request, merge queue, merge group, ready to merge label, auto-merge, update branch, merging many pull requests, batch build, Discord announcement, Discord bot, testing forum, merged thread, release notes, changelog
 type: howto
 status: current
-last_verified: 2026-10-23
+last_verified: 2026-10-26
 covers:
   - .github/workflows/ci.yml
   - .github/workflows/release.yml
@@ -12,6 +12,8 @@ covers:
   - .github/workflows/test-build-links.yml
   - .github/workflows/ready-to-merge.yml
   - scripts/branch_update.py
+  - scripts/macos_app.sh
+  - assets/brand/suhina-icon.png
   - scripts/release_notes.py
   - scripts/discord_post.py
   - scripts/discord_merged.py
@@ -249,7 +251,11 @@ The merge method is the queue's (squash). Agents never add the label (`AGENTS.md
 It acts with a short-lived token of the GitHub App that also pushes the generated docs
 (`docs-generated.yml`), not with `GITHUB_TOKEN`: GitHub starts no workflows for a merge made through
 `GITHUB_TOKEN`, and those on `main` must run after every merge. Setup, once: the app has Repository
-permissions › **Contents** and **Pull requests**: Read and write; its public Client ID is the
+permissions › **Contents**, **Pull requests** and **Issues**: Read and write (the queue merges as the
+app, and GitHub closes the issues a description closes, `Closes #N`, as the one who merged: without
+Issues they stay open, and nothing reports it). A permission added to the app reaches its token only
+once the installation accepts it: Organization settings › GitHub Apps › suhina-docs-bot ›
+**Configure**, then **Review request** › **Accept new permissions**. Its public Client ID is the
 `DOCS_BOT_CLIENT_ID` variable and its private key the `DOCS_BOT_PRIVATE_KEY` secret in the
 `docs-bot` environment, which `pull_request_target` may use
 because it runs on `main`; and Settings › General › **Allow auto-merge** is on. Without that setting the
@@ -287,9 +293,16 @@ Its tests run in CI: `python3 -m unittest discover -s scripts -p 'test_*.py'`.
 ## Discord
 
 Three channels get posts from GitHub Actions, each through a webhook (Discord: channel settings ›
-Integrations › Webhooks) whose URL is a repository secret (GitHub: Settings › Secrets and
-variables › Actions). A channel without its secret gets nothing, and a failed post fails nothing
+Integrations › Webhooks) whose URL is a secret in the environment **`discord`** (GitHub: Settings ›
+Environments › `discord`). A channel without its secret gets nothing, and a failed post fails nothing
 else. No mention in a post pings anyone.
+
+The Discord secrets, `DISCORD_BOT_TOKEN` among them, are environment secrets rather than repository
+secrets, so a workflow pushed to another branch cannot read them. The environment's *Deployment
+branches and tags* allow `main` and tags matching `v*`: `discord.yml` runs on its tag for a release
+event, the other jobs run on `main`. Only maintainers may create `v*` tags (the `release tags`
+ruleset restricts their creation), so no one else can make a ref that reaches them. The jobs say
+`deployment: false`, so the environment adds no deployment to a pull request's timeline.
 
 | Channel | Secret | Posts |
 |---|---|---|
@@ -359,12 +372,28 @@ plan is suhina-daw/suhina-bot#1. The scripts above keep using the bot token for 
 |---|---|---|
 | `suhina-<version>-linux-x86_64.tar.gz` | Ubuntu 22.04 (glibc 2.35) | `suhina`, `suhina-cli`, `suhina-plugin-host`; needs `libasound2` |
 | `suhina-<version>-windows-x86_64.zip` | Windows, MSVC, static C runtime | `suhina.exe`, `suhina-cli.exe`, `suhina-plugin-host.exe`; no Visual C++ redistributable needed |
-| `suhina-<version>-macos-universal.tar.gz` | macOS, arm64 + x86_64 joined with `lipo` | `suhina`, `suhina-cli`, `suhina-plugin-host`; macOS 11 or later |
+| `suhina-<version>-macos-universal.tar.gz` | macOS, arm64 + x86_64 joined with `lipo` | `Suhina.app` (with `suhina`, `suhina-cli` and `suhina-plugin-host` in `Contents/MacOS`) and a `suhina-cli` link into it; macOS 11 or later |
 
 The nightly's packages are named `suhina-nightly-<platform>` instead. `suhina` is the desktop app,
 `suhina-cli` the command-line tool. `suhina-plugin-host` is the process plug-ins run in
-([ADR 0006](decisions/0006-plug-in-hosting.md)); both look for it in their own folder, so the
-three stay side by side. The smoke test runs the VST3 test plug-in built into the host through the
+([ADR 0006](decisions/0006-plug-in-hosting.md)); both look for it in their own folder (past a
+link), so the three stay side by side.
+
+On macOS the desktop app is an app bundle, `Suhina.app`, which Finder opens with a double-click
+and which can be dragged to Applications. [`scripts/macos_app.sh`](../scripts/macos_app.sh), run by
+both `release.yml` and `test-build.yml`, moves the three binaries into `Suhina.app/Contents/MacOS`,
+writes its `Info.plist` (the bundle id `io.github.suhina-daw.suhina`, the version without its
+suffix, macOS 11, and the text macOS shows when Suhina first asks for the microphone, for the
+tracks' audio inputs), signs the bundle ad hoc, and puts a `suhina-cli` link in the package
+folder, so `./suhina-cli` still works from it. The app's icon, `Suhina.icns`, is made from
+[`assets/brand/suhina-icon.png`](../assets/brand/suhina-icon.png) with `sips` and `iconutil`. While
+the app runs, eframe would put its own icon in the Dock over it, so on macOS the desktop app tells
+eframe to leave the Dock alone (`apps/suhina/src/main.rs`, `app_icon`): the Dock keeps the bundle's
+icon, which macOS draws with rounded corners, where an image set at run time is drawn square. On
+the other platforms the app gives its window the same PNG. The ad hoc signature names no developer; it is
+there because Apple silicon runs only signed code and because macOS calls an unsigned downloaded
+bundle damaged rather than offering to open it. The icon of the Windows executable file,
+the Linux desktop entry and the `.suhina` file type are still to come ([#607](https://github.com/suhina-daw/suhina-daw/issues/607)). The smoke test runs the VST3 test plug-in built into the host through the
 packaged CLI; the desktop app needs a window, so only its libraries are checked. Each archive also holds
 `LICENSE`, `NOTICE`, `README.md`, `ATTRIBUTION.md` and the licences of the ported code,
 `LICENSE-APACHE` (the FM synth) and `LICENSE-signalsmith.txt` (the time stretcher).
@@ -375,11 +404,12 @@ Secrets that expire, so a release checks them before they stop a bot in the midd
 
 | Secret | Used by | Expires | Renew |
 |---|---|---|---|
-| `PROJECT_TOKEN` | the claim bot and Project sync ([`claim-bot.md`](claim-bot.md)) | fill in | [`claim-bot.md`](claim-bot.md) › Setting it up |
+| `PROJECT_TOKEN` (environment `project-board`) | the claim bot and Project sync ([`claim-bot.md`](claim-bot.md)) | fill in | [`claim-bot.md`](claim-bot.md) › Setting it up |
 
 ## Not yet
 
-The binaries are not signed: macOS Gatekeeper and Windows SmartScreen warn about them. The
-desktop app is a bare executable, not an installer or a macOS app bundle. Installers (AppImage,
-deb, rpm, Flatpak, MSI), a macOS `.app`, code signing and notarisation, and Linux aarch64 and
-Windows arm64 builds come with M8 (ROADMAP).
+The binaries are not signed with a developer identity: macOS Gatekeeper and Windows SmartScreen
+warn about them. On Windows and Linux the desktop app is a bare executable, not an installer, and
+on macOS `Suhina.app` comes in a `.tar.gz`, not a disk image. Installers (AppImage, deb, rpm,
+Flatpak, MSI, a macOS disk image), code signing and notarisation, and Linux aarch64 and Windows
+arm64 builds come with M8 (ROADMAP).

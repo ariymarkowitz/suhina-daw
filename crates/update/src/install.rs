@@ -31,8 +31,9 @@ pub fn sha256(path: &Path) -> Result<String, String> {
 }
 
 /// Unpacks the package at `archive` into the empty folder `into`, and returns the folder in it
-/// that holds the program (the package's own top folder). A test build's artifact is a zip
-/// around the package: on Linux and macOS around its `.tar.gz`, which is unpacked too.
+/// that holds the program (the package's own top folder, or `Suhina.app/Contents/MacOS` in it on
+/// macOS). A test build's artifact is a zip around the package: on Linux and macOS around its
+/// `.tar.gz`, which is unpacked too.
 pub fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, String> {
     let mut magic = [0; 2];
     File::open(archive)
@@ -58,22 +59,76 @@ pub fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, String> {
 
 fn list(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let read = std::fs::read_dir(dir).map_err(|e| format!("could not read {}: {e}", dir.display()))?;
-    Ok(read.filter_map(Result::ok).map(|e| e.path()).collect())
+    let mut entries: Vec<PathBuf> = read.filter_map(Result::ok).map(|e| e.path()).collect();
+    entries.sort();
+    Ok(entries)
 }
 
 fn program_name() -> &'static str {
     if cfg!(windows) { "suhina.exe" } else { "suhina" }
 }
 
-/// The folder under `dir` (itself or one folder down) that holds the program.
+/// The folder under `dir` (itself or one folder down) that holds the program, or the
+/// `Contents/MacOS` folder of an app bundle there.
 fn program_folder(dir: &Path) -> Result<PathBuf, String> {
-    if dir.join(program_name()).is_file() {
-        return Ok(dir.to_path_buf());
+    let mut folders = vec![dir.to_path_buf()];
+    folders.extend(app_folders(dir));
+    for child in list(dir)?.into_iter().filter(|p| p.is_dir()) {
+        folders.extend(app_folders(&child));
+        folders.push(child);
     }
-    list(dir)?
+    folders
         .into_iter()
         .find(|p| p.join(program_name()).is_file())
         .ok_or_else(|| format!("the download has no {}", program_name()))
+}
+
+/// The `Contents/MacOS` folders of the app bundles (`*.app`) in `dir`.
+fn app_folders(dir: &Path) -> Vec<PathBuf> {
+    let bundles = list(dir).unwrap_or_default().into_iter().filter(|p| p.extension().is_some_and(|e| e == "app"));
+    bundles.map(|p| p.join("Contents").join("MacOS")).collect()
+}
+
+/// The app bundle (`Suhina.app`) whose `Contents/MacOS` folder `dir` is, when it is one.
+pub fn bundle_of(dir: &Path) -> Option<PathBuf> {
+    let contents = dir.parent().filter(|_| dir.file_name().is_some_and(|n| n == "MacOS"))?;
+    let bundle = contents.parent().filter(|_| contents.file_name().is_some_and(|n| n == "Contents"))?;
+    bundle.extension().is_some_and(|e| e == "app").then(|| bundle.to_path_buf())
+}
+
+/// Where a download for the program in `dir` is staged: beside its app bundle when it runs from
+/// one, so that the bundle can be swapped as a whole, and otherwise beside the program.
+pub fn staging_folder(dir: &Path) -> PathBuf {
+    let base = bundle_of(dir).and_then(|b| b.parent().map(Path::to_path_buf));
+    base.unwrap_or_else(|| dir.to_path_buf()).join(STAGING)
+}
+
+/// Puts the app bundle `new` in place of the running one, `old`: the old one is renamed to
+/// `Suhina.app.old` (deleted on the next start) and the new one moved in. Swapping the bundle
+/// as a whole keeps its signature, which covers every file in it, whole. If the move fails the
+/// old bundle is put back.
+pub fn replace_bundle(new: &Path, old: &Path) -> Result<(), String> {
+    let aside = aside_name(old);
+    std::fs::rename(old, &aside).map_err(|e| format!("could not move {} aside: {e}", old.display()))?;
+    std::fs::rename(new, old).map_err(|e| {
+        let _back = std::fs::rename(&aside, old);
+        format!("could not put {} in place: {e}", old.display())
+    })
+}
+
+/// Puts an unpacked download, `program`, in place of the one running from `dir`: a bundle takes
+/// a bundle's place whole, so its signature keeps covering every file in it; a download without
+/// an app bundle is refused while the running app is a bundle, for its files cannot go inside
+/// the bundle's signature; otherwise the files go in place one by one.
+pub fn put_in_place(program: &Path, dir: &Path) -> Result<(), String> {
+    match (bundle_of(program), bundle_of(dir)) {
+        (Some(new), Some(old)) => replace_bundle(&new, &old),
+        (None, Some(_)) => {
+            Err("the download has no Suhina.app, and the running app is one: download a build that has the app"
+                .to_string())
+        }
+        _ => replace(program, dir).map(|_| ()),
+    }
 }
 
 fn unzip(archive: &Path, into: &Path) -> Result<(), String> {
@@ -148,8 +203,8 @@ pub fn replace(from: &Path, dir: &Path) -> Result<usize, String> {
     result
 }
 
-/// `suhina.exe.old`, or `suhina.exe.old2` and on while an older one is still there (still
-/// running, so it could not be deleted).
+/// `suhina.exe.old` (or `Suhina.app.old`), or `suhina.exe.old2` and on while an older one is
+/// still there (still running, so it could not be deleted).
 fn aside_name(target: &Path) -> PathBuf {
     let base = target.as_os_str().to_owned();
     let mut n = 1;
@@ -157,127 +212,47 @@ fn aside_name(target: &Path) -> PathBuf {
         let mut name = base.clone();
         name.push(if n == 1 { format!(".{OLD}") } else { format!(".{OLD}{n}") });
         let path = PathBuf::from(name);
-        if !path.exists() || std::fs::remove_file(&path).is_ok() {
+        let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        if !path.exists() || removed.is_ok() {
             return path;
         }
         n += 1;
     }
 }
 
-/// Deletes what an earlier update left in `dir`: files moved aside, and an unfinished download.
+/// Deletes what an earlier update left in `dir`, the program's folder: files moved aside, the
+/// app bundle moved aside (beside the running one), and an unfinished download.
 pub fn clean_up(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
-        let old = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.strip_prefix(OLD).is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit())));
-        if old && path.is_file() {
+        if is_aside(&path) && path.is_file() {
             let _removed = std::fs::remove_file(&path);
         }
     }
+    // Only `<the running bundle's name>.old…`, never another app beside it.
+    if let Some(bundle) = bundle_of(dir)
+        && let (Some(parent), Some(name)) = (bundle.parent(), bundle.file_name())
+        && let Ok(entries) = std::fs::read_dir(parent)
+    {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.file_stem() == Some(name) && is_aside(&path) && path.is_dir() {
+                let _removed = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+    let _removed = std::fs::remove_dir_all(staging_folder(dir));
     let _removed = std::fs::remove_dir_all(dir.join(STAGING));
 }
 
-#[cfg(test)]
-mod tests {
-    use std::io::Write;
-
-    use super::*;
-
-    fn folder(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("suhina-update-{name}-{}", std::process::id()));
-        let _removed = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
-        dir
-    }
-
-    /// A package as the release workflow makes it: one top folder with the program in it.
-    fn package_zip(path: &Path, top: &str, program: &[u8]) {
-        let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file(format!("{top}/{}", program_name()), options).unwrap();
-        zip.write_all(program).unwrap();
-        zip.start_file(format!("{top}/LICENSE"), options).unwrap();
-        zip.write_all(b"GPL").unwrap();
-        zip.finish().unwrap();
-    }
-
-    fn package_tar(path: &Path, top: &str, program: &[u8]) {
-        let gz = flate2::write::GzEncoder::new(File::create(path).unwrap(), flate2::Compression::fast());
-        let mut tar = tar::Builder::new(gz);
-        let mut header = tar::Header::new_gnu();
-        header.set_size(program.len() as u64);
-        header.set_mode(0o755);
-        header.set_cksum();
-        tar.append_data(&mut header, format!("{top}/{}", program_name()), program).unwrap();
-        tar.into_inner().unwrap().finish().unwrap();
-    }
-
-    #[test]
-    fn the_checksum_is_the_files_sha256() {
-        let dir = folder("sha");
-        let file = dir.join("abc");
-        std::fs::write(&file, b"abc").unwrap();
-        assert_eq!(sha256(&file).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-    }
-
-    #[test]
-    fn a_package_unpacks_to_the_folder_with_the_program() {
-        let dir = folder("unpack");
-        let archive = dir.join("package.zip");
-        package_zip(&archive, "suhina-nightly-windows-x86_64", b"new");
-        let into = dir.join("zip");
-        std::fs::create_dir(&into).unwrap();
-        let found = unpack(&archive, &into).unwrap();
-        assert_eq!(std::fs::read(found.join(program_name())).unwrap(), b"new");
-
-        let archive = dir.join("package.tar.gz");
-        package_tar(&archive, "suhina-nightly-linux-x86_64", b"newer");
-        let into = dir.join("tar");
-        std::fs::create_dir(&into).unwrap();
-        let found = unpack(&archive, &into).unwrap();
-        assert_eq!(std::fs::read(found.join(program_name())).unwrap(), b"newer");
-
-        // A test build's artifact: a zip around the .tar.gz.
-        let artifact = dir.join("artifact.zip");
-        let mut zip = zip::ZipWriter::new(File::create(&artifact).unwrap());
-        zip.start_file("suhina-pr663-linux-x86_64.tar.gz", zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(&std::fs::read(&archive).unwrap()).unwrap();
-        zip.finish().unwrap();
-        let into = dir.join("artifact");
-        std::fs::create_dir(&into).unwrap();
-        let found = unpack(&artifact, &into).unwrap();
-        assert_eq!(std::fs::read(found.join(program_name())).unwrap(), b"newer");
-
-        std::fs::write(dir.join("page.html"), b"<html>").unwrap();
-        assert!(unpack(&dir.join("page.html"), &dir).is_err());
-    }
-
-    #[test]
-    fn replacing_puts_each_file_in_place_and_cleaning_up_removes_what_was_moved_aside() {
-        let dir = folder("replace");
-        let program = dir.join("program");
-        std::fs::create_dir(&program).unwrap();
-        std::fs::write(program.join(program_name()), b"old").unwrap();
-        std::fs::write(program.join("settings-of-its-own.txt"), b"kept").unwrap();
-        let new = dir.join("new");
-        std::fs::create_dir(&new).unwrap();
-        std::fs::write(new.join(program_name()), b"new").unwrap();
-        std::fs::write(new.join("LICENSE"), b"GPL").unwrap();
-
-        assert_eq!(replace(&new, &program).unwrap(), 2);
-        assert_eq!(std::fs::read(program.join(program_name())).unwrap(), b"new");
-        assert_eq!(std::fs::read(program.join("LICENSE")).unwrap(), b"GPL");
-        assert_eq!(std::fs::read(program.join("settings-of-its-own.txt")).unwrap(), b"kept");
-        std::fs::create_dir(program.join(STAGING)).unwrap();
-        clean_up(&program);
-        let mut left: Vec<String> =
-            list(&program).unwrap().iter().filter_map(|p| p.file_name()?.to_str().map(String::from)).collect();
-        left.sort();
-        let mut expected = vec!["LICENSE".to_string(), program_name().to_string(), "settings-of-its-own.txt".into()];
-        expected.sort();
-        assert_eq!(left, expected);
-    }
+/// Whether `path` was moved aside by an update: its extension is `old`, `old2` and on.
+fn is_aside(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.strip_prefix(OLD).is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit())))
 }
+
+#[cfg(test)]
+#[path = "install_tests.rs"]
+mod tests;

@@ -593,3 +593,91 @@ fn a_clicked_volume_takes_a_typed_number_and_the_arrow_keys() {
     harness.run();
     assert_eq!(volume(&harness), before, "Ctrl+Up does not step the volume");
 }
+
+#[test]
+fn session_pan_spans_the_strip_and_sends_have_room_for_values() {
+    let harness = window_at(320.0);
+    let pan = harness.get_by_label("Drums pan").rect();
+    let name = harness.get_by_label("Drums strip").rect();
+    assert_eq!(pan.x_range(), name.x_range());
+    let a = harness.get_by_label("Drums send to A Reverb").rect();
+    let b = harness.get_by_label("Drums send to B Delay").rect();
+    assert!(a.width() >= 22.0 && b.width() >= 22.0);
+    assert_eq!(a.top(), b.top());
+    assert!(a.right() < b.left());
+    assert!(b.right() <= pan.right());
+    let volume = harness.get_by_label("Drums volume").rect();
+    let meter = harness.get_by_label_contains("Drums level:").rect();
+    // Fader stays left; sends occupy one horizontal row below the controls.
+    assert_eq!(volume.left(), pan.left());
+    assert_eq!(a.left(), pan.left());
+    assert!(a.top() > meter.bottom());
+}
+
+#[test]
+fn scrolling_the_send_grid_reaches_later_returns_without_moving_the_fader() {
+    let mut harness = window_at(SENDS_AT);
+    for name in ["C Return", "D Return", "E Return", "F Return", "G Return", "H Return"] {
+        harness.state_mut().projects_mut().execute("return.add", &serde_json::json!({"name": name})).unwrap();
+    }
+    harness.run();
+    let fader = harness.get_by_label("Drums volume").rect();
+    let before = volume(&harness);
+    assert!(harness.query_by_label("Drums send to G Return").is_none());
+    let area = harness.get_by_label("Drums send to A Reverb").rect();
+    harness.hover_at(area.center());
+    harness.step();
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, -1000.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    harness.run();
+    assert!(harness.query_by_label("Drums send to G Return").is_some());
+    assert_eq!(harness.get_by_label("Drums volume").rect(), fader);
+    assert_eq!(volume(&harness), before);
+}
+
+#[test]
+fn further_sends_continue_horizontally_and_shift_wheel_reaches_them() {
+    let mut harness = window_at(320.0);
+    for name in ["C Return", "D Return", "E Return"] {
+        harness.state_mut().projects_mut().execute("return.add", &serde_json::json!({"name": name})).unwrap();
+    }
+    harness.run();
+    let a = harness.get_by_label("Drums send to A Reverb").rect();
+    let b = harness.get_by_label("Drums send to B Delay").rect();
+    assert_eq!(a.top(), b.top());
+    assert!(a.right() < b.left());
+    assert!(harness.query_by_label("Drums send to E Return").is_none());
+    harness.hover_at(a.center());
+    harness.step();
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, -1000.0),
+        modifiers: Modifiers::SHIFT,
+        phase: egui::TouchPhase::Move,
+    });
+    harness.run();
+    let d = harness.get_by_label("Drums send to D Return").rect();
+    let e = harness.get_by_label("Drums send to E Return").rect();
+    assert_eq!(d.top(), a.top());
+    assert_eq!(d.top(), e.top());
+    assert!(d.right() < e.left());
+}
+
+#[test]
+fn session_track_type_stays_in_the_header_with_the_mixer_collapsed() {
+    let mut harness = window_at(46.0);
+    let marker = harness.get_by_label("Drums: MIDI track").rect();
+    let header = harness.get_by_label("Track Drums").rect();
+    assert!(header.contains_rect(marker));
+    let before = harness.state().session().map(|s| s.project().clone());
+    harness.hover_at(marker.center());
+    harness.run();
+    assert_eq!(harness.state().session().map(|s| s.project().clone()), before);
+    harness.get_by_label("Track Drums").click();
+    harness.run();
+    assert_eq!(harness.state().session().map(|s| s.project().clone()), before);
+}

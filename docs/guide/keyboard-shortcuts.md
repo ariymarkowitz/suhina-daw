@@ -3,7 +3,7 @@ description: User guide to the keyboard shortcuts, one entry per action with its
 read_when: user guide, keyboard shortcuts, what does this key do, list of keys, every shortcut explained, keybindings, hotkeys, action ids, which action a key runs, back up keys, share keymap, keymap.json, rebind a key, keys for agents
 type: howto
 status: current
-last_verified: 2026-10-20
+last_verified: 2026-10-24
 covers:
   - crates/ui/src/settings/keymap.rs
   - crates/ui/src/settings/settings_view.rs
@@ -56,8 +56,8 @@ Suhina can have several projects open at once, each in a tab.
 
 | Key | Action | Where | What it does |
 |---|---|---|---|
-| Ctrl+Tab | `projects.next` | Anywhere | Shows the open projects while Ctrl is held: each Tab or Down moves to the next (Shift+Tab or Up back), letting go of Ctrl switches, Escape stays. |
-| Ctrl+Shift+Tab | `projects.previous` | Anywhere | Switches to the previous project tab. Before the first tab it goes to the last. |
+| Ctrl+Tab | `project.next` | Anywhere | Shows the open projects while Ctrl is held: each Tab or Down moves to the next (Shift+Tab or Up back), letting go of Ctrl switches, Escape stays. |
+| Ctrl+Shift+Tab | `project.previous` | Anywhere | Switches to the previous project tab. Before the first tab it goes to the last. |
 
 The project you leave stops playing.
 
@@ -205,7 +205,7 @@ The ones most useful on a key:
 | `return.add` | Adds a return track, a track that effects are shared on; other tracks reach it through sends. |
 | `mixer.resetClip` | Turns off every clip indicator, the red marks that show a signal was too loud. |
 | `preview.stop` | Stops the sound the browser is previewing. |
-| `plugins.scan` | Looks for newly installed plug-ins. |
+| `plugin.scan` | Looks for newly installed plug-ins. |
 | `library.refresh` | Reads the browser's folders again, to pick up files added outside Suhina. |
 | `soundmap.analyse` | Analyses the samples again for the sample map. |
 | `project.autosave` | Reports the project's backups and the backup settings. |

@@ -17,6 +17,12 @@ use crate::kit::widgets::{self, Action};
 
 /// The column's width, taken from the left of the detail area before the note grid.
 pub const TOOLS_WIDTH: f32 = 112.0;
+
+/// The column's width: `.midi-tools { width }` in the theme (80 to 400 points), else [`TOOLS_WIDTH`].
+pub fn tools_width() -> f32 {
+    let _style = crate::kit::style_class::enter("midi-tools");
+    crate::kit::style_class::computed().and_then(|c| c.width).map_or(TOOLS_WIDTH, |w| w.clamp(80.0, 400.0))
+}
 const PAD: f32 = 6.0;
 const ROW: f32 = 20.0;
 const PARAM_ROW: f32 = 18.0;
@@ -143,13 +149,16 @@ pub fn quantise_height() -> f32 {
 /// goes. Nothing is drawn when `area` is too small to hold the column, so a short or narrow detail
 /// area gets the whole space for the grid.
 pub fn show(ui: &mut Ui, area: Rect, tools: &Tools<'_>, state: &mut PianoRollState, actions: &mut Vec<Action>) -> Rect {
-    if area.width() < TOOLS_WIDTH + 80.0 || area.height() < ROW + PARAM_ROW {
+    let width = tools_width();
+    if area.width() < width + 80.0 || area.height() < ROW + PARAM_ROW {
         return area;
     }
-    let column = Rect::from_min_max(area.min, Pos2::new(area.left() + TOOLS_WIDTH, area.bottom()));
+    let column = Rect::from_min_max(area.min, Pos2::new(area.left() + width, area.bottom()));
     ui.allocate_rect(column, egui::Sense::hover());
     let painter = ui.painter_at(column);
-    painter.rect_filled(column, 0.0, theme::panel_background());
+    // `.midi-tools` styles the column: its background and, through the scope, its controls' text.
+    let _style = crate::kit::style_class::enter("midi-tools");
+    crate::kit::native_css::surface(&painter, column, 0.0, theme::panel_background());
     painter.line_segment(
         [Pos2::new(column.right() - 0.5, column.top()), Pos2::new(column.right() - 0.5, column.bottom())],
         egui::Stroke::new(1.0, theme::border()),
@@ -191,6 +200,18 @@ pub fn show(ui: &mut Ui, area: Rect, tools: &Tools<'_>, state: &mut PianoRollSta
         }
         // A button or field too narrow for its text shortens it; nothing wraps onto more lines.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        // `.midi-tools { --suhina-gap: 2px }` packs the rows closer (0 to 16 points), and
+        // `.midi-tools .button { height }` sets the buttons' and fields' height.
+        if let Some(gap) = crate::kit::style_class::property("--suhina-gap").and_then(|v| px_value(&v)) {
+            ui.spacing_mut().item_spacing.y = gap.clamp(0.0, 16.0);
+        }
+        let button_height = {
+            let _button = crate::kit::style_class::enter("button");
+            crate::kit::style_class::computed().and_then(|c| c.height)
+        };
+        if let Some(height) = button_height {
+            ui.spacing_mut().interact_size.y = height.clamp(10.0, 40.0);
+        }
         egui::ScrollArea::vertical().id_salt("piano-roll-midi-tools").show(ui, |ui| {
             if state.quantize_open {
                 quantise_block(ui, tools, state, actions);
@@ -215,20 +236,52 @@ fn quantise_block(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, ac
     heading(ui, "Quantise", theme::text_primary());
     let mut settings = state.quantize;
     let shown = settings.grid;
-    let menu = egui::ComboBox::from_id_salt("piano-roll-quantise-grid")
-        .width(64.0)
-        .selected_text(egui::RichText::new(shown).font(mono.clone()))
-        .show_ui(ui, |ui| {
+    let menu = crate::kit::widgets::combo_box(
+        ui,
+        egui::ComboBox::from_id_salt("piano-roll-quantise-grid")
+            .width(64.0)
+            .selected_text(egui::RichText::new(shown).font(mono.clone())),
+        |ui| {
             for grid in QUANTIZE_GRIDS {
                 ui.selectable_value(&mut settings.grid, grid, egui::RichText::new(grid).font(mono.clone()));
             }
-        });
+        },
+    );
     menu.response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Quantise grid {shown}")));
-    let slider = ui.add_sized(
-        Vec2::new(ui.available_width().min(150.0), 16.0),
-        egui::Slider::new(&mut settings.amount, 0.0..=100.0).suffix(" %").integer().max_decimals(0),
-    );
+    // `.midi-tools .slider { --suhina-appearance: knob }` draws the amount as a knob, dragged up
+    // or down; `#quantise-amount` selects it alone.
+    let slider_style = crate::kit::style_class::enter_named("slider", "quantise-amount");
+    let slider = if crate::kit::style_class::knob_preference(false) {
+        let size = crate::kit::style_class::computed().and_then(|c| c.height).map_or(32.0, |h| h.clamp(16.0, 96.0));
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(size * 2.4, size), egui::Sense::drag());
+        if response.dragged() {
+            settings.amount = (settings.amount - f64::from(response.drag_delta().y) * 0.5).clamp(0.0, 100.0).round();
+        }
+        let text = format!("{} %", settings.amount);
+        let ink = crate::kit::theme::text_secondary();
+        let pointer = crate::kit::theme::text_primary();
+        let right = crate::kit::widgets::ValuePosition::Right;
+        let position = (settings.amount / 100.0) as f32;
+        crate::kit::widgets::knob_with_value(
+            ui.painter(),
+            rect,
+            position,
+            pointer,
+            Some(&response),
+            &text,
+            ink,
+            right,
+            10.0,
+        );
+        response
+    } else {
+        ui.add_sized(
+            Vec2::new(ui.available_width().min(150.0), 16.0),
+            egui::Slider::new(&mut settings.amount, 0.0..=100.0).suffix(" %").integer().max_decimals(0),
+        )
+    };
+    drop(slider_style);
     slider.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, format!("Amount {} %", settings.amount))
     });
@@ -237,13 +290,14 @@ fn quantise_block(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, ac
     let apply = ui
         .add(
             egui::Button::new(egui::RichText::new("Quantise notes").font(small.clone()))
-                .min_size(Vec2::new(0.0, BUTTON_HEIGHT)),
+                .min_size(Vec2::new(0.0, ui.spacing().interact_size.y)),
         )
         .on_hover_text("Quantise the selected notes, or every note")
         .clicked();
     // Its accessible label is the whole name, as the block had in the clip column.
     let close = ui.add(
-        egui::Button::new(egui::RichText::new("Close").font(small.clone())).min_size(Vec2::new(0.0, BUTTON_HEIGHT)),
+        egui::Button::new(egui::RichText::new("Close").font(small.clone()))
+            .min_size(Vec2::new(0.0, ui.spacing().interact_size.y)),
     );
     close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close quantise"));
     if close.on_hover_text("Close the quantise controls").clicked() {
@@ -266,8 +320,9 @@ fn note_tools(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, action
     let mut settings = state.tools.clone();
 
     heading(ui, "Transpose", theme::text_secondary());
-    let transpose = ui.add_sized(
-        Vec2::new(ui.available_width().min(64.0), 16.0),
+    let transpose = crate::kit::widgets::number_input(
+        ui,
+        Some(Vec2::new(ui.available_width().min(64.0), 16.0)),
         egui::DragValue::new(&mut settings.transpose).range(-24..=24).speed(1.0).prefix(""),
     );
     transpose.widget_info(|| {
@@ -285,8 +340,9 @@ fn note_tools(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, action
 
     ui.add_space(PAD);
     heading(ui, "Humanise", theme::text_secondary());
-    let time = ui.add_sized(
-        Vec2::new(ui.available_width().min(64.0), 16.0),
+    let time = crate::kit::widgets::number_input(
+        ui,
+        Some(Vec2::new(ui.available_width().min(64.0), 16.0)),
         egui::DragValue::new(&mut settings.humanize_time).range(0.0..=1.0).speed(0.01).max_decimals(3).prefix("Time "),
     );
     time.widget_info(|| {
@@ -296,8 +352,9 @@ fn note_tools(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, action
             format!("Humanise time {:.3}", settings.humanize_time),
         )
     });
-    let velocity = ui.add_sized(
-        Vec2::new(ui.available_width().min(64.0), 16.0),
+    let velocity = crate::kit::widgets::number_input(
+        ui,
+        Some(Vec2::new(ui.available_width().min(64.0), 16.0)),
         egui::DragValue::new(&mut settings.humanize_velocity).range(0.0..=127.0).speed(1.0).prefix("Velocity "),
     );
     velocity.widget_info(|| {
@@ -319,25 +376,31 @@ fn note_tools(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, action
     heading(ui, "Fit to scale", theme::text_secondary());
     let root = ROOTS.get(settings.root).map_or("C", |(name, _)| *name);
     let mono = theme::mono_font(theme::TEXT_SMALL);
-    let menu = egui::ComboBox::from_id_salt("piano-roll-tools-root")
-        .width(56.0)
-        .selected_text(egui::RichText::new(root).font(mono.clone()))
-        .show_ui(ui, |ui| {
+    let menu = crate::kit::widgets::combo_box(
+        ui,
+        egui::ComboBox::from_id_salt("piano-roll-tools-root")
+            .width(56.0)
+            .selected_text(egui::RichText::new(root).font(mono.clone())),
+        |ui| {
             for (index, (name, _)) in ROOTS.iter().enumerate() {
                 ui.selectable_value(&mut settings.root, index, egui::RichText::new(*name).font(mono.clone()));
             }
-        });
+        },
+    );
     menu.response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Tools root {root}")));
     let scale = SCALES.get(settings.scale).map_or("Major", |(name, _)| *name);
-    let menu = egui::ComboBox::from_id_salt("piano-roll-tools-scale")
-        .width(96.0)
-        .selected_text(egui::RichText::new(scale).font(mono.clone()))
-        .show_ui(ui, |ui| {
+    let menu = crate::kit::widgets::combo_box(
+        ui,
+        egui::ComboBox::from_id_salt("piano-roll-tools-scale")
+            .width(96.0)
+            .selected_text(egui::RichText::new(scale).font(mono.clone())),
+        |ui| {
             for (index, (name, _)) in SCALES.iter().enumerate() {
                 ui.selectable_value(&mut settings.scale, index, egui::RichText::new(*name).font(mono.clone()));
             }
-        });
+        },
+    );
     menu.response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Tools scale {scale}")));
     if button(ui, "Fit to scale", &small) {
@@ -359,6 +422,15 @@ fn note_tools(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, action
     }
     ui.horizontal(|ui| {
         let small = small.clone();
+        // Two halves of the column's width, so the second is never pushed off its edge.
+        let half = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.0).max(8.0);
+        let button = |ui: &mut Ui, name: &str, font: &egui::FontId| {
+            ui.add(
+                egui::Button::new(egui::RichText::new(name).font(font.clone()))
+                    .min_size(Vec2::new(half, ui.spacing().interact_size.y)),
+            )
+            .clicked()
+        };
         if button(ui, "×2", &small) {
             let mut params = tools.params();
             params["factor"] = json!(2.0);
@@ -373,8 +445,9 @@ fn note_tools(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, action
 
     ui.add_space(PAD);
     heading(ui, "Velocity", theme::text_secondary());
-    let amount = ui.add_sized(
-        Vec2::new(ui.available_width().min(64.0), 16.0),
+    let amount = crate::kit::widgets::number_input(
+        ui,
+        Some(Vec2::new(ui.available_width().min(64.0), 16.0)),
         egui::DragValue::new(&mut settings.random_amount).range(0.0..=127.0).speed(1.0).prefix("Amount "),
     );
     amount.widget_info(|| {
@@ -389,15 +462,17 @@ fn note_tools(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, action
         params["amount"] = json!(settings.random_amount.clamp(0.0, 127.0));
         actions.push(Action::new("note.randomizeVelocity", params));
     }
-    let from = ui.add_sized(
-        Vec2::new(ui.available_width().min(64.0), 16.0),
+    let from = crate::kit::widgets::number_input(
+        ui,
+        Some(Vec2::new(ui.available_width().min(64.0), 16.0)),
         egui::DragValue::new(&mut settings.ramp_from).range(1..=127).speed(1.0).prefix("From "),
     );
     from.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, format!("Ramp from {}", settings.ramp_from))
     });
-    let to = ui.add_sized(
-        Vec2::new(ui.available_width().min(64.0), 16.0),
+    let to = crate::kit::widgets::number_input(
+        ui,
+        Some(Vec2::new(ui.available_width().min(64.0), 16.0)),
         egui::DragValue::new(&mut settings.ramp_to).range(1..=127).speed(1.0).prefix("To "),
     );
     to.widget_info(|| {
@@ -417,7 +492,7 @@ fn note_tools(ui: &mut Ui, tools: &Tools<'_>, state: &mut PianoRollState, action
 fn button(ui: &mut Ui, name: &str, font: &egui::FontId) -> bool {
     ui.add(
         egui::Button::new(egui::RichText::new(name).font(font.clone()))
-            .min_size(Vec2::new(ui.available_width().min(TOOLS_WIDTH - PAD * 2.0), BUTTON_HEIGHT)),
+            .min_size(Vec2::new(ui.available_width().min(tools_width() - PAD * 2.0), ui.spacing().interact_size.y)),
     )
     .clicked()
 }
@@ -427,4 +502,9 @@ fn button(ui: &mut Ui, name: &str, font: &egui::FontId) -> bool {
 fn heading(ui: &mut Ui, text: &str, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), LABEL + 3.0), egui::Sense::hover());
     widgets::text_in(ui.painter(), rect, Align2::LEFT_CENTER, text, theme::ui_font(theme::TEXT_SMALL), color);
+}
+
+/// `12px` as 12.0.
+fn px_value(value: &str) -> Option<f32> {
+    value.trim().strip_suffix("px").and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite())
 }

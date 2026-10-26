@@ -4,6 +4,7 @@
 //! Missing files (`docs/spec/missing-files.md`): the bar that says a project's audio files are
 //! missing, and the panel that finds them by name and relinks them.
 
+use crate::kit::surface::Backgrounds as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -220,7 +221,7 @@ impl MissingFiles {
     /// Draws the bar that says files are missing in `rect`, while it should show.
     pub fn bar(&mut self, ui: &mut Ui, rect: Rect) {
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, theme::panel_background());
+        painter.fill_background(rect, 0.0, theme::panel_background());
         let count = self.rows.len();
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink2(Vec2::new(PAD, 6.0))), |ui| {
             ui.horizontal_centered(|ui| {
@@ -267,10 +268,11 @@ impl MissingFiles {
         let height = ROW + PAD * 4.0 + LINE * 3.0 + self.rows.len() as f32 * ROW_HEIGHT + BUTTON.y;
         let size = Vec2::new(WIDTH.min(area.width() - 2.0 * PAD), height.min(area.height() - 2.0 * PAD));
         let rect = Rect::from_center_size(area.center(), size);
-        painter.rect_filled(rect, 0.0, theme::panel_background());
+        crate::kit::liquid::backdrop(&painter, rect);
+        painter.fill_background(rect, 0.0, theme::panel_background());
         painter.rect_stroke(rect, 0.0, theme::hairline(theme::border_strong()), egui::StrokeKind::Inside);
         let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), ROW));
-        painter.rect_filled(bar, 0.0, theme::control_background());
+        painter.fill_background(bar, 0.0, theme::control_background());
         widgets::text_in(
             &painter,
             bar.shrink2(Vec2::new(PAD, 0.0)),
@@ -291,7 +293,8 @@ impl MissingFiles {
                     self.checked = None;
                 }
                 ui.label(egui::RichText::new("or a folder:").color(theme::text_secondary()).font(small.clone()));
-                let field = ui.add(
+                let field = crate::kit::widgets::text_input(
+                    ui,
                     egui::TextEdit::singleline(&mut self.folder)
                         .font(small.clone())
                         .hint_text("A folder path")
@@ -383,7 +386,8 @@ fn row_view(ui: &mut Ui, index: usize, row: &mut Row, small: &egui::FontId) {
         let clips = format!("{} clip{}", row.clips, if row.clips == 1 { "" } else { "s" });
         ui.label(egui::RichText::new(clips).color(theme::text_hint()).font(small.clone()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let field = ui.add(
+            let field = crate::kit::widgets::text_input(
+                ui,
                 egui::TextEdit::singleline(&mut row.locate)
                     .font(small.clone())
                     .hint_text("Locate: a file path")
@@ -415,10 +419,12 @@ fn row_view(ui: &mut Ui, index: usize, row: &mut Row, small: &egui::FontId) {
         ui.add_space(14.0);
         ui.label(egui::RichText::new("→").color(theme::text_hint()).font(small.clone()));
         let shown = row.chosen.as_ref().map_or_else(|| "not found".to_string(), |p| p.display().to_string());
-        egui::ComboBox::from_id_salt(("missing-candidate", index))
-            .selected_text(egui::RichText::new(shown).font(small.clone()))
-            .width(440.0)
-            .show_ui(ui, |ui| {
+        crate::kit::widgets::combo_box(
+            ui,
+            egui::ComboBox::from_id_salt(("missing-candidate", index))
+                .selected_text(egui::RichText::new(shown).font(small.clone()))
+                .width(440.0),
+            |ui| {
                 for candidate in row.candidates.clone() {
                     let label = candidate.display().to_string();
                     if ui.selectable_label(row.chosen.as_ref() == Some(&candidate), label).clicked() {
@@ -430,7 +436,8 @@ fn row_view(ui: &mut Ui, index: usize, row: &mut Row, small: &egui::FontId) {
                     row.chosen = None;
                     row.by_hand = true;
                 }
-            });
+            },
+        );
     });
     ui.add_space(4.0);
 }

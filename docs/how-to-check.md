@@ -3,7 +3,7 @@ description: How to write a pull request's "How to check it" section, steps a ne
 read_when: how to check it, test steps, QA steps, how to test, pull request description, manual testing, reviewer steps, check a change
 type: howto
 status: current
-last_verified: 2026-10-15
+last_verified: 2026-10-26
 covers:
   - .github/pull_request_template.md
   - .claude/skills/how-to-check/SKILL.md
@@ -57,7 +57,8 @@ the change could break next to it.
 Platform: all (or: Windows only, because …)
 
 **Set up**
-1. Unzip the test build and open `suhina` (`suhina.exe` on Windows). An empty project opens.
+1. Unpack the test build: unzip it, and on macOS and Linux extract the `.tar.gz` inside it too. Open `suhina`
+   (`suhina.exe` on Windows, `Suhina.app` on macOS). An empty project opens.
 2. <make what the check needs, from the menus: the project, track, clip or file>
 
 **Check**
@@ -146,8 +147,8 @@ Good:
 Platform: all
 
 **Set up**
-1. Unzip the test build and open `suhina` (`suhina.exe` on Windows). Suhina opens with nothing
-   loaded.
+1. Unpack the test build: unzip it, and on macOS and Linux extract the `.tar.gz` inside it too. Open `suhina`
+   (`suhina.exe` on Windows, `Suhina.app` on macOS). Suhina opens with nothing loaded.
 2. Click **File › New or open…** (Ctrl+T) and then **New blank project**. You should see: a grid
    of 4 tracks (columns) with empty slots (boxes that hold clips).
 

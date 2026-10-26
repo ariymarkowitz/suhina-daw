@@ -377,12 +377,9 @@ fn a_mapped_controller_reaches_a_vst3_plugins_edit_controller() {
     let volume = [Event { frame: 0, note: -1, kind: EventKind::Controller { channel: 0, number: 7, value: 0.25 } }];
     assert_eq!(audio.process_with_events(&[1.0; FRAMES * 2], &volume, &mut output, PATIENT), Outcome::Done);
     assert_eq!(output[0], 0.25);
-    // The host's main thread hands it over between messages.
-    let deadline = Instant::now() + PATIENT;
-    while gain(&mut plugin) != 0.25 {
-        assert!(Instant::now() < deadline, "the controller still shows {}", gain(&mut plugin));
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    // Reading the parameters hands over what the block moved first, so the read right after the
+    // block shows it, however long the host takes to turn its loop (#887).
+    assert_eq!(gain(&mut plugin), 0.25);
 }
 
 #[test]
@@ -404,21 +401,67 @@ fn an_offline_run_plays_notes_at_their_frames() {
 
 /// Asks the editor's window to close, as the user does with its close button.
 #[cfg(windows)]
-fn close_editor_window() {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
-    let class: Vec<u16> = "SuhinaPluginEditor".encode_utf16().chain([0]).collect();
-    // SAFETY: a class name that outlives the call; any title.
-    let window = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
-    assert!(!window.is_null(), "no editor window");
+fn close_editor_window(process_id: u32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    let window = editor_window(process_id);
+    assert!(!window.is_null(), "no editor window for host {process_id}");
     // SAFETY: a window found just now; WM_CLOSE carries no pointers.
-    unsafe { PostMessageW(window, WM_CLOSE, 0, 0) };
+    assert_ne!(unsafe { PostMessageW(window, WM_CLOSE, 0, 0) }, 0);
+}
+
+#[cfg(windows)]
+fn editor_window(process_id: u32) -> windows_sys::Win32::Foundation::HWND {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowExW, GetWindowThreadProcessId};
+    let class: Vec<u16> = "SuhinaPluginEditor".encode_utf16().chain([0]).collect();
+    let mut window = std::ptr::null_mut();
+    loop {
+        // SAFETY: the class name outlives the call; null parent enumerates top-level windows,
+        // and window is null or the previous result. No pointers are retained by Windows.
+        window = unsafe { FindWindowExW(std::ptr::null_mut(), window, class.as_ptr(), std::ptr::null()) };
+        if window.is_null() {
+            return window;
+        }
+        let mut owner = 0;
+        // SAFETY: Windows validates the handle; owner is a writable u32 for the result.
+        let thread = unsafe { GetWindowThreadProcessId(window, &raw mut owner) };
+        if thread != 0 && owner == process_id {
+            return window;
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn editor_window_lookup_is_scoped_to_its_host_process() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    let (mut first, _first_audio) = start("test:vst3");
+    let (mut second, _second_audio) = start("test:vst3");
+    first.open_editor().unwrap();
+    second.open_editor().unwrap();
+    for host in [&first, &second] {
+        let window = editor_window(host.process_id());
+        assert!(!window.is_null());
+        let mut owner = 0;
+        // SAFETY: the window belongs to a live host; owner is a writable u32.
+        unsafe { GetWindowThreadProcessId(window, &raw mut owner) };
+        assert_eq!(owner, host.process_id(), "must not select another host's editor");
+    }
+    assert!(editor_window(0).is_null(), "a missing host must not select some other editor");
+    close_editor_window(first.process_id());
+    let deadline = Instant::now() + PATIENT;
+    while first.editor_open() {
+        assert!(Instant::now() < deadline, "the targeted editor did not close");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(second.editor_open(), "closing the first host must leave the other editor open");
+    second.close_editor().unwrap();
 }
 
 /// Asks the editor's window to close, as the user does with its close button: the window
 /// manager's WM_DELETE_WINDOW message, sent to the newest window whose class is the editor's
 /// (the root's children come bottom to top).
 #[cfg(target_os = "linux")]
-fn close_editor_window() {
+fn close_editor_window(_process_id: u32) {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{AtomEnum, ClientMessageEvent, ConnectionExt, EventMask};
     let (connection, screen) = x11rb::connect(None).unwrap();
@@ -442,7 +485,7 @@ fn close_editor_window() {
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn close_editor_window() {}
+fn close_editor_window(_process_id: u32) {}
 
 /// Whether the test can close the host's window from here, as the user would: another
 /// process's window cannot be reached on macOS.
@@ -475,7 +518,7 @@ fn an_editor_opens_in_a_window_and_closes() {
         // so there the user's close is a hand check with a real plug-in.)
         assert_eq!(plugin.open_editor().unwrap(), (300, 200));
         if user_closes_windows() {
-            close_editor_window();
+            close_editor_window(plugin.process_id());
             let deadline = Instant::now() + PATIENT;
             while plugin.editor_open() {
                 assert!(Instant::now() < deadline, "the closed window was not reported");

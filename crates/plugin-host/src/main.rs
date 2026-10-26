@@ -77,11 +77,13 @@ pub(crate) const UNLOAD_WAIT: Duration = Duration::from_secs(1);
 const SETTLE: Duration = Duration::from_secs(5);
 
 thread_local! {
-    /// VST3 plug-ins unloaded before they settled, and when each is released. Some finish
-    /// starting up through the main thread's messages after they load, and releasing one before
-    /// that waits for it on this very thread: Melodyne, let go of a tenth of a second after it
-    /// loaded, held the host until the engine gave up on it. Released from the main loop
-    /// ([`release_settled`]), the messages flowing meanwhile.
+    /// VST3 plug-ins unloaded, stopped and out of their document, and when each is released
+    /// with its editor. Released from the main loop ([`release_settled`]) after the engine has
+    /// its answer, so an editor embedded in the engine's window is taken down while the engine
+    /// answers that window's messages. Some plug-ins also finish starting up through the main
+    /// thread's messages after they load, and releasing one before that waits for it on this
+    /// very thread: Melodyne, let go of a tenth of a second after it loaded, held the host until
+    /// the engine gave up on it; one is kept until [`SETTLE`] after it loaded.
     static SETTLING: std::cell::RefCell<Vec<(Instant, vst3::Vst3Plugin)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -96,7 +98,7 @@ fn release_settled() {
         due.into_iter().map(|(_, plugin)| plugin).collect()
     });
     for plugin in due {
-        suhina_plugins::trace!("vst3: releasing a plug-in that has settled");
+        suhina_plugins::trace!("vst3: releasing an unloaded plug-in and its editor");
         drop(plugin);
     }
 }
@@ -423,21 +425,20 @@ impl Loaded {
                 }
             }
             Self::Vst3(mut plugin) => {
-                suhina_plugins::trace!("vst3 unload: close editor");
-                plugin.close_editor();
                 suhina_plugins::trace!("vst3 unload: stop audio");
                 if plugin.stop_audio(UNLOAD_WAIT) {
-                    let age = plugin.age();
-                    if age < SETTLE {
-                        suhina_plugins::trace!("vst3 unload: {age:?} old; released later");
-                        plugin.leave_document();
-                        let at = Instant::now() + (SETTLE - age);
-                        SETTLING.with(|settling| settling.borrow_mut().push((at, plugin)));
-                        return;
-                    }
-                    suhina_plugins::trace!("vst3 unload: audio stopped; drop");
-                    drop(plugin);
+                    // The editor closes and the plug-in goes from the main loop, after the engine
+                    // has its answer: an editor embedded in the engine's window is a child of a
+                    // window of the engine's process, and taking it down sends that window
+                    // messages the engine answers only once it stops waiting for this unload
+                    // (Melodyne held both for as long as the engine waited, #816). One that has
+                    // not settled since it loaded waits for that too.
+                    plugin.leave_document();
+                    let at = Instant::now() + SETTLE.saturating_sub(plugin.age());
+                    suhina_plugins::trace!("vst3 unload: audio stopped; editor closed and released from the main loop");
+                    SETTLING.with(|settling| settling.borrow_mut().push((at, plugin)));
                 } else {
+                    plugin.close_editor();
                     std::mem::forget(plugin);
                 }
             }

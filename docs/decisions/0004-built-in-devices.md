@@ -3,7 +3,7 @@ description: The interface of built-in effects and instruments (Device trait, pa
 read_when: device, built-in effect or instrument, effect, instrument, dsp, filter, parameter, automation, utility, device-api, conformance
 type: decision
 status: current
-last_verified: 2026-10-23
+last_verified: 2026-10-24
 covers:
   - crates/dsp/**
   - crates/device-api/**
@@ -239,7 +239,7 @@ decision 9.
   engine without changes once it had chains.
 - The first device, `utility`, proves the shape: thirteen parameters, all smoothed, bit-exact
   passthrough at the defaults.
-- Devices are edited through commands: `devices.list`, `track.devices`, `device.add` (an
+- Devices are edited through commands: `device.list`, `track.devices`, `device.add` (an
   instrument always first, one per track, and only on a track that plays notes),
   `device.remove`, `device.setEnabled` and `device.setParam` (values stored limited to the
   parameter's range). `device.add {preset, voice?}` adds a device with a preset's values:

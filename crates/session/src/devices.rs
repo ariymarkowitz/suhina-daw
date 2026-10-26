@@ -55,12 +55,32 @@ pub(crate) fn load_sample(session: &mut Session, params: &Value) -> Result<Value
     let path = crate::files::absolute(std::path::Path::new(path));
     let channel = channel_param(session, params)?;
     let index = device_index(channel.devices.len(), params)?;
-    if !channel.devices.get(index).is_some_and(|d| matches!(&d.kind, DeviceKind::Builtin(id) if id == "sampler")) {
-        return Err("loadSample needs a Sampler instrument".into());
+    let sdk = channel.devices.get(index).is_some_and(|d| d.kind == DeviceKind::Sd && d.sample_file().is_some());
+    if !sdk
+        && !channel.devices.get(index).is_some_and(|d| matches!(&d.kind, DeviceKind::Builtin(id) if id == "sampler"))
+    {
+        return Err("loadSample needs a Sampler instrument or an SDK graph with a sample binding".into());
     }
     let audio = session.decoded_audio(&path)?;
     if audio.frames() < 2 || !(1..=32).contains(&audio.channels) || !(1000..=384000).contains(&audio.sample_rate) {
         return Err("sample needs at least two frames, 1..32 channels and a sample rate of 1000..384000 Hz".into());
+    }
+    if sdk {
+        let asset =
+            suhina_device_sdk::sample_resource::SampleAsset::new(audio.clone(), audio.sample_rate, audio.channels)
+                .map_err(|e| e.to_string())?;
+        let graph = sd_graph(channel_param(session, params)?.devices.get(index).ok_or("device is missing")?)?;
+        if graph.role != suhina_device_sdk::DeviceRole::MidiEffect {
+            let mut samples = suhina_device_sdk::sample_resource::PreparedSamples::default();
+            samples.insert("sample", std::sync::Arc::new(asset)).map_err(|e| e.to_string())?;
+            suhina_device_registry::compile_graph_with_samples(&graph, 48000., &samples).map_err(|e| e.to_string())?;
+        }
+        channel_param(session, params)?
+            .devices
+            .get_mut(index)
+            .ok_or("device is missing")?
+            .set_sample_file(&path.display().to_string());
+        return Ok(json!({"device":index,"path":path.display().to_string(),"frames":audio.frames()}));
     }
     let file = path.display().to_string();
     let fallback = session.player().map_or(session.project().transport.tempo_bpm, |p| p.monitor().tempo_bpm());
@@ -428,10 +448,10 @@ pub(crate) fn add(session: &mut Session, params: &Value) -> Result<Value, Comman
         }
         (Some(id), _) => id,
         (None, Some(p)) => p.device,
-        (None, None) => return Err("id must be the id of a built-in effect or instrument, from devices.list".into()),
+        (None, None) => return Err("id must be the id of a built-in effect or instrument, from device.list".into()),
     };
     let info = suhina_device_registry::info(id)
-        .ok_or_else(|| format!("no built-in effect or instrument {id:?}; devices.list lists them"))?;
+        .ok_or_else(|| format!("no built-in effect or instrument {id:?}; device.list lists them"))?;
     let params_of_preset = preset
         .as_ref()
         .map_or_else(Vec::new, |p| p.params.iter().map(|(id, value)| DeviceParam::new(*id, *value)).collect());
@@ -493,10 +513,27 @@ pub(crate) fn add(session: &mut Session, params: &Value) -> Result<Value, Comman
 pub(crate) fn add_sd(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
     let path = params.get("path").and_then(Value::as_str).ok_or("path must be a .sd file path")?;
     let graph = suhina_device_sdk::DeviceGraph::read_file(std::path::Path::new(path)).map_err(|e| e.to_string())?;
+    let mut samples = suhina_device_sdk::sample_resource::PreparedSamples::default();
+    let sample_path =
+        params.get("sample").and_then(Value::as_str).map(|path| crate::files::absolute(std::path::Path::new(path)));
+    if let Some(path) = &sample_path {
+        let audio = session.decoded_audio(path)?;
+        let asset =
+            suhina_device_sdk::sample_resource::SampleAsset::new(audio.clone(), audio.sample_rate, audio.channels)
+                .map_err(|e| e.to_string())?;
+        samples.insert("sample", std::sync::Arc::new(asset)).map_err(|e| e.to_string())?;
+    }
+    if graph.role != suhina_device_sdk::DeviceRole::MidiEffect {
+        let _prepared =
+            suhina_device_registry::compile_graph_with_samples(&graph, 48000., &samples).map_err(|e| e.to_string())?;
+    }
     let values: Vec<DeviceParam> =
         graph.parameters.iter().map(|parameter| DeviceParam::new(parameter.id.clone(), parameter.default)).collect();
     let state = graph.to_sd().map_err(|e| e.to_string())?.into_bytes();
-    let device = Device { state: Some(state), params: values, ..Device::new(graph.name.clone(), DeviceKind::Sd) };
+    let mut device = Device { state: Some(state), params: values, ..Device::new(graph.name.clone(), DeviceKind::Sd) };
+    if let Some(path) = sample_path {
+        device.set_sample_file(&path.display().to_string());
+    }
     if let Some(value) = crate::device_groups::insert_into_group(session, params, device.clone())? {
         return Ok(json!({ "device": value, "id": graph.id, "name": graph.name, "kind": "sd" }));
     }
@@ -651,7 +688,7 @@ pub(crate) fn copy(session: &mut Session, params: &Value) -> Result<Value, Comma
     paths.reverse();
     let copied: Vec<Device> = paths.iter().filter_map(|p| device_at(&channel.devices, p).cloned()).collect();
     let names: Vec<String> = copied.iter().map(|d| d.name.clone()).collect();
-    session.device_clipboard = copied;
+    session.clipboards.devices = copied;
     Ok(json!({ "copied": names }))
 }
 
@@ -715,7 +752,7 @@ pub(crate) fn duplicate_many(session: &mut Session, params: &Value) -> Result<Va
 /// plug-in's state goes with it as it is now.
 pub(crate) fn move_to_track(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
     let from = track_id(&session.project, params)?;
-    let to = crate::commands::track_at(&session.project, params, "to_track")?;
+    let to = crate::commands::track_at(&session.project, params, "toTrack")?;
     if from == to {
         return Err("the device is on that track already; device.move moves it along the chain".into());
     }
@@ -793,10 +830,10 @@ pub(crate) fn move_to_track(session: &mut Session, params: &Value) -> Result<Val
 /// `device.paste {track, position?}`: puts the copied devices into a track's chain at
 /// `position` (the end when left out), in the order they were copied, as one undo step.
 pub(crate) fn paste(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
-    if session.device_clipboard.is_empty() {
+    if session.clipboards.devices.is_empty() {
         return Err("no devices have been copied".into());
     }
-    let copied = session.device_clipboard.clone();
+    let copied = session.clipboards.devices.clone();
     let count = copied.len();
     crate::device_groups::edit_chain(session, params, |devices| {
         let (parent, position) = crate::device_groups::position_path(devices, params, "position")?
@@ -901,7 +938,7 @@ pub(crate) fn device_file(session: &mut Session, params: &Value) -> Result<Value
 }
 
 pub(crate) fn set_param(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
-    let param = params.get("param").and_then(Value::as_str).ok_or("param must be a parameter id, from devices.list")?;
+    let param = params.get("param").and_then(Value::as_str).ok_or("param must be a parameter id, from device.list")?;
     let mut value = number(params, "value")?;
     let source_tempo =
         if param == "warp" && value > 0. { initial_sampler_tempo(session, params, false)? } else { None };
@@ -922,7 +959,7 @@ pub(crate) fn set_param(session: &mut Session, params: &Value) -> Result<Value, 
                 suhina_device_registry::info(id).ok_or_else(|| format!("{id:?} is not a device this version knows"))?;
             let index = info
                 .param_index(param)
-                .ok_or_else(|| format!("{} has no parameter {param:?}; devices.list lists them", info.name))?;
+                .ok_or_else(|| format!("{} has no parameter {param:?}; device.list lists them", info.name))?;
             let spec = info.params.get(index).ok_or("the parameter is missing")?;
             (index, spec.clamp(value))
         }
@@ -981,7 +1018,7 @@ pub(crate) fn set_param(session: &mut Session, params: &Value) -> Result<Value, 
     // A playing engine takes this as messages, without a new graph; one that turned a lane
     // off needs the new graph, which holds the values too, and so does a device inside a group.
     if !off && path.len() == 1 {
-        session.param_edits = messages;
+        session.sync.param_edits = messages;
     }
     Ok(with_override(json!({ "device": path_value(&path), "param": param, "value": value }), off))
 }
@@ -1011,7 +1048,7 @@ fn set_plugin_param(
     // A plug-in's parameter goes to the engine by its id.
     let param = usize::try_from(id).map_err(|_| "the parameter id is too large")?;
     if !off && let [index] = path {
-        session.param_edits = vec![ParamEdit { track, device: *index, param, value }];
+        session.sync.param_edits = vec![ParamEdit { track, device: *index, param, value }];
     }
     Ok(with_override(json!({ "device": path_value(path), "param": id, "value": value }), off))
 }
@@ -1048,7 +1085,7 @@ pub(crate) fn set_automation(session: &mut Session, params: &Value) -> Result<Va
             let spec = info
                 .param_index(param)
                 .and_then(|i| info.params.get(i))
-                .ok_or_else(|| format!("{} has no parameter {param:?}; devices.list lists them", info.name))?;
+                .ok_or_else(|| format!("{} has no parameter {param:?}; device.list lists them", info.name))?;
             (Some(spec), None)
         }
         DeviceKind::Sd => {
@@ -1146,12 +1183,12 @@ fn plugin_key(session: &Session, params: &Value) -> Result<u64, CommandError> {
 /// Adds an installed plug-in from the catalog to a track.
 pub(crate) fn add_plugin(session: &mut Session, params: &Value) -> Result<Value, CommandError> {
     let name = params.get("plugin").and_then(Value::as_str).ok_or("plugin must be a plug-in name, id or file")?;
-    let env = session.plugins.env().ok_or("no plug-in catalog is open; plugins.scan looks for installed ones")?;
+    let env = session.plugins.env().ok_or("no plug-in catalog is open; plugin.scan looks for installed ones")?;
     let plugin = env
         .catalog
         .find(name)
         .or_else(|| env.catalog.plugins().find(|p| p.spec() == name))
-        .ok_or_else(|| format!("no plug-in {name:?} in the catalog; plugins.list lists them"))?
+        .ok_or_else(|| format!("no plug-in {name:?} in the catalog; plugin.list lists them"))?
         .clone();
     let instrument = crate::is_instrument(&plugin);
     let device = Device::new(plugin.name.clone(), crate::rack::device_kind(&plugin));

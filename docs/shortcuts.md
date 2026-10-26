@@ -3,7 +3,7 @@ description: Keyboard shortcuts in the desktop app: the default keys, the keymap
 read_when: shortcuts, keys, keymap, Ctrl+drag copies notes, Alt+drag velocity, left edge, keymap.json, keymap preset, workflow mode, workflow menu, workflow settings, Custom mode, double-click, Draw-first, Select-first, Mouse-first, mouse switches, right click deletes, left click draws, Alt right plays, rebind, cut copy paste, duplicate, mute clips, hotkeys, quantise, Ctrl+U, piano roll keys, tool keys, number keys choose a tool, arrow keys, select all, mute tool key, grid keys, Ctrl+1, Ctrl+2, Ctrl+3, Ctrl+4, narrow grid, widen grid, triplet grid, snap to grid, Z, Shift+Z, zoom to selection, zoom to clip, ruler zoom
 type: howto
 status: current
-last_verified: 2026-10-20
+last_verified: 2026-10-24
 covers:
   - crates/ui/src/settings/keymap.rs
   - crates/ui/src/settings/settings_view.rs
@@ -20,7 +20,7 @@ change. An action is one of:
 - something done to the selection, which the window turns into a command (copy the selected clip
   becomes `clip.copy` with that clip);
 - any command that needs no parameters (`transport.play`, `edit.undo`, `launcher.stopAll`,
-  `projects.next` …), the same commands the CLI and MCP run.
+  `project.next` …), the same commands the CLI and MCP run.
 
 Keys go to the actions, not to moving between buttons: Tab and the arrow keys never move the
 keyboard focus from widget to widget (a button holding it would also make every shortcut wait).
@@ -140,7 +140,7 @@ status bar.
 | Open or close the shown track's plug-in editor — the device the chain panel selects, else the track's first running plug-in (`view.plugin`; [spec](spec/ui-clip-editor.md) › The device chain) | P |
 | Add an arrangement marker at the playhead, or at the play start marker while stopped (`marker.addAtPlayhead`; [spec](spec/arrangement-editing.md#markers)) | M |
 | Turn arrangement looping on or off; on without a loop region makes one over the first 4 bars (`transport.setLoopEnabled`; [spec](spec/arrangement-editing.md#loop-region)) | Ctrl+L |
-| Next, previous project (`projects.next`, `projects.previous`) | Ctrl+Tab, Ctrl+Shift+Tab |
+| Next, previous project (`project.next`, `project.previous`) | Ctrl+Tab, Ctrl+Shift+Tab |
 | New project or open one (`file.new`), open one (`file.open`) | Ctrl+N, Ctrl+O |
 | Save, save as (`file.save`, `file.saveAs`); save as template (`file.saveTemplate`) | Ctrl+S, Ctrl+Shift+S; none |
 | Show which version of Suhina this is (`help.about`, Help › About Suhina, [spec](spec/about.md)) | none |

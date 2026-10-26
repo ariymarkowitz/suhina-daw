@@ -28,6 +28,11 @@ impl Recent {
         Self { file, paths }
     }
 
+    /// Writes the list to `file` from now on (the data folder moved).
+    pub fn set_file(&mut self, file: Option<PathBuf>) {
+        self.file = file;
+    }
+
     /// Puts `path` first and writes the list.
     pub fn add(&mut self, path: &Path) -> Result<(), String> {
         let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());

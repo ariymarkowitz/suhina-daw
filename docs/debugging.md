@@ -3,10 +3,14 @@ description: How to find out what the running app does around a bug: the trace l
 read_when: debugging, bug hunting, trace, SUHINA_TRACE, --trace, diagnostic log, live debugging, UI lag, slow frame, frame time, stutter, plug-in host log, ARA, Melodyne, playhead jumps, flicker, timing, latency, screen recording, video frames, contact sheet, tester, hang, freeze, working a bug through
 type: howto
 status: current
-last_verified: 2026-10-23
+last_verified: 2026-10-24
 covers:
+  - apps/suhina/src/liquid.rs
+  - apps/suhina/src/main.rs
+  - apps/suhina/src/theme_io.rs
   - crates/plugins/src/trace.rs
   - crates/ui/src/kit/frame_trace.rs
+  - crates/ui/src/kit/native_css.rs
   - scripts/video_frames.py
   - scripts/trace-summary.py
   - .claude/skills/trace-debugging/SKILL.md
@@ -58,7 +62,7 @@ host process have their own id, so `grep "\[12345\]"` shows one process. To foll
 
 | Line starts with | Written by | When |
 |---|---|---|
-| `action <command> <params>` | app (`App::run`) | every command the window runs, with its parameters; the `projects.*` ones (switching and closing tabs) too |
+| `action <command> <params>` | app (`App::run`) | every command the window runs, with its parameters; the `project.*` ones that switch and close projects (tabs) too |
 | `project opened <id> "<name>" in a new tab` / `… in place of <id>` | app (`App::open_project`) | a project opened, created or recovered, in a tab of its own or in place of the one it closed; opening is no command (ADR 0007), so it has no `action` line |
 | `detail: …` | app | the detail area's state when it changes: the ARA editor shown, pulled to the top, focus |
 | `rack starts / started / stops / rebinds key …` | app (`session/src/rack.rs`) | a plug-in starting, its result, stopping, loaded again with an ARA document |
@@ -104,6 +108,12 @@ Arrangement's lanes and clips, rebuilt only after the project changed: `timeline
 before asking whether to save on quit) and `rest`. The part that stands
 out is where to look.
 
+Detached Settings adds `slow settings native contents` for UI work taking at least 5 ms
+and `slow settings native viewport` for the enclosing native draw/present call. A long
+viewport call with fast contents points to native rendering/presentation rather than
+the settings controls. `settings placement` distinguishes native and embedded Settings;
+the outer `dialogs` frame measurement includes the synchronous native presentation wait.
+
 A closed project's plug-ins are unloaded on a thread of their own, so the window goes on drawing
 meanwhile: `closed project let go in …` says how long it took. Quitting lets every project go at
 once and shows "Closing Suhina" for up to 2 s: `quit: projects let go in …`, or
@@ -115,6 +125,26 @@ Once a second a `frames:` line sums up: how many frames, their drawing time on a
 longest, and the longest wait between two frames. A long wait with short drawing means the time
 went elsewhere: egui laying out and painting the shapes, the GPU, or the window at rest (it
 draws only when something changes, so a wait of seconds while nothing moves is normal).
+
+The desktop also measures `slow desktop UI` and `slow theme sync` outside the UI's
+frame summary. Theme synchronization schedules work and takes in replies after
+that summary's drawing timer. `slow theme file worker` measures background saves
+and file polling; its time must not be mistaken for a window-thread stall.
+`slow theme save`, `slow theme save check`,
+`slow theme package persist` and `slow theme save readback` separate persistence from
+the controls' own work. `slow native CSS tree` measures the retained style tree's
+updates. In older builds, persistence ran synchronously after the drawing timer:
+a long gap between frames could be file work rather than GPU presentation.
+
+Nested UI measurements report `slow arrangement clip`, `slow arrangement track header`,
+`slow session column`, `slow mixer strip`, `slow mixer layout`, `slow waveform geometry`,
+`slow waveform paint` and `slow CSS gradient paint` when an individual call takes at least
+5 ms. These are inclusive measurements: a clip includes its waveform work, and a column
+includes its mixer. Do not add nested durations together. Many calls shorter than 5 ms
+can still make a slow frame; absence of these lines does not exclude that path.
+Slow Arrangement track headers also partition their time into style, interaction,
+background, meter/bands, layout/name, controls/routing and remaining work. Checkpoints
+use bounded storage and are printed together only when the enclosing call is slow.
 
 ### Audio dropouts
 
@@ -227,6 +257,27 @@ Tips:
   difference plain.
 - Run the trace log at the same time; the times of the log and the video can be matched by an
   action you can see in both (a click, a play).
+
+## Settings and liquid surfaces
+
+`liquid resources` reports changes in the number of target sets, their estimated
+RGBA texture bytes and shared texture registrations, sampled at most once a second.
+It covers the liquid provider's resources, not total driver or process GPU memory;
+compare it with Windows GPU Process Memory counters when investigating growth.
+
+With liquid panels enabled, `liquid capture` reports each capture's size and how many draw
+jobs it left out (native callbacks, and textures it cannot bind); what is left out is not
+drawn, and the rest of the capture still is. `menu backdrop` reports how many open menus were
+found, and `no capture` when a menu's backdrop could not be made.
+`slow liquid backdrop` measures captures taking at least 5 ms. `settings overlay`
+reports whether a control is adjusting, whether the temporary undimmed preview is
+active and the panel rectangle. These distinguish capture failure, a changing dimmer
+and unstable layout; frame-rate summaries alone do not establish a visual flicker.
+The native GPU test `liquid::tests::opening_settings_keeps_a_live_backdrop_across_frames`
+opens the actual App and checks successive captures. It does not replace observing
+the native compositor or comparing recorded frames. A separate Settings-window
+regression checks that dragging the modal background cannot trigger the undimmed
+control preview: using the context's global dragged widget ID caused that bug.
 
 ## 3. Working a bug through with a tester
 

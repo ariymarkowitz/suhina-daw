@@ -6,9 +6,10 @@ machine names stay lowercase (`suhina-*` crates, binaries, file names). Read thi
 then [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/architecture.md`](docs/architecture.md)
 (layers, data flow, threads, and where new code goes).
 
-**Find documentation through [`docs/INDEX.md`](docs/INDEX.md)** before reading code: it lists
-every document with the words it is read for (*Read when*), and maps code paths to the documents
-that describe them (*Code and its documents*). Read only the documents that match your task.
+**Find documentation by asking, before reading code:** `python scripts/docs.py find WORDS` lists
+the documents about something, best first, and `python scripts/docs.py covers PATH` the documents
+that describe a file. [`docs/INDEX.md`](docs/INDEX.md) lists every document in a line. Read only
+the documents that match your task.
 
 ## 1. Golden rules
 
@@ -82,6 +83,7 @@ that describe them (*Code and its documents*). Read only the documents that matc
 ```text
 crates/
   model    L0 DAW-neutral project as pure data (tracks, channels, clip contents, clips, launcher)
+  style    L0 native style sheets, scoped selectors, typed values, cascade, Taffy layout and source edits; no GUI or I/O
   stretch  L0 time-stretching and pitch-shifting DSP: a pure-Rust port of Signalsmith Stretch (MIT)
   engine   L1 offline/real-time rendering of notes and audio clips, real-time time-stretching (ADR 0003)
            and the clip launcher; no file I/O
@@ -97,6 +99,8 @@ crates/
   soundmap L2 the sample map: features of samples, layouts by how they sound (t-SNE), grids, kinds, the feature cache
   update   L2 updates: whether a newer nightly or test build is out (GitHub, through the system's
            curl), downloading it, checking its SHA-256 and putting it in place of the running build
+  theme-package L1 theme packages (.theme.suhina): a theme's files with a SHA-256 manifest, packed, read
+           and validated; used by the app's export and import and suhina-cli theme
   separation L2 stem separation: chunking, weighted overlap-add and resampling around an inference backend
              trait, and a deterministic test backend (a band splitter); no model or commands yet (#146)
   session  L2 open projects (tabs, ADR 0007), undo history, the command registry (ADR 0002), the
@@ -119,6 +123,7 @@ crates/
   ipc      L0 audio blocks to a plug-in host process: shared memory, block sync with a deadline (ADR 0006; may use unsafe)
   realtime L0 real-time priority for audio threads: MMCSS Pro Audio on Windows, SCHED_FIFO or rtkit on Linux
   plugins  L1 the engine's side of plug-in hosting: start a host process, control protocol, health, state, restart; scanning; offline runs
+  test-support  dev-dependency only: ProjectBuilder, write_wav, test signals, golden files (SUHINA_BLESS)
   plugin-host  the suhina-plugin-host executable plug-ins run in (ADR 0006; may use unsafe): CLAP, VST3, test plug-ins
 devices/
   sampler  single-source sample and granular instrument; SDK runtime and theme-aware panel
@@ -138,7 +143,8 @@ devices/
   pitch    MIDI effect: transposes notes by semitones or scale degrees, keeps them in a key window (Block, Fold, Limit)
 apps/
   suhina-cli   headless CLI: render, play, mcp, commands, audio, plugins, plugin, fm-synth
-  suhina       the desktop app (eframe): opens a project and shows it in the ui
+  suhina       the desktop app (eframe): opens a project and shows it in the ui;
+               theme file operations and live reload run on one background worker
 docs/
   architecture.md  how the crates, threads and commands fit together
   decisions/  architecture decision records; read 0001 before changing the model, 0004 before a device
@@ -147,10 +153,11 @@ docs/
   research/   status analysis of our own project: parity against another DAW's public manual
               (ADR 0016; an ordinary document whose marked parts scripts/parity/ keeps current)
               and its two figures
-  INDEX.md    generated list of documents and the code each covers (scripts/docs.py)
+  INDEX.md    generated list of documents, one line each (scripts/docs.py find and covers query it)
   commands.md generated list of every command (suhina-cli commands --markdown)
 assets/brand/ the logo as SVG: `suhina-logo.svg` (the name with the wave, drawn on the splash by
-              `crates/ui/src/kit/logo.rs`) and `suhina-mark.svg` (the wave mark alone, for icons)
+              `crates/ui/src/kit/logo.rs`) and `suhina-mark.svg` (the wave mark alone, for icons);
+              `suhina-icon.png`, the app's icon (`Suhina.app` on macOS, by `scripts/macos_app.sh`)
 third_party/  vendored source: the ASIO SDK's host part (GPL-3.0, built with `asio`) and LAME 3.100's
               encoder (LGPL, always built for MP3 export; Suhina's own fft.c, ADR 0029)
 scripts/   research helpers (e.g. extracting and diffing .als files), the parity measurement
@@ -386,6 +393,25 @@ coverage writes `Parity: no change` and the reason in its description ("Parity: 
 refactor"). When a pull request changes `crates/`, `devices/` or `apps/` and does neither, the
 [Parity notice](.github/workflows/parity-notice.yml) check warns; it does not fail.
 
+**Settings include their website help.** Whenever you add, remove, move, rename or change a
+setting, complete its guide update automatically in the same pull request. Read
+[`docs/spec/settings-guide-export.md`](docs/spec/settings-guide-export.md), the control in
+`crates/ui/src/settings/settings_rows.rs` and its implementation. Update
+`docs/guide-data/settings-help.json`: description, summary when present, every choice's name
+and explanation, when to change it, implementation references and any work-in-progress status.
+Explain grouped controls, defaults, dependencies and when a control has no effect. Migrate IDs
+for moved settings and remove help for deleted settings. Review behavior changes even when
+the registry metadata and fingerprint stay unchanged. Copy the current source fingerprint
+only after reviewing the text; never refresh fingerprints merely to make CI pass.
+
+Run `python scripts/settings_guide.py` and commit `docs/guide-data/settings.json` with the
+authored help. This export is intentionally committed, unlike the generated files below.
+Then run `python scripts/settings_guide.py --check` and
+`python -m unittest discover -s scripts -p 'test_settings_guide.py'`. Check every changed
+setting, not just the first error: the exporter stops at the first missing or stale entry.
+Do not defer the guide to another repository or a follow-up, and do not wait for a separate
+request to document a setting.
+
 **Documentation is part of the change.** A pull request that changes how something works updates,
 in the same pull request, every document that describes it, so the docs never describe code
 that no longer exists. [`docs/README.md`](docs/README.md) says what each kind of document holds
@@ -397,6 +423,7 @@ that no longer exists. [`docs/README.md`](docs/README.md) says what each kind of
 | A crate's role, a dependency between crates, threads, how commands or data flow | [`docs/architecture.md`](docs/architecture.md), and the crate map above |
 | A decision recorded in an ADR | that ADR (status, consequences), or a new ADR that supersedes it |
 | What is read from a format, or behaviour described in a spec | the spec in `docs/spec/` |
+| What a `.suhina` or `.sd` file holds | its `VERSION`, a file for the new version and a row in the spec's *Versions* ([ADR 0010](docs/decisions/0010-project-files.md) › Amendment: format versions) |
 | MCP tools, or how agents use commands | [`docs/mcp.md`](docs/mcp.md) (the command list, [`docs/commands.md`](docs/commands.md), is generated) |
 | What works for users | [`ROADMAP.md`](ROADMAP.md) › What works now, and [`README.md`](README.md) if it shows it |
 | What the parity measurement says (a milestone that lands, a feature that appears or is dropped) | the coverage of the chapters it changes in `scripts/parity/score.py`; the marked parts of [`docs/research/parity-live-12.md`](docs/research/parity-live-12.md) are regenerated on `main`, and its prose is edited in that file like any other document |

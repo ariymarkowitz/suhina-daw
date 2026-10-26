@@ -6,8 +6,9 @@
 //! A plug-in is switched on or off by its checkbox; a file that failed, or that is built for
 //! another processor, is read again with its **Scan again**. Opened from Settings › Plug-ins and
 //! drawn in the Settings dialog's place until it is closed; what it changes goes through the
-//! `plugins.*` commands, as [`PluginRequest`]s the app runs.
+//! `plugin.*` commands, as [`PluginRequest`]s the app runs.
 
+use crate::kit::surface::Backgrounds as _;
 use egui::{Align2, Id, Pos2, Rect, Sense, Ui, Vec2};
 
 use crate::kit::theme::{self, PAD};
@@ -184,9 +185,13 @@ pub struct ManagerOut {
 
 /// Draws the manager over `area`.
 pub fn show(ui: &mut Ui, area: Rect, plugins: &mut PluginsView) -> ManagerOut {
+    // `.plugin-manager` styles it; its buttons and fields take the sheet's `.button` and `.text-input`.
+    let _style = crate::kit::style_class::enter("plugin-manager");
+    let mut styled_ui = crate::kit::style_class::ui(ui);
+    let ui = &mut *styled_ui;
     let mut out = ManagerOut::default();
     let painter = ui.painter_at(area);
-    painter.rect_filled(area, 0.0, theme::window_background());
+    crate::kit::native_css::surface(&painter, area, 0.0, theme::window_background());
     let inner = area.shrink(2.0 * PAD);
     let small = theme::ui_font(theme::TEXT_SMALL);
 
@@ -233,10 +238,12 @@ pub fn show(ui: &mut Ui, area: Rect, plugins: &mut PluginsView) -> ManagerOut {
     let edit = ui.put(
         search,
         egui::TextEdit::singleline(&mut plugins.manager.search)
+            .frame(widgets::input_frame())
             .hint_text("Find by name, vendor or file")
             .font(small.clone()),
     );
     edit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Find a plug-in"));
+    widgets::input_line(ui, &edit);
     if plugins.scanning {
         let hint = Rect::from_min_max(
             Pos2::new(search.right() + 12.0, search.top()),
@@ -271,7 +278,7 @@ pub fn show(ui: &mut Ui, area: Rect, plugins: &mut PluginsView) -> ManagerOut {
         };
         let color = if sorted == index { theme::text_primary() } else { theme::text_hint() };
         let fill = motion::mix(theme::window_background(), theme::panel_hover(), widgets::hover(ui, &response));
-        painter.rect_filled(rect, 0.0, fill);
+        painter.fill_background(rect, 0.0, fill);
         widgets::text_in(
             &painter,
             rect.shrink2(Vec2::new(3.0, 0.0)),
@@ -319,9 +326,9 @@ pub fn show(ui: &mut Ui, area: Rect, plugins: &mut PluginsView) -> ManagerOut {
                 };
                 let lit = spec.as_ref().is_some_and(|s| picked.contains(s));
                 if lit {
-                    row_painter.rect_filled(rect, 0.0, theme::control_active());
+                    row_painter.fill_background(rect, 0.0, theme::control_active());
                 } else if ui.rect_contains_pointer(rect) {
-                    row_painter.rect_filled(rect, 0.0, theme::panel_hover());
+                    row_painter.fill_background(rect, 0.0, theme::panel_hover());
                 }
                 // A click picks the row (Ctrl adds, Shift takes the run); the right-click menu
                 // switches every picked plug-in off or on (#725).
@@ -361,7 +368,12 @@ pub fn show(ui: &mut Ui, area: Rect, plugins: &mut PluginsView) -> ManagerOut {
                         _ => theme::text_hint(),
                     };
                     let galley = widgets::fitted(&row_painter, text, small.clone(), color, cell.width());
-                    row_painter.galley(Pos2::new(cell.left(), rect.center().y - galley.size().y / 2.0), galley, color);
+                    crate::kit::widgets::paint_text(
+                        &row_painter,
+                        Pos2::new(cell.left(), rect.center().y - galley.size().y / 2.0),
+                        galley,
+                        color,
+                    );
                 }
                 let (on_left, on_right) = columns[0];
                 let (action_left, action_right) = columns[8];

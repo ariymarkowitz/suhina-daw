@@ -53,10 +53,7 @@ fn channel(id: u32) -> Channel {
 
 /// Keys (plays notes) and Mic (hears input channel 1), with two empty scenes.
 fn project() -> Project {
-    // Ids on its lanes, clips and scenes, as a session gives them.
-    let mut project = project_built();
-    assert_eq!(project.assign_ids(), Ok(()));
-    project
+    suhina_test_support::with_ids(project_built())
 }
 
 fn project_built() -> Project {
@@ -98,7 +95,7 @@ fn rig(project: Project) -> Rig {
 
 impl Rig {
     fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        self.session.execute(id, &params).map_err(|e| e.0)
+        self.session.execute(id, &params).map_err(String::from)
     }
 
     /// Renders until frame `until`, feeding the input `level`.
@@ -194,6 +191,7 @@ fn a_slot_records_from_the_next_bar_and_plays_its_take_looped() {
 #[test]
 fn the_arrangement_records_after_the_count_in() {
     let mut rig = rig(project());
+    rig.session.set_track_type_colours(Rgb(200, 40, 90), Rgb(30, 120, 220));
     rig.run("track.setArm", json!({ "track": 1, "armed": true })).unwrap();
     rig.run("transport.setCountIn", json!({ "bars": 1 })).unwrap();
     let started = rig.run("transport.record", json!({ "on": true })).unwrap();
@@ -214,6 +212,11 @@ fn the_arrangement_records_after_the_count_in() {
     rig.render_to(BEAT * 6, 0.0);
     rig.live.send(LiveEvent::NoteOff { key: 62 });
     rig.render_to(BEAT * 7, 0.0);
+    let spans = rig.session.arrangement_recording_spans();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].0, TrackId(1));
+    assert_eq!(spans[0].1, 0.0);
+    assert!(spans[0].2 > 2.9, "live recording grows before committing: {spans:?}");
     rig.run("transport.record", json!({ "on": false })).unwrap();
     assert!(!rig.session.records_arrangement());
     rig.settle();
@@ -222,6 +225,7 @@ fn the_arrangement_records_after_the_count_in() {
     assert_eq!(lane.clips.len(), 1);
     let clip = &lane.clips[0];
     assert_ne!(clip.id.0, 0, "the take's clip has an id the clip commands take");
+    assert_eq!(clip.color, Some(Rgb(200, 40, 90)));
     // It ends where the playhead was when asked: within a block of beat 3.
     assert!(close(clip.start, 0.0) && (clip.length - 3.0).abs() < 0.02, "{clip:?}");
     let got = notes(p.content(clip.content).unwrap());

@@ -9,7 +9,8 @@
 //! `cx.on_off(r, |s| &mut s.field)` or `cx.choose(r, &[("Text", value), …], |s| &mut s.field)`.
 
 use crate::settings::settings_view::{Entry, Page, block, row};
-use crate::settings::view_settings::DetailLayout;
+use crate::settings::track_sizes::TrackSize;
+use crate::settings::view_settings::{DetailLayout, WaveformColour};
 use crate::settings::{
     AtStart, DeviceLayout, EditorPlacement, Graphics, MixerControls, OnOpen, PianoRollTop, PlayFrom, Side, StopReturn,
     ToolbarSize, WarpMode,
@@ -69,6 +70,18 @@ pub(crate) static ROWS: &[Entry] = &[
         |cx, r| {
             let default = cx.about.templates_default.clone();
             cx.folder(r, &default, crate::interaction::pick::PickField::TemplatesFolder, |s| &mut s.templates_folder);
+        },
+    ),
+    // Settings folder is named beside the default folder, not in the settings file: no saved key.
+    row(
+        Page::General,
+        "Projects",
+        "Settings folder",
+        "Where Suhina keeps its settings, keys, recent projects and themes; used from the next start",
+        &[],
+        |cx, r| {
+            let (default, value) = (cx.about.data_default.clone(), cx.settings.data_folder.clone());
+            cx.moved_folder(r, &default, crate::interaction::pick::PickField::DataFolder, &value);
         },
     ),
     row(
@@ -349,6 +362,43 @@ pub(crate) static ROWS: &[Entry] = &[
     row(
         Page::Arrangement,
         "Clips",
+        "Waveform and note colour",
+        "Theme uses the theme's colour (dark when it gives none); Auto follows each clip's brightness; Light, Dark and Custom use one colour for waveforms, MIDI notes and ARA notes",
+        &["waveform_colour"],
+        |cx, r| {
+            cx.choose(
+                r,
+                &[
+                    ("Theme", WaveformColour::Theme),
+                    ("Auto", WaveformColour::Auto),
+                    ("Light", WaveformColour::Light),
+                    ("Dark", WaveformColour::Dark),
+                    ("Custom", WaveformColour::Custom),
+                ],
+                |s| &mut s.view.waveform.mode,
+            )
+        },
+    ),
+    row(
+        Page::Arrangement,
+        "Clips",
+        "Custom waveform and note colour",
+        "Choose the waveform and note colour; applies immediately",
+        &["waveform_custom_colour"],
+        |cx, r| cx.waveform_colour(r),
+    )
+    .when(|s| s.view.waveform.mode == WaveformColour::Custom),
+    row(
+        Page::Arrangement,
+        "Clips",
+        "Audio clip colour strength",
+        "How strongly audio clips show their original colour; applies immediately",
+        &["audio_clip_colour_strength"],
+        |cx, r| cx.colour_strength(r, |s| &mut s.view.audio_colour_strength),
+    ),
+    row(
+        Page::Arrangement,
+        "Clips",
         "Ctrl+Alt-drag on an edge stretches audio",
         "An audio clip's edge dragged with Ctrl and Alt held time-stretches its audio to the new length, its pitch kept; off, it moves the edge as a plain drag does",
         &["stretch_alt_drag"],
@@ -374,9 +424,27 @@ pub(crate) static ROWS: &[Entry] = &[
         Page::Arrangement,
         "Tracks",
         "New track colour",
-        "Alternating: each new track takes the next colour of the palette, by its place; fixed: every new track takes the palette's first colour. A track keeps the colour it was made with",
+        "By clip type: MIDI and audio tracks use their theme defaults. One colour: all new tracks use the MIDI default. Existing custom colours stay unchanged",
         &["new_track_colour"],
-        |cx, r| cx.choose(r, &[("Alternating", false), ("Fixed", true)], |s| &mut s.view.fixed_track_colour),
+        |cx, r| cx.choose(r, &[("By clip type", false), ("One colour", true)], |s| &mut s.view.fixed_track_colour),
+    ),
+    row(
+        Page::Arrangement,
+        "Tracks",
+        "New clip colour",
+        "Track colour: a new clip takes the colour its track has now. Theme default: MIDI and audio clips use the theme's clip defaults. Existing clips keep their colours",
+        &["new_clip_colour"],
+        |cx, r| {
+            cx.choose(r, &[("Track colour", true), ("Theme default", false)], |s| &mut s.view.new_clip_track_colour)
+        },
+    ),
+    row(
+        Page::Arrangement,
+        "Tracks",
+        "Track header colour strength",
+        "How strongly track headers show their original colour; applies immediately",
+        &["track_header_colour_strength"],
+        |cx, r| cx.colour_strength(r, |s| &mut s.view.header_colour_strength),
     ),
     row(
         Page::Arrangement,
@@ -384,7 +452,11 @@ pub(crate) static ROWS: &[Entry] = &[
         "Track headers",
         "Which side of the timeline they are on",
         &["track_headers"],
-        |cx, r| cx.choose(r, &[("Left", Side::Left), ("Right", Side::Right)], |s| &mut s.track_headers),
+        |cx, r| {
+            cx.choose(r, &[("Theme", None), ("Left", Some(Side::Left)), ("Right", Some(Side::Right))], |s| {
+                &mut s.track_headers
+            })
+        },
     ),
     row(
         Page::Arrangement,
@@ -394,7 +466,88 @@ pub(crate) static ROWS: &[Entry] = &[
         &["arrangement_returns"],
         |cx, r| cx.choose(r, &[("Shown", false), ("Hidden", true)], |s| &mut s.view.returns_hidden),
     ),
+    row(
+        Page::Arrangement,
+        "Track sizes",
+        "Default track size",
+        "Named height for ordinary Arrangement tracks",
+        &["arrangement_track_size"],
+        |cx, r| {
+            cx.choose(
+                r,
+                &[
+                    ("Tiny", TrackSize::Tiny),
+                    ("Compact", TrackSize::Compact),
+                    ("Small", TrackSize::Small),
+                    ("Medium", TrackSize::Medium),
+                    ("Large", TrackSize::Large),
+                ],
+                |s| &mut s.view.track_sizes.tracks,
+            );
+        },
+    ),
+    row(
+        Page::Arrangement,
+        "Track sizes",
+        "Default return size",
+        "Return tracks have their own default size",
+        &["arrangement_return_size"],
+        |cx, r| {
+            cx.choose(
+                r,
+                &[
+                    ("Tiny", TrackSize::Tiny),
+                    ("Compact", TrackSize::Compact),
+                    ("Small", TrackSize::Small),
+                    ("Medium", TrackSize::Medium),
+                    ("Large", TrackSize::Large),
+                ],
+                |s| &mut s.view.track_sizes.returns,
+            );
+        },
+    ),
+    row(
+        Page::Arrangement,
+        "Track sizes",
+        "Advanced track sizes",
+        "Show exact heights in pixels; all sizes stay ordered",
+        &["arrangement_sizes_advanced"],
+        |cx, r| cx.on_off(r, |s| &mut s.view.track_sizes.advanced),
+    ),
+    row(
+        Page::Arrangement,
+        "Track sizes",
+        "Tiny height",
+        "Adjust the smallest row; always below Compact",
+        &["arrangement_size_heights"],
+        |cx, r| cx.track_size_height(r, TrackSize::Tiny),
+    ),
+    row(Page::Arrangement, "Track sizes", "Compact height", "Adjust Compact between Tiny and Small", &[], |cx, r| {
+        cx.track_size_height(r, TrackSize::Compact)
+    }),
+    row(Page::Arrangement, "Track sizes", "Small height", "Adjust Small between Compact and Medium", &[], |cx, r| {
+        cx.track_size_height(r, TrackSize::Small)
+    }),
+    row(Page::Arrangement, "Track sizes", "Medium height", "Adjust Medium between Small and Large", &[], |cx, r| {
+        cx.track_size_height(r, TrackSize::Medium)
+    }),
+    row(
+        Page::Arrangement,
+        "Track sizes",
+        "Large height",
+        "Adjust the largest named row; always above Medium",
+        &[],
+        |cx, r| cx.track_size_height(r, TrackSize::Large),
+    ),
     // Session view and mixer.
+    row(
+        Page::Arrangement,
+        "Pasting",
+        "Replace clip",
+        "Paste onto a selected clip at its start and remove that destination clip; off pastes after it",
+        &["replace_clip"],
+        |cx, r| cx.on_off(r, |s| &mut s.view.replace_clip),
+    ),
     row(
         Page::Session,
         "Launching",
@@ -566,6 +719,88 @@ pub(crate) static ROWS: &[Entry] = &[
     // Appearance.
     row(
         Page::Appearance,
+        "Background",
+        "Background image",
+        "Choose your own PNG; desktop icons and other windows are never captured. Empty removes the image",
+        &["background_image"],
+        |cx, r| {
+            cx.folder(r, "No image", crate::interaction::pick::PickField::BackgroundImage, |s| &mut s.background_image)
+        },
+    ),
+    row(
+        Page::Appearance,
+        "Background",
+        "Surface opacity",
+        "Tint over the background image; 100% makes neutral panels solid",
+        &["background_tint"],
+        |cx, r| cx.colour_strength(r, |s| &mut s.view.background_tint),
+    ),
+    row(
+        Page::Appearance,
+        "Background",
+        "Background blur",
+        "Blur the chosen image; no live desktop capture",
+        &["background_blur"],
+        |cx, r| cx.background_blur(r),
+    ),
+    row(
+        Page::Appearance,
+        "Application bar",
+        "Application name position",
+        "Suhina is always shown",
+        &["app_name_centered"],
+        |cx, r| cx.choose(r, &[("Left", false), ("Centre", true)], |s| &mut s.view.app_name_centered),
+    ),
+    row(
+        Page::Appearance,
+        "Application bar",
+        "Show project name",
+        "Show the active project and its unsaved marker",
+        &["bar_project_name"],
+        |cx, r| cx.on_off(r, |s| &mut s.view.bar_project_name),
+    ),
+    row(
+        Page::Appearance,
+        "Application bar",
+        "Show project timing",
+        "Show the active project's tempo and time signature",
+        &["bar_project_timing"],
+        |cx, r| cx.on_off(r, |s| &mut s.view.bar_project_timing),
+    ),
+    row(
+        Page::Appearance,
+        "Application bar",
+        "Project information position",
+        "Fields sharing the same position appear together",
+        &["bar_project_centered"],
+        |cx, r| cx.choose(r, &[("Left", false), ("Centre", true)], |s| &mut s.view.bar_project_centered),
+    ),
+    row(
+        Page::Appearance,
+        "Liquid (experimental)",
+        "Panel liquid",
+        "Settings backdrop transparency; 0% is solid. Requires GPU renderer and Animations on",
+        &["liquid_panel_strength"],
+        |cx, r| cx.liquid_strength(r, |s| &mut s.view.liquid.panels),
+    ),
+    row(
+        Page::Appearance,
+        "Liquid (experimental)",
+        "Track liquid",
+        "Reflection on MIDI and audio track headers; 0% is flat. Requires GPU renderer and Animations on",
+        &["liquid_track_strength"],
+        |cx, r| cx.liquid_strength(r, |s| &mut s.view.liquid.tracks),
+    ),
+    row(
+        Page::Appearance,
+        "Liquid (experimental)",
+        "Clip liquid",
+        "Reflection on clip backgrounds; notes and waveforms stay sharp. 0% is flat; requires GPU and Animations on",
+        &["liquid_clip_strength"],
+        |cx, r| cx.liquid_strength(r, |s| &mut s.view.liquid.clips),
+    ),
+    row(
+        Page::Appearance,
         "Window",
         "Zoom",
         "The size of the whole window; Ctrl and + or -, Ctrl and 0 for 100 %",
@@ -601,14 +836,33 @@ pub(crate) static ROWS: &[Entry] = &[
             cx.choose(r, &[("GPU", Graphics::Gpu), ("OpenGL", Graphics::OpenGl)], |s| &mut s.graphics);
         },
     ),
+    row(
+        Page::Appearance,
+        "Menu bar",
+        "Menu bar in the window",
+        "Show the menus at the top of the window; on macOS the bar at the top of the screen has them too",
+        &["menu_bar"],
+        |cx, r| cx.on_off(r, |s| &mut s.view.menu_bar),
+    ),
     // Theme.
     block(
         Page::Theme,
         "Theme",
         "Theme",
-        "The themes to pick from, the theme in use and its colours",
+        "The themes to pick from, their variants, the theme in use and its settings",
         &["theme"],
         crate::settings::settings_view::theme_block,
+    ),
+    row(
+        Page::Theme,
+        "Folder",
+        "Themes folder",
+        "Where themes are kept and read from; empty for the folder in Suhina's data",
+        &["themes_folder"],
+        |cx, r| {
+            let (default, value) = (cx.about.themes_default.clone(), cx.settings.themes_folder.clone());
+            cx.moved_folder(r, &default, crate::interaction::pick::PickField::ThemesFolder, &value);
+        },
     ),
     // Shortcuts.
     block(

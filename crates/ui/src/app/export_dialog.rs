@@ -198,16 +198,16 @@ impl ExportJob {
     pub fn params(&self) -> Value {
         let mut params = json!({
             "path": self.path.display().to_string(),
-            "sample_rate": self.sample_rate,
+            "sampleRate": self.sample_rate,
         });
         if let Some(format) = self.format {
             params["format"] = json!(format);
         }
         if let Some(rate) = self.mp3_rate {
-            params["mp3_rate"] = json!(rate);
+            params["mp3Rate"] = json!(rate);
         }
         if let Some(depth) = self.bit_depth {
-            params["bit_depth"] = json!(depth);
+            params["bitDepth"] = json!(depth);
         }
         if let Some(dither) = self.dither {
             params["dither"] = json!(dither);
@@ -240,10 +240,14 @@ impl CloseChoice for ExportChoice {
 
 /// Draws the export dialog over `area`. Returns what was chosen, or `None` while it stays open.
 pub fn show_export(ui: &Ui, area: Rect, state: &mut ExportDialog) -> Option<ExportChoice> {
+    let _style_class = crate::kit::style_class::enter("dialog");
     egui::Area::new(Id::new("export-dialog"))
         .order(egui::Order::Foreground)
         .fixed_pos(area.min)
         .show(ui.ctx(), |ui| {
+            // The sheet's generic `.button` and `.text-input` rules reach the dialog's own widgets.
+            let mut styled_ui = crate::kit::style_class::ui(ui);
+            let ui = &mut *styled_ui;
             ui.set_min_size(area.size());
             draw_export(ui, area, state)
         })

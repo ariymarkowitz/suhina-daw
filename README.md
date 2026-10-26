@@ -50,7 +50,8 @@ release, so expect unfinished parts and bugs
 ([nightly downloads](https://github.com/suhina-daw/suhina-daw/releases/tag/nightly)).
 It and tagged versions hold the desktop app `suhina`, the command-line tool `suhina-cli` and the
 plug-in host `suhina-plugin-host`, for Linux (x86_64), Windows (x64) and macOS (universal). The
-host is the process plug-ins run in: keep the three in one folder. Tell us what works and what breaks
+host is the process plug-ins run in: keep the three in one folder. On macOS the package holds
+`Suhina.app`, which you can drag to Applications; the other two are inside it. Tell us what works and what breaks
 on [Discord](https://discord.com/invite/e5JAZYMU) or in the
 [issues](https://github.com/suhina-daw/suhina-daw/issues). The binaries are not signed yet,
 so macOS and Windows warn before running them. On Linux they need the ALSA library (`libasound2`).
@@ -221,5 +222,8 @@ SDK effect panels can include custom vector controls, XY pads, gradients and emb
 icons, photos and repeating backgrounds. Artwork and bindings travel inside the single `.sd`;
 see the [custom panel guide](docs/device-sdk.md#custom-panels-images-and-controls).
 
-Application builds generate stock device definitions in the build script's `OUT_DIR/devices/`
-as `.sd` files and embed them in the executable for immediate startup availability.
+
+The Rust SDK also offers prepared sample resources, private polyphonic voice/grain graphs,
+slicing, native stretch and editable sampler/granular templates. Run the
+[`sampler_composition` example](crates/device-sdk/examples/sampler_composition.rs) to save and
+render loop, reverse, slice, granular and tempo graphs using one shared resident sample.

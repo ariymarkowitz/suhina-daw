@@ -20,9 +20,10 @@ name: Claim
 # Backlog. Anyone who is not a maintainer holds at most `MAX_OPEN_CLAIMS` claims without a pull
 # request at a time.
 #
-# It needs the repository secret `PROJECT_TOKEN`, because the workflow's `GITHUB_TOKEN` cannot
-# reach a project owned by the organization. docs/claim-bot.md says how to make one, which
-# scopes it needs and what happens when it expires.
+# It needs the secret `PROJECT_TOKEN`, because the workflow's `GITHUB_TOKEN` cannot reach a project
+# owned by the organization. The secret is in the environment `project-board`, which only `main`
+# may use, so a workflow pushed to another branch cannot read it. docs/claim-bot.md says how to
+# make one, which scopes it needs and what happens when it expires.
 on:
   issue_comment:
     types: [created]
@@ -44,6 +45,10 @@ jobs:
     # The board's Status is one value: two commands at the same moment would race for it.
     concurrency: claim-${{ github.event.issue.number }}
     runs-on: ubuntu-latest
+    # For PROJECT_TOKEN only: no deployment is recorded.
+    environment:
+      name: project-board
+      deployment: false
     steps:
       - uses: actions/github-script@v9
         env:

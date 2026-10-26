@@ -153,3 +153,23 @@ fn fm_plays_every_note_track_with_a_voice_from_a_bank() {
     let ids: Vec<&DeviceKind> = project.channels[0].devices.iter().map(|d| &d.kind).collect();
     assert_eq!(ids, [&DeviceKind::Builtin("pitch".into()), &DeviceKind::Builtin("fm-synth".into())]);
 }
+
+#[test]
+fn theme_pack_and_validate_work_on_a_folder_and_its_package() {
+    let dir = std::env::temp_dir().join(format!("suhina-cli-theme-{}", std::process::id()));
+    let _gone = std::fs::remove_dir_all(&dir);
+    let folder = dir.join("night");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("theme.css"), "theme { name: \"Night\"; } :root { --accent: #ff8800; }").unwrap();
+    let args = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    theme(&args(&["validate", folder.to_str().unwrap()])).unwrap();
+    theme(&args(&["pack", folder.to_str().unwrap()])).unwrap();
+    let package = dir.join("night.theme.suhina");
+    theme(&args(&["validate", package.to_str().unwrap()])).unwrap();
+    let read = suhina_theme_package::read(&std::fs::read(&package).unwrap()).unwrap();
+    assert_eq!((read.id.as_str(), read.name.as_str()), ("night", "Night"));
+    std::fs::write(&package, b"damaged").unwrap();
+    assert!(theme(&args(&["validate", package.to_str().unwrap()])).is_err());
+    assert!(theme(&args(&["pack"])).is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

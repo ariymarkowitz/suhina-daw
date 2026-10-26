@@ -237,9 +237,28 @@ impl Chain {
                     if !stored.enabled {
                         continue;
                     }
+                    let mut samples = suhina_device_sdk::sample_resource::PreparedSamples::default();
+                    if let Some(source) = stored.sample_file().and_then(|file| audio.files.get(file)) {
+                        let Ok(asset) = suhina_device_sdk::sample_resource::SampleAsset::new(
+                            source.clone(),
+                            source.sample_rate,
+                            source.channels,
+                        ) else {
+                            continue;
+                        };
+                        if samples.insert("sample", std::sync::Arc::new(asset)).is_err() {
+                            continue;
+                        }
+                    }
                     let mut slot = match graph.role {
                         suhina_device_sdk::DeviceRole::Effect => {
-                            let Ok(effect) = graph.compile_at(f64::from(sample_rate)) else { continue };
+                            let Ok(effect) = suhina_device_registry::compile_graph_with_samples(
+                                &graph,
+                                f64::from(sample_rate),
+                                &samples,
+                            ) else {
+                                continue;
+                            };
                             Slot::Sd(effect)
                         }
                         suhina_device_sdk::DeviceRole::MidiEffect => {
@@ -247,7 +266,11 @@ impl Chain {
                             Slot::MidiSd(effect)
                         }
                         suhina_device_sdk::DeviceRole::Instrument => {
-                            let Ok(instrument) = graph.compile_instrument_at(f64::from(sample_rate)) else {
+                            let Ok(instrument) = suhina_device_registry::compile_graph_with_samples(
+                                &graph,
+                                f64::from(sample_rate),
+                                &samples,
+                            ) else {
                                 continue;
                             };
                             Slot::InstrumentSd(instrument)
@@ -270,6 +293,12 @@ impl Chain {
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     use std::hash::{Hash, Hasher};
                     bytes.hash(&mut hasher);
+                    stored.sample_file().hash(&mut hasher);
+                    stored
+                        .sample_file()
+                        .and_then(|file| audio.files.get(file))
+                        .map(std::sync::Arc::as_ptr)
+                        .hash(&mut hasher);
                     slots.push(slot);
                     positions.push(position);
                     ids.push(format!("sd:{}:{:016x}", graph.id, hasher.finish()));
@@ -459,14 +488,16 @@ impl Chain {
         }
     }
 
-    /// Takes a fader move to `volume` (the channel's linear volume) from the next block, smoothed;
-    /// ignored without a [`Chain::built_volume`]. Never allocates.
+    /// Takes a fader move to `volume` (the channel's linear volume, at most +6 dB) from the next
+    /// block, smoothed; ignored without a [`Chain::built_volume`], and for a volume whose ratio to
+    /// the built one is not a finite `f32`. Never allocates.
     pub(crate) fn set_live_volume(&mut self, volume: f64) {
         if let Some(built) = self.built_volume
             && volume.is_finite()
             && volume >= 0.0
+            && let Some(ratio) = live_ratio(volume, built)
         {
-            self.live.target = (volume / built) as f32;
+            self.live.target = ratio;
         }
     }
 
@@ -1537,6 +1568,14 @@ impl Default for LiveVolume {
 
 /// The equal-power factors of pan `pan` (-1 to 1) on centred gains: 1 and 1 centred, √2 and 0 at
 /// the left end.
+/// A live level's factor against the level a graph was built at: `level` clamped to the most a
+/// fader or a send can be (+6 dB), or `None` when the ratio is not a finite `f32` (a built level
+/// so small that the division overflows), so a hostile value never reaches the mix.
+pub(crate) fn live_ratio(level: f64, built: f64) -> Option<f32> {
+    let ratio = (level.min(suhina_model::automation::MAX_VOLUME) / built) as f32;
+    ratio.is_finite().then_some(ratio)
+}
+
 pub(crate) fn pan_factors(pan: f64) -> (f32, f32) {
     let (left, right) = suhina_dsp::pan::gains(pan);
     ((left * std::f64::consts::SQRT_2) as f32, (right * std::f64::consts::SQRT_2) as f32)
@@ -1590,7 +1629,7 @@ mod live_volume_tests {
                 points: vec![AutomationPoint::new(0.0, 0.0)],
                 enabled: true,
             });
-            chain.mix = MixLanes::new(&channel, 24_000.0, true);
+            chain.mix = MixLanes::new(&channel, 24_000.0, true, 48_000.0);
             assert!(chain.mix.is_some());
         }
         chain.built_volume = Some(1.0);
