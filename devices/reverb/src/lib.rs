@@ -7,15 +7,16 @@
 //! ```text
 //! in -> mono sum -> roll-off, Low Cut, High Cut -> predelay line -+-> reflection taps (Spin) -> Reflect -+
 //!                                                                  |                                    +-> Stereo -> Dry/Wet
-//!                                                                  +-> Shape delay -> direct taps       |
-//!                                                                      -> 4 allpasses -> network -> Diffuse
+//!                                                                  +-> damping -> Shape delay ->        |
+//!                                                                      direct taps -> network -> Diffuse
 //! ```
 //!
 //! The early reflections are the measured tap pattern (docs/spec/reverb.md); the network takes the
-//! direct taps again after the Shape delay. The late reverb is a feedback delay network of 4, 8,
-//! 12 or 16 lines (Density) mixed by a Hadamard matrix, the textbook design (Jot and Chaigne,
-//! 1991); each line's gain sets the same decay time whatever its length, and shelves in the loop
-//! take away more of the highs or lows per second. Size scales every delay with the cube root of
+//! direct taps again after the Shape delay, each into a line of its own. The late reverb is a
+//! feedback delay network of 4, 8, 12 or 16 lines (Density) mixed by a Householder reflection, the
+//! textbook design (Jot and Chaigne, 1991), with a Schroeder allpass (Diffusion) in every line;
+//! each line's gain sets the same decay time whatever its length, and shelves in the loop take
+//! away more of the highs or lows per second. Size scales every delay with the cube root of
 //! the room's volume. The network's delay lengths and constants are this device's own.
 
 use suhina_device_api::{
@@ -334,12 +335,13 @@ const REFLECTION_POWER: f64 = 0.886;
 /// at it when High Cut is off.
 const TOP_CUT: f64 = 18_000.0;
 
-/// Delay from the predelay to the diffusers: this plus the next times the size factor, plus the
+/// Delay from the predelay to the network's taps: this plus the next times the size factor, plus the
 /// next again times Shape - 0.5 and the size factor (ms). Puts the tail's onset where it sits for
 /// the reference room.
 const SHAPE_DELAY_MS: (f64, f64, f64) = (32.0, 18.5, 34.83);
-/// The diffusers' delays at Scale 100 % in the reference room (ms).
-const DIFFUSERS: [f64; 4] = [1.41, 2.19, 3.33, 5.07];
+/// Each line's diffuser delay at Scale 100 % in the reference room (ms), in line order.
+const DIFFUSERS: [f64; 16] =
+    [1.41, 2.19, 3.33, 5.07, 1.73, 2.61, 3.97, 4.43, 1.19, 2.83, 3.61, 4.79, 1.57, 2.41, 3.13, 4.21];
 /// The network's lines in the reference room (ms), in the order Density turns them on: the first
 /// 4, 8, 12 or all 16.
 const LINES: [f64; 16] =
@@ -348,22 +350,25 @@ const LINES: [f64; 16] =
 const DENSITY_LINES: [usize; 4] = [4, 8, 12, 16];
 /// Level of the tail for each Density against Low (dB), so the four sound equally loud, as
 /// measured (docs/spec/reverb.md).
-const DENSITY_TRIM_DB: [f64; 4] = [-4.0, 0.0, 0.0, 1.0];
+const DENSITY_TRIM_DB: [f64; 4] = [-5.0, 0.0, 0.0, 1.0];
 /// Rooms larger than the reference one keep their tail's level: the network's input rises with
 /// the size factor to this power (a larger network spreads the same energy over longer lines).
 const LARGE_ROOM_POWER: f64 = 0.75;
 /// Signs of the input into each line.
 const INPUT_SIGNS: [f64; 16] = [1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
-/// Signs of each line in the left and right outputs. The two patterns are orthogonal for every
-/// Density, and lines of similar length, which carry similar energy, enter the two sides with the
-/// same sign once and with opposite signs once, so the sides come out uncorrelated.
-const OUTPUT_SIGNS: [[f64; 16]; 2] = [
-    [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0],
-    [-1.0, -1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0, 1.0, -1.0, -1.0],
-];
+/// Sign of each line in the output.
+const OUTPUT_SIGNS: [f64; 16] =
+    [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0];
+
+/// The side that hears line `k`: each side hears every other line. The mixing passes most of each
+/// line on to the next one, so an echo is heard again on alternate sides, as Live's are, and the
+/// sides share no echo and come out nearly uncorrelated.
+const fn side_of(k: usize) -> usize {
+    k % 2
+}
 /// Level of the late reverb against the input, for the longest decays; shorter ones start lower,
 /// as if the tail had already decayed for [`TAIL_FADE_SECONDS`] when it is heard.
-const TAIL_GAIN: f64 = 1.194;
+const TAIL_GAIN: f64 = 1.236;
 /// How long the shortest decays' tail counts as having decayed already when it is heard.
 const TAIL_FADE_SECONDS: f64 = 0.0118;
 /// The shortest decays' tail is quieter again by this many dB over the Decay setting squared
@@ -377,6 +382,8 @@ const LOSS_TRIP_SECONDS: f64 = 0.17;
 /// The network's input already loses this share of one trip's damping, as Live's tail does from
 /// its first arrivals on.
 const INPUT_TRIPS: f64 = 0.21;
+/// Corner of the first-order low-pass the network's input passes (Hz).
+const FEED_CUT: f64 = 15_000.0;
 /// The damping shelves are second-order (a cookbook shelf with this Q, half way at the set
 /// frequency), steeper than first-order ones.
 const SHELF_Q: f64 = BUTTERWORTH_Q;
@@ -389,7 +396,7 @@ const AIR_LOSS_DB: f64 = 0.96;
 /// Decay time (seconds) above which the fixed loss of the highs shrinks.
 const AIR_DECAY: f64 = 3.46;
 /// Above [`AIR_DECAY`] the fixed loss of the highs shrinks with the decay to this power.
-const AIR_POWER: f64 = 0.27;
+const AIR_POWER: f64 = 0.15;
 /// Decay time the network is tuned to, against the Decay setting.
 const DECAY_RATIO: f64 = 0.9;
 /// Low Cut: a first-order shelf this deep (linear), half way at the band's lower edge.
@@ -570,10 +577,10 @@ struct Tuning {
     tap_gains: [f64; MAX_TAPS],
     /// Each tap's share of the network's input (zero for filtered taps).
     feed_gains: [f64; MAX_TAPS],
-    /// Delay from the predelay to the diffusers (frames).
+    /// Delay from the predelay to the network's taps (frames).
     shape_delay: f64,
-    /// The diffusers' lengths (frames).
-    diffusers: [f64; 4],
+    /// The lines' diffusers' lengths (frames).
+    diffusers: [f64; 16],
     /// The lines' lengths (frames).
     lines: [f64; 16],
     /// Each line's gain per trip.
@@ -590,7 +597,7 @@ impl Default for Tuning {
             tap_gains: [0.0; MAX_TAPS],
             feed_gains: [0.0; MAX_TAPS],
             shape_delay: 2.0,
-            diffusers: [2.0; 4],
+            diffusers: [2.0; 16],
             lines: [2.0; 16],
             gains: [0.0; 16],
             feed: 0.0,
@@ -622,6 +629,8 @@ impl Tuning {
 struct Line {
     /// The line's delay.
     delay: DelayLine,
+    /// The allpass the line's output passes on every trip.
+    diffuser: Allpass,
     /// The line's damping.
     damper: Damper,
 }
@@ -673,6 +682,7 @@ impl Line {
     /// Silences the line and its damping.
     fn clear(&mut self) {
         self.delay.clear();
+        self.diffuser.clear();
         self.damper.clear();
     }
 }
@@ -851,10 +861,13 @@ pub struct Reverb {
     taps: &'static [Tap],
     /// The predelay line, which the taps and the Shape delay read.
     input: DelayLine,
-    /// The allpasses in front of the network.
-    diffusers: [Allpass; 4],
-    /// The network's input passes the loop's damping once, for [`INPUT_TRIPS`] of a trip.
+    /// The predelayed input after the loop's damping, once for [`INPUT_TRIPS`] of a trip, which
+    /// the network's taps read.
+    feed_line: DelayLine,
+    /// The damping in front of [`feed_line`](Self::feed_line).
     input_damper: Damper,
+    /// The low-pass after [`input_damper`](Self::input_damper), at [`FEED_CUT`].
+    feed_cut: FirstOrder,
     /// The network's lines; the first [`active`](Self::active) run.
     lines: [Line; 16],
     /// Lines running (Density).
@@ -904,53 +917,22 @@ fn phase_offsets<const N: usize>(first: usize) -> [(f64, f64); N] {
     })
 }
 
-/// Each line's share of the network's input with `active` lines running: all the same, so the
-/// tail sets in at its full level, as measured.
+/// The sign of each line's input with `active` lines running (zero for lines not running).
 fn input_weights(active: usize) -> [f64; 16] {
-    let share = 1.0 / (active.max(1) as f64).sqrt();
-    std::array::from_fn(|k| if k < active { share * INPUT_SIGNS.get(k).copied().unwrap_or(1.0) } else { 0.0 })
+    std::array::from_fn(|k| if k < active { INPUT_SIGNS.get(k).copied().unwrap_or(1.0) } else { 0.0 })
 }
 
-/// Mixes the first `n` lines' outputs with an orthogonal matrix in which every line feeds every
-/// other one equally: a Hadamard matrix for 4, 8 and 16 lines, and for 12 a Hadamard matrix of 4
-/// within each group of four followed by a Householder reflection across the three groups.
+/// Mixes the first `n` lines' outputs with a Householder reflection, `I - (2/n) 11ᵀ`, then passes
+/// each line's share on to the next one. Each line keeps most of itself (three quarters at 8
+/// lines) and sends a little to every other one, so the echoes thicken over several trips as
+/// Live's do (docs/spec/reverb.md › Decisions); the shift stops two trips undoing each other.
 #[inline]
 fn mix_lines(v: &mut [f64; 16], n: usize) {
-    /// The normalised fast Walsh-Hadamard transform; `v`'s length is a power of two.
-    fn hadamard(v: &mut [f64]) {
-        let mut h = 1;
-        while h < v.len() {
-            for block in v.chunks_exact_mut(2 * h) {
-                let (a, b) = block.split_at_mut(h);
-                for (x, y) in a.iter_mut().zip(b) {
-                    (*x, *y) = (*x + *y, *x - *y);
-                }
-            }
-            h *= 2;
-        }
-        let scale = 1.0 / (v.len() as f64).sqrt();
-        for x in v.iter_mut() {
-            *x *= scale;
-        }
-    }
-    if n == 12 {
-        for group in v.chunks_mut(4).take(3) {
-            hadamard(group);
-        }
-        let (first, rest) = v.split_at_mut(4);
-        let (second, third) = rest.split_at_mut(4);
-        for ((a, b), c) in first.iter_mut().zip(second.iter_mut()).zip(third.iter_mut()) {
-            let sum = (*a + *b + *c) * 2.0 / 3.0;
-            *a -= sum;
-            *b -= sum;
-            *c -= sum;
-        }
-    } else if let Some(lines) = v.get_mut(..n) {
-        hadamard(lines);
-    }
-    // Each line passes its share on to the next one: a Hadamard matrix is its own inverse, and
-    // without the shift two trips round the loop would undo each other's mixing.
     if let Some(lines) = v.get_mut(..n) {
+        let share = lines.iter().sum::<f64>() * 2.0 / n.max(1) as f64;
+        for x in lines.iter_mut() {
+            *x -= share;
+        }
         lines.rotate_left(1);
     }
 }
@@ -979,8 +961,9 @@ impl Reverb {
             reflection_filters: Default::default(),
             taps: &TAPS_LOW,
             input: DelayLine::default(),
-            diffusers: Default::default(),
+            feed_line: DelayLine::default(),
             input_damper: Damper::default(),
+            feed_cut: FirstOrder::default(),
             lines: Default::default(),
             active: 8,
             weights: input_weights(8),
@@ -1004,9 +987,10 @@ impl Reverb {
     fn allocate(&mut self) {
         let sr = self.sample_rate;
         self.input = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
-        self.diffusers = std::array::from_fn(|_| Allpass::for_seconds(DIFFUSER_SECONDS, sr));
+        self.feed_line = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
         self.lines = std::array::from_fn(|_| Line {
             delay: DelayLine::for_seconds(LINE_SECONDS, sr),
+            diffuser: Allpass::for_seconds(DIFFUSER_SECONDS, sr),
             damper: Damper::default(),
         });
     }
@@ -1087,10 +1071,13 @@ impl Reverb {
             filter.reset();
         }
         self.input.clear();
-        for diffuser in &mut self.diffusers {
-            diffuser.clear();
-        }
+        self.feed_line.clear();
         self.input_damper.clear();
+        self.feed_cut = FirstOrder::new(if FEED_CUT < 0.45 * self.sample_rate {
+            FirstOrderCoefficients::lowpass(self.sample_rate, FEED_CUT)
+        } else {
+            FirstOrderCoefficients::IDENTITY
+        });
         for line in &mut self.lines {
             line.clear();
         }
@@ -1173,12 +1160,14 @@ impl Reverb {
         let (a, b, c) = SHAPE_DELAY_MS;
         t.shape_delay = ((a + (b + c * (shape - 0.5)) * room) * ms).max(0.0);
         for (length, base) in t.diffusers.iter_mut().zip(DIFFUSERS) {
-            *length = (base * scale * room * ms).max(2.0);
+            let frames = base * scale * room * ms;
+            *length = if settled { frames.round() } else { frames }.max(2.0);
         }
-        for ((length, gain), base) in t.lines.iter_mut().zip(t.gains.iter_mut()).zip(LINES) {
+        for (((length, gain), base), diffuser) in t.lines.iter_mut().zip(t.gains.iter_mut()).zip(LINES).zip(DIFFUSERS) {
             let frames = base * room * ms;
             *length = if settled { frames.round() } else { frames }.max(2.0);
-            let seconds = base * room / 1_000.0;
+            // A trip is the line and its diffuser.
+            let seconds = (base + diffuser * scale) * room / 1_000.0;
             *gain = if frozen {
                 db_to_gain(-seconds * if self.params.on(param::FLAT) { FREEZE_DRAIN } else { FREEZE_DRAIN_UNFLAT })
             } else {
@@ -1207,11 +1196,11 @@ impl Reverb {
             damper.low_shelf.set(Coefficients::low_shelf(sr, low_f, SHELF_Q, db(low_g)));
             damper.air.set(FirstOrderCoefficients::high_shelf(sr, AIR_FREQUENCY, db_to_gain(-air_db * trips)));
         };
-        for (line, base) in self.lines.iter_mut().zip(LINES) {
+        for ((line, base), diffuser) in self.lines.iter_mut().zip(LINES).zip(DIFFUSERS) {
             // The loss is per trip round the reference loop; a line of another length, or in a
             // room of another size, loses in proportion to its length, so the loss per second
             // does not depend on the room.
-            tune(&mut line.damper, base * room / 1_000.0 / LOSS_TRIP_SECONDS);
+            tune(&mut line.damper, (base + diffuser * scale) * room / 1_000.0 / LOSS_TRIP_SECONDS);
         }
         tune(&mut self.input_damper, INPUT_TRIPS);
     }
@@ -1297,7 +1286,8 @@ impl Device for Reverb {
             self.set_active(wanted);
         }
         let active = self.active;
-        let norm = 1.0 / (active as f64).sqrt();
+        // Each side hears half the lines.
+        let norm = (2.0 / active as f64).sqrt();
         let (spin_step, chorus_step) = (self.value(param::SPIN_RATE) / sr, self.value(param::CHORUS_RATE) / sr);
         let frozen = self.frozen();
         // Stereo's rotation and the mix's gains, worked out again only when their inputs move
@@ -1362,49 +1352,48 @@ impl Device for Reverb {
             // it, and with nothing moving, the taps fall on whole frames.
             let stretch = 1.0 + spin_swing * (std::f64::consts::TAU * self.spin_phase).sin();
             let whole = spin_swing == 0.0 && !self.moving && self.ramps.predelay.is_settled();
-            let line = &self.input;
-            let read = |at: f64| f64::from(if whole { line.read(at.round() as usize) } else { line.read_hermite(at) });
-            // Direct and filtered reflections, left and right.
+            let read_from = |line: &DelayLine, at: f64| {
+                f64::from(if whole { line.read(at.round() as usize) } else { line.read_hermite(at) })
+            };
+            // Direct and filtered reflections, left and right; each direct one also feeds a line
+            // of its own, in turn, after the Shape delay.
             let (mut direct, mut filtered) = ([0.0f64; 2], [0.0f64; 2]);
-            let mut u = 0.0f64;
+            let mut inputs = [0.0f64; 16];
+            let mut next_line = 0;
             for (((tap, &delay), &gain), &share) in
                 self.taps.iter().zip(&t.tap_delays).zip(&t.tap_gains).zip(&t.feed_gains)
             {
-                let v = read((predelay + delay) * stretch) * gain;
+                let v = read_from(&self.input, (predelay + delay) * stretch) * gain;
                 let sides = if tap.filtered { &mut filtered } else { &mut direct };
                 if let Some(side) = sides.get_mut(tap.side) {
                     *side += v;
                 }
-                if share != 0.0 {
-                    u += read(predelay + t.shape_delay + delay) * share;
+                if !tap.filtered {
+                    if let Some(input) = inputs.get_mut(next_line) {
+                        *input += read_from(&self.feed_line, predelay + t.shape_delay + delay) * share * feed * t.feed;
+                    }
+                    next_line = (next_line + 1) % active;
                 }
             }
             let [left_filter, right_filter] = &mut self.reflection_filters;
             let early = [direct[0] + left_filter.process(filtered[0]), direct[1] + right_filter.process(filtered[1])];
 
-            // The network's input: the direct reflections after the Shape delay, then the
-            // diffusers.
-            let mut u = (u * feed) as f32;
-            for (diffuser, &length) in self.diffusers.iter_mut().zip(&t.diffusers) {
-                u = diffuser.process(u, length, diffusion);
-            }
-            let u = self.input_damper.damp(f64::from(u) * t.feed, &damping);
-
             // The network. Without Chorus the swing is zero whatever the phase.
             let (chorus_sin, chorus_cos) =
                 if chorus_swing > 0.0 { (std::f64::consts::TAU * self.chorus_phase).sin_cos() } else { (0.0, 0.0) };
             let mut damped = [0.0f64; 16];
-            for ((((line, slot), &length), &gain), &(c, s)) in self
+            for (((((line, slot), &length), &spread), &gain), &(c, s)) in self
                 .lines
                 .iter_mut()
                 .zip(&mut damped)
                 .zip(&t.lines)
+                .zip(&t.diffusers)
                 .zip(&t.gains)
                 .zip(&self.chorus_offsets)
                 .take(active)
             {
                 let swing = chorus_swing.min(0.5 * length) * (chorus_sin * c + chorus_cos * s);
-                let y = f64::from(line.delay.read_hermite(length + swing));
+                let y = f64::from(line.diffuser.process(line.delay.read_hermite(length + swing), spread, diffusion));
                 *slot = line.damper.damp(y, &damping) * gain;
             }
             // The tail is heard after each line's gain and damping, so even a line's first arrival
@@ -1412,19 +1401,20 @@ impl Device for Reverb {
             let outs = damped;
             mix_lines(&mut damped, active);
             let mut tail = [0.0f64; 2];
-            for (k, (((line, &y), &d), &weight)) in
-                self.lines.iter_mut().zip(&outs).zip(&damped).zip(&self.weights).take(active).enumerate()
+            for (k, ((((line, &y), &d), &weight), &u)) in
+                self.lines.iter_mut().zip(&outs).zip(&damped).zip(&self.weights).zip(&inputs).take(active).enumerate()
             {
                 let mut next = d + u * weight;
                 if frozen {
                     next = limit(next);
                 }
                 line.delay.push(next as f32);
-                for (out, signs) in tail.iter_mut().zip(&OUTPUT_SIGNS) {
-                    *out += signs.get(k).copied().unwrap_or(0.0) * y;
+                if let Some(out) = tail.get_mut(side_of(k)) {
+                    *out += OUTPUT_SIGNS.get(k).copied().unwrap_or(0.0) * y;
                 }
             }
             self.input.push(x as f32);
+            self.feed_line.push(self.feed_cut.process(self.input_damper.damp(x, &damping)) as f32);
 
             // Output: the two parts, Stereo's rotation, then the mix.
             let wet = [reflect * early[0] + diffuse * norm * tail[0], reflect * early[1] + diffuse * norm * tail[1]];
