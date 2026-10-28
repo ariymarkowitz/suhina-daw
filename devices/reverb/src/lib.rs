@@ -13,11 +13,11 @@
 //!
 //! The early reflections are the measured tap pattern (docs/spec/reverb.md); the network takes the
 //! direct taps again after the Shape delay, each into a line of its own. The late reverb is a
-//! feedback delay network of 4, 8, 12 or 16 lines (Density) mixed by a Householder reflection, the
+//! feedback delay network of 8, 12 or 16 lines (Density) mixed by a Householder reflection, the
 //! textbook design (Jot and Chaigne, 1991), with a Schroeder allpass (Diffusion) in every line;
 //! each line's gain sets the same decay time whatever its length, and shelves in the loop take
 //! away more of the highs or lows per second. Size scales every delay with the cube root of
-//! the room's volume. The network's delay lengths and constants are this device's own.
+//! the room's volume, except that the network's lines shrink less in small rooms. The network's delay lengths and constants are this device's own.
 
 use suhina_device_api::{
     DEFAULT_SAMPLE_RATE, Device, DeviceError, DeviceInfo, ParamBank, ParamInfo, ProcessContext, Role, Scale, Unit,
@@ -36,6 +36,9 @@ pub const SMOOTH_SLOW_SECONDS: f64 = 0.045;
 pub const SMOOTH_FAST_SECONDS: f64 = 0.015;
 /// Frames between updates of delay lengths, tap levels and filters, counted from the last reset.
 const CONTROL_FRAMES: u64 = 32;
+/// However fast Smooth glides Size, no line or reflection lengthens or shortens by more than this
+/// many frames a frame: faster, a line is read backwards and a jump across the range buzzes.
+const GLIDE_SLEW: f64 = 0.5;
 
 /// The reference room: delays below are for Size 100, and scale with `(size / 100)^(1/3)`.
 const REFERENCE_SIZE: f64 = 100.0;
@@ -319,7 +322,7 @@ const TAP_FADE_PER_SHAPE: f64 = 0.0668;
 /// The whole wet signal is this many dB quieter per ms of predelay.
 const PREDELAY_FADE: f64 = 0.0565;
 /// Spin swings every reflection's delay, predelay included, by this fraction of it per unit of
-/// Spin Amount, all in step.
+/// Spin Amount, each at its own phase.
 const SPIN_FRACTION: f64 = 0.0097;
 /// Peak swing of a line's delay per unit of Chorus Amount.
 const CHORUS_SECONDS: f64 = 0.001_8;
@@ -339,18 +342,36 @@ const TOP_CUT: f64 = 18_000.0;
 /// next again times Shape - 0.5 and the size factor (ms). Puts the tail's onset where it sits for
 /// the reference room.
 const SHAPE_DELAY_MS: (f64, f64, f64) = (32.0, 18.5, 34.83);
-/// Each line's diffuser delay at Scale 100 % in the reference room (ms), in line order.
+/// Each line's diffuser delay at Scale 100 % in the reference room (ms), in line order. Shorter
+/// ones turn every echo into a quick roll of clicks, where Live's echoes are scattered.
 const DIFFUSERS: [f64; 16] =
-    [1.41, 2.19, 3.33, 5.07, 1.73, 2.61, 3.97, 4.43, 1.19, 2.83, 3.61, 4.79, 1.57, 2.41, 3.13, 4.21];
+    [4.23, 6.57, 9.99, 15.21, 5.19, 7.83, 11.91, 13.29, 3.57, 8.49, 10.83, 14.37, 4.71, 7.23, 9.39, 12.63];
 /// The network's lines in the reference room (ms), in the order Density turns them on: the first
-/// 4, 8, 12 or all 16.
+/// 8, 12 or all 16.
 const LINES: [f64; 16] =
     [18.29, 39.93, 26.36, 56.83, 22.37, 47.00, 31.39, 69.95, 20.46, 43.11, 30.04, 63.29, 23.83, 51.68, 36.31, 77.25];
-/// How many lines each Density runs.
-const DENSITY_LINES: [usize; 4] = [4, 8, 12, 16];
+/// How many lines each Density runs. Sparse runs as many as Low, longer and less diffused:
+/// Live's Sparse has fewer echoes than Low and yet a smoother spectrum, which takes more loop
+/// delay than Low's, not less (docs/spec/reverb.md).
+const DENSITY_LINES: [usize; 4] = [8, 8, 12, 16];
+/// Each Density's lines against [`LINES`].
+const DENSITY_STRETCH: [f64; 4] = [1.3, 1.0, 1.0, 1.0];
+/// Each Density's diffusion against the Diffusion setting.
+const DENSITY_DIFFUSION: [f32; 4] = [0.2, 1.0, 1.0, 1.0];
+/// In rooms smaller than the reference one the lines shrink with the size factor to this power
+/// only, so a small room keeps enough resonances not to ring: Live's tail at Size 1.53 is as
+/// flat as this and rings at no lower pitch.
+const SMALL_ROOM_LINE_POWER: f64 = 0.35;
+/// Longer lines spread the same energy thinner, so a small room's tail is fed louder, by the
+/// square root of how much longer its lines are than the room's, up to this factor (+4 dB, about
+/// what Size 1.53 needs): more would make a Size glide from the smallest room ring.
+const SMALL_ROOM_GAIN_LIMIT: f64 = 1.6;
+/// The first, loudest direct reflection feeds this many lines, spread over the network, so the
+/// tail's first echo is a few arrivals, as Live's is, not one click.
+const FIRST_TAP_LINES: usize = 3;
 /// Level of the tail for each Density against Low (dB), so the four sound equally loud, as
 /// measured (docs/spec/reverb.md).
-const DENSITY_TRIM_DB: [f64; 4] = [-5.0, 0.0, 0.0, 1.0];
+const DENSITY_TRIM_DB: [f64; 4] = [-0.3, 0.0, 0.0, 1.0];
 /// Rooms larger than the reference one keep their tail's level: the network's input rises with
 /// the size factor to this power (a larger network spreads the same energy over longer lines).
 const LARGE_ROOM_POWER: f64 = 0.75;
@@ -359,6 +380,12 @@ const INPUT_SIGNS: [f64; 16] = [1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0,
 /// Sign of each line in the output.
 const OUTPUT_SIGNS: [f64; 16] =
     [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0];
+
+/// The size factor of the network's lines in a room of size factor `room`: the room's own above
+/// the reference size, shrinking less below it.
+fn line_room(room: f64) -> f64 {
+    if room < 1.0 { room.powf(SMALL_ROOM_LINE_POWER) } else { room }
+}
 
 /// The side that hears line `k`: each side hears every other line. The mixing passes most of each
 /// line on to the next one, so an echo is heard again on alternate sides, as Live's are, and the
@@ -379,6 +406,12 @@ const TAIL_SHORT_DB: f64 = 0.12;
 const TAIL_LAG_MS: f64 = 20.0;
 /// The damping filters' loss is per trip round a loop this long (seconds, reference room).
 const LOSS_TRIP_SECONDS: f64 = 0.17;
+/// High Damping's Low-Pass is, per trip, a one-pole low-pass `y += (1 - p)(x - y)` at the
+/// frequency, its pole `p = e^(-2π f / rate)` taken at this rate (Live's, as measured).
+const LOW_PASS_RATE: f64 = 44_100.0;
+/// The network's input passes this much of a trip of the Low-Pass (against [`INPUT_TRIPS`] of
+/// the other damping): Live's tail is that much darker from its first arrivals.
+const INPUT_PASS_TRIPS: f64 = 0.8;
 /// The network's input already loses this share of one trip's damping, as Live's tail does from
 /// its first arrivals on.
 const INPUT_TRIPS: f64 = 0.21;
@@ -642,8 +675,8 @@ struct Line {
 struct Damper {
     /// High damping as a shelf.
     high_shelf: Biquad,
-    /// High damping as a low-pass.
-    low_pass: FirstOrder,
+    /// High damping as a low-pass: two first-order shelves, each with half its loss.
+    low_pass: [FirstOrder; 2],
     /// Low damping.
     low_shelf: Biquad,
     /// The fixed loss of the highs.
@@ -665,6 +698,16 @@ impl Section for FirstOrder {
 
     fn clear(&mut self) {
         self.reset();
+    }
+}
+
+impl Section for [FirstOrder; 2] {
+    fn run(&mut self, x: f64) -> f64 {
+        self.iter_mut().fold(x, |y, section| section.process(y))
+    }
+
+    fn clear(&mut self) {
+        self.iter_mut().for_each(FirstOrder::reset);
     }
 }
 
@@ -691,7 +734,7 @@ impl Damper {
     /// Silences the filters.
     fn clear(&mut self) {
         self.high_shelf.reset();
-        self.low_pass.reset();
+        self.low_pass.clear();
         self.low_shelf.reset();
         self.air.reset();
     }
@@ -715,7 +758,7 @@ impl Damper {
             y + (high - y) * amounts.high
         } else {
             self.high_shelf.reset();
-            self.low_pass.reset();
+            self.low_pass.clear();
             y
         };
         let y = y + (heard(&mut self.low_shelf, y, amounts.low) - y) * amounts.low;
@@ -876,6 +919,8 @@ pub struct Reverb {
     weights: [f64; 16],
     /// Cosine and sine of each line's phase offset.
     chorus_offsets: [(f64, f64); 16],
+    /// Cosine and sine of each reflection's Spin phase offset.
+    spin_offsets: [(f64, f64); MAX_TAPS],
     /// The size factor `(size / 100)^(1/3)` as it glides.
     room: f64,
     /// The tuning at the last control point.
@@ -968,6 +1013,7 @@ impl Reverb {
             active: 8,
             weights: input_weights(8),
             chorus_offsets: phase_offsets(7),
+            spin_offsets: phase_offsets(0),
             room: 1.0,
             from: Tuning::default(),
             to: Tuning::default(),
@@ -1138,7 +1184,11 @@ impl Reverb {
         // without interpolation, which would take away highs on every trip. While Size or Decay
         // glide they move smoothly between frames.
         let settled = self.room == self.room_target() && !self.ramps.control_moving();
-        let density = DENSITY_TRIM_DB.get(self.value(param::DENSITY) as usize).copied().unwrap_or(0.0);
+        let density_index = self.value(param::DENSITY) as usize;
+        let density = DENSITY_TRIM_DB.get(density_index).copied().unwrap_or(0.0);
+        let line_room = line_room(room);
+        let stretch = DENSITY_STRETCH.get(density_index).copied().unwrap_or(1.0) * line_room / room;
+        let lines = LINES.map(|line| line * stretch);
         let predelay_gain = db_to_gain(-PREDELAY_FADE * predelay_ms);
         let taps = self.taps;
         // The network is fed by the direct reflections, each at its own level and fade.
@@ -1163,7 +1213,7 @@ impl Reverb {
             let frames = base * scale * room * ms;
             *length = if settled { frames.round() } else { frames }.max(2.0);
         }
-        for (((length, gain), base), diffuser) in t.lines.iter_mut().zip(t.gains.iter_mut()).zip(LINES).zip(DIFFUSERS) {
+        for (((length, gain), base), diffuser) in t.lines.iter_mut().zip(t.gains.iter_mut()).zip(lines).zip(DIFFUSERS) {
             let frames = base * room * ms;
             *length = if settled { frames.round() } else { frames }.max(2.0);
             // A trip is the line and its diffuser.
@@ -1179,7 +1229,8 @@ impl Reverb {
             * db_to_gain(
                 density - 60.0 * TAIL_FADE_SECONDS / setting - TAIL_SHORT_DB / (setting * setting) - fade * TAIL_LAG_MS,
             )
-            * room.max(1.0).powf(LARGE_ROOM_POWER);
+            * room.max(1.0).powf(LARGE_ROOM_POWER)
+            * (line_room / room).sqrt().min(SMALL_ROOM_GAIN_LIMIT);
         let corner = (REFLECTION_TOP - REFLECTION_SPAN * setting.powf(-REFLECTION_POWER)).clamp(20.0, 0.45 * sr);
         for filter in &mut self.reflection_filters {
             filter.set(Coefficients::lowpass(sr, corner, REFLECTION_Q));
@@ -1189,20 +1240,45 @@ impl Reverb {
         let r = &self.ramps;
         let (high_f, high_g) = (2.0f64.powf(f64::from(r.high_frequency.current())), f64::from(r.high_gain.current()));
         let (low_f, low_g) = (2.0f64.powf(f64::from(r.low_frequency.current())), f64::from(r.low_gain.current()));
-        let tune = |damper: &mut Damper, trips: f64| {
+        // A line's share of the Low-Pass's one-pole is two first-order high shelves, each with half
+        // that share of its loss at the top, half way where the one-pole has lost a quarter and
+        // three quarters of it: one shelf alone has too narrow a slope for a fraction of a trip.
+        let pole = (-std::f64::consts::TAU * high_f / LOW_PASS_RATE).exp();
+        let ratio = (1.0 + pole) / (1.0 - pole).max(1e-9);
+        let pass_db = 20.0 * ratio.log10();
+        // Where the one-pole's loss is `share` of its loss at the top (Hz).
+        let reach = |share: f64| {
+            let q = ratio.powf(2.0 * share) * (1.0 - pole) * (1.0 - pole);
+            ((1.0 + pole * pole - q) / (2.0 * pole).max(1e-9)).clamp(-1.0, 1.0).acos() * LOW_PASS_RATE
+                / std::f64::consts::TAU
+        };
+        let pass_corners = [reach(0.25), reach(0.75)];
+        let tune = |damper: &mut Damper, trips: f64, pass_trips: f64| {
             let db = |g: f64| 20.0 * g.max(1e-6).log10() * trips;
             damper.high_shelf.set(Coefficients::high_shelf(sr, high_f, SHELF_Q, db(high_g)));
-            damper.low_pass.set(FirstOrderCoefficients::lowpass(sr, high_f / trips.sqrt()));
+            for (section, corner) in damper.low_pass.iter_mut().zip(pass_corners) {
+                section.set(FirstOrderCoefficients::high_shelf(sr, corner, db_to_gain(-pass_db * pass_trips / 2.0)));
+            }
             damper.low_shelf.set(Coefficients::low_shelf(sr, low_f, SHELF_Q, db(low_g)));
             damper.air.set(FirstOrderCoefficients::high_shelf(sr, AIR_FREQUENCY, db_to_gain(-air_db * trips)));
         };
-        for ((line, base), diffuser) in self.lines.iter_mut().zip(LINES).zip(DIFFUSERS) {
+        for ((line, base), diffuser) in self.lines.iter_mut().zip(lines).zip(DIFFUSERS) {
             // The loss is per trip round the reference loop; a line of another length, or in a
             // room of another size, loses in proportion to its length, so the loss per second
             // does not depend on the room.
-            tune(&mut line.damper, (base + diffuser * scale) * room / 1_000.0 / LOSS_TRIP_SECONDS);
+            let trips = (base + diffuser * scale) * room / 1_000.0 / LOSS_TRIP_SECONDS;
+            tune(&mut line.damper, trips, trips);
         }
-        tune(&mut self.input_damper, INPUT_TRIPS);
+        tune(&mut self.input_damper, INPUT_TRIPS, INPUT_PASS_TRIPS);
+    }
+
+    /// The longest delay Size moves, a line or a direct reflection, in a room of size factor
+    /// `room` (frames).
+    fn longest_delay(&self, room: f64) -> f64 {
+        let stretch = DENSITY_STRETCH.get(self.value(param::DENSITY) as usize).copied().unwrap_or(1.0);
+        let line = LINES.iter().copied().fold(0.0, f64::max) * stretch * line_room(room);
+        let tap = self.taps.iter().map(|tap| tap.ms).fold(0.0, f64::max) * room;
+        line.max(tap) * self.sample_rate / 1_000.0
     }
 
     /// Size moves toward its setting, as fast as Smooth says, over one control period.
@@ -1215,7 +1291,12 @@ impl Reverb {
         };
         let frames = seconds * self.sample_rate;
         let keep = if frames > 1.0 { (-(CONTROL_FRAMES as f64) / frames).exp() } else { 0.0 };
-        let room = target + (self.room - target) * keep;
+        let mut room = target + (self.room - target) * keep;
+        let moved = (self.longest_delay(room) - self.longest_delay(self.room)).abs();
+        let most = GLIDE_SLEW * CONTROL_FRAMES as f64;
+        if frames > 1.0 && moved > most {
+            room = self.room + (room - self.room) * most / moved;
+        }
         let room = if (room - target).abs() < 1e-6 { target } else { room };
         if room != self.room {
             self.room = room;
@@ -1286,6 +1367,8 @@ impl Device for Reverb {
             self.set_active(wanted);
         }
         let active = self.active;
+        let density_index = self.value(param::DENSITY) as usize;
+        let diffusion_scale = DENSITY_DIFFUSION.get(density_index).copied().unwrap_or(1.0);
         // Each side hears half the lines.
         let norm = (2.0 / active as f64).sqrt();
         let (spin_step, chorus_step) = (self.value(param::SPIN_RATE) / sr, self.value(param::CHORUS_RATE) / sr);
@@ -1330,7 +1413,7 @@ impl Device for Reverb {
             ] {
                 s.next_value();
             }
-            let diffusion = r.diffusion.next_value();
+            let diffusion = r.diffusion.next_value() * diffusion_scale;
             let damping = Damping {
                 high: f64::from(r.high.next_value()),
                 low_pass: f64::from(r.low_pass.next_value()),
@@ -1348,31 +1431,43 @@ impl Device for Reverb {
             let t = if self.moving { &self.now } else { &self.to };
 
             // Early reflections and the network's input, read from the predelay line. Spin
-            // stretches every reflection's delay, predelay included, by the same fraction; without
-            // it, and with nothing moving, the taps fall on whole frames.
-            let stretch = 1.0 + spin_swing * (std::f64::consts::TAU * self.spin_phase).sin();
+            // stretches each reflection's delay, predelay included, by the same fraction at its own
+            // phase, and the network's input with it; without it, and with nothing moving, the taps
+            // fall on whole frames.
+            let (spin_sin, spin_cos) =
+                if spin_swing > 0.0 { (std::f64::consts::TAU * self.spin_phase).sin_cos() } else { (0.0, 0.0) };
             let whole = spin_swing == 0.0 && !self.moving && self.ramps.predelay.is_settled();
             let read_from = |line: &DelayLine, at: f64| {
                 f64::from(if whole { line.read(at.round() as usize) } else { line.read_hermite(at) })
             };
             // Direct and filtered reflections, left and right; each direct one also feeds a line
-            // of its own, in turn, after the Shape delay.
+            // of its own, in turn, after the Shape delay, and the first feeds a few.
             let (mut direct, mut filtered) = ([0.0f64; 2], [0.0f64; 2]);
             let mut inputs = [0.0f64; 16];
             let mut next_line = 0;
-            for (((tap, &delay), &gain), &share) in
-                self.taps.iter().zip(&t.tap_delays).zip(&t.tap_gains).zip(&t.feed_gains)
+            let mut spread = FIRST_TAP_LINES.clamp(1, active);
+            for ((((tap, &delay), &gain), &share), &(c, s)) in
+                self.taps.iter().zip(&t.tap_delays).zip(&t.tap_gains).zip(&t.feed_gains).zip(&self.spin_offsets)
             {
+                let stretch = 1.0 + spin_swing * (spin_sin * c + spin_cos * s);
                 let v = read_from(&self.input, (predelay + delay) * stretch) * gain;
                 let sides = if tap.filtered { &mut filtered } else { &mut direct };
                 if let Some(side) = sides.get_mut(tap.side) {
                     *side += v;
                 }
                 if !tap.filtered {
-                    if let Some(input) = inputs.get_mut(next_line) {
-                        *input += read_from(&self.feed_line, predelay + t.shape_delay + delay) * share * feed * t.feed;
+                    let u = read_from(&self.feed_line, (predelay + delay) * stretch + t.shape_delay)
+                        * share
+                        * feed
+                        * t.feed
+                        / (spread as f64).sqrt();
+                    for j in 0..spread {
+                        if let Some(input) = inputs.get_mut((next_line + j * active / spread) % active) {
+                            *input += u;
+                        }
                     }
                     next_line = (next_line + 1) % active;
+                    spread = 1;
                 }
             }
             let [left_filter, right_filter] = &mut self.reflection_filters;
