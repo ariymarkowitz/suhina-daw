@@ -363,21 +363,33 @@ const OUTPUT_SIGNS: [[f64; 16]; 2] = [
 ];
 /// Level of the late reverb against the input, for the longest decays; shorter ones start lower,
 /// as if the tail had already decayed for [`TAIL_FADE_SECONDS`] when it is heard.
-const TAIL_GAIN: f64 = 1.06;
+const TAIL_GAIN: f64 = 1.194;
 /// How long the shortest decays' tail counts as having decayed already when it is heard.
-const TAIL_FADE_SECONDS: f64 = 0.027;
+const TAIL_FADE_SECONDS: f64 = 0.0118;
+/// The shortest decays' tail is quieter again by this many dB over the Decay setting squared
+/// (seconds): 3 dB at 0.2 s, under 0.2 dB from 0.8 s up.
+const TAIL_SHORT_DB: f64 = 0.12;
+/// The tail is fed as if the reflections came this much later (ms): it takes their fade, Shape's
+/// share included, over this much more delay than their own.
+const TAIL_LAG_MS: f64 = 20.0;
 /// The damping filters' loss is per trip round a loop this long (seconds, reference room).
 const LOSS_TRIP_SECONDS: f64 = 0.17;
+/// The network's input already loses this share of one trip's damping, as Live's tail does from
+/// its first arrivals on.
+const INPUT_TRIPS: f64 = 0.21;
 /// The damping shelves are second-order (a cookbook shelf with this Q, half way at the set
 /// frequency), steeper than first-order ones.
 const SHELF_Q: f64 = BUTTERWORTH_Q;
 /// A loss of the highs built into the loop: a high shelf half way at this frequency, this many dB
-/// per trip up to [`AIR_DECAY`]; longer decays lose less, with the cube root of the decay.
+/// per trip up to [`AIR_DECAY`]; longer decays lose less, with the decay to the power
+/// [`AIR_POWER`].
 const AIR_FREQUENCY: f64 = 8_000.0;
 /// The fixed loss of the highs per trip, in dB, for decays up to [`AIR_DECAY`].
 const AIR_LOSS_DB: f64 = 0.96;
 /// Decay time (seconds) above which the fixed loss of the highs shrinks.
 const AIR_DECAY: f64 = 3.46;
+/// Above [`AIR_DECAY`] the fixed loss of the highs shrinks with the decay to this power.
+const AIR_POWER: f64 = 0.27;
 /// Decay time the network is tuned to, against the Decay setting.
 const DECAY_RATIO: f64 = 0.9;
 /// Low Cut: a first-order shelf this deep (linear), half way at the band's lower edge.
@@ -605,13 +617,20 @@ impl Tuning {
     }
 }
 
-/// One line of the network and its damping: the high shelf and the low-pass (High damping's two
-/// types), the low shelf and the fixed loss of the highs. Every filter always runs and the
-/// switches crossfade, so turning one on, off or to the other type does not click.
+/// One line of the network and its damping.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Line {
     /// The line's delay.
     delay: DelayLine,
+    /// The line's damping.
+    damper: Damper,
+}
+
+/// The network's damping: the high shelf and the low-pass (High damping's two types), the low
+/// shelf and the fixed loss of the highs. Every filter always runs and the switches crossfade,
+/// so turning one on, off or to the other type does not click.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Damper {
     /// High damping as a shelf.
     high_shelf: Biquad,
     /// High damping as a low-pass.
@@ -654,6 +673,13 @@ impl Line {
     /// Silences the line and its damping.
     fn clear(&mut self) {
         self.delay.clear();
+        self.damper.clear();
+    }
+}
+
+impl Damper {
+    /// Silences the filters.
+    fn clear(&mut self) {
         self.high_shelf.reset();
         self.low_pass.reset();
         self.low_shelf.reset();
@@ -827,6 +853,8 @@ pub struct Reverb {
     input: DelayLine,
     /// The allpasses in front of the network.
     diffusers: [Allpass; 4],
+    /// The network's input passes the loop's damping once, for [`INPUT_TRIPS`] of a trip.
+    input_damper: Damper,
     /// The network's lines; the first [`active`](Self::active) run.
     lines: [Line; 16],
     /// Lines running (Density).
@@ -952,6 +980,7 @@ impl Reverb {
             taps: &TAPS_LOW,
             input: DelayLine::default(),
             diffusers: Default::default(),
+            input_damper: Damper::default(),
             lines: Default::default(),
             active: 8,
             weights: input_weights(8),
@@ -976,8 +1005,10 @@ impl Reverb {
         let sr = self.sample_rate;
         self.input = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
         self.diffusers = std::array::from_fn(|_| Allpass::for_seconds(DIFFUSER_SECONDS, sr));
-        self.lines =
-            std::array::from_fn(|_| Line { delay: DelayLine::for_seconds(LINE_SECONDS, sr), ..Line::default() });
+        self.lines = std::array::from_fn(|_| Line {
+            delay: DelayLine::for_seconds(LINE_SECONDS, sr),
+            damper: Damper::default(),
+        });
     }
 
     /// The value of parameter `index`, 0.0 for an unknown one.
@@ -1059,6 +1090,7 @@ impl Reverb {
         for diffuser in &mut self.diffusers {
             diffuser.clear();
         }
+        self.input_damper.clear();
         for line in &mut self.lines {
             line.clear();
         }
@@ -1155,28 +1187,33 @@ impl Reverb {
         }
         t.feed = TAIL_GAIN
             * predelay_gain
-            * db_to_gain(density - 60.0 * TAIL_FADE_SECONDS / setting)
+            * db_to_gain(
+                density - 60.0 * TAIL_FADE_SECONDS / setting - TAIL_SHORT_DB / (setting * setting) - fade * TAIL_LAG_MS,
+            )
             * room.max(1.0).powf(LARGE_ROOM_POWER);
         let corner = (REFLECTION_TOP - REFLECTION_SPAN * setting.powf(-REFLECTION_POWER)).clamp(20.0, 0.45 * sr);
         for filter in &mut self.reflection_filters {
             filter.set(Coefficients::lowpass(sr, corner, REFLECTION_Q));
         }
 
-        let air_db = AIR_LOSS_DB * (AIR_DECAY / setting).cbrt().min(1.0);
+        let air_db = AIR_LOSS_DB * (AIR_DECAY / setting).powf(AIR_POWER).min(1.0);
         let r = &self.ramps;
         let (high_f, high_g) = (2.0f64.powf(f64::from(r.high_frequency.current())), f64::from(r.high_gain.current()));
         let (low_f, low_g) = (2.0f64.powf(f64::from(r.low_frequency.current())), f64::from(r.low_gain.current()));
+        let tune = |damper: &mut Damper, trips: f64| {
+            let db = |g: f64| 20.0 * g.max(1e-6).log10() * trips;
+            damper.high_shelf.set(Coefficients::high_shelf(sr, high_f, SHELF_Q, db(high_g)));
+            damper.low_pass.set(FirstOrderCoefficients::lowpass(sr, high_f / trips.sqrt()));
+            damper.low_shelf.set(Coefficients::low_shelf(sr, low_f, SHELF_Q, db(low_g)));
+            damper.air.set(FirstOrderCoefficients::high_shelf(sr, AIR_FREQUENCY, db_to_gain(-air_db * trips)));
+        };
         for (line, base) in self.lines.iter_mut().zip(LINES) {
             // The loss is per trip round the reference loop; a line of another length, or in a
             // room of another size, loses in proportion to its length, so the loss per second
             // does not depend on the room.
-            let trips = base * room / 1_000.0 / LOSS_TRIP_SECONDS;
-            let db = |g: f64| 20.0 * g.max(1e-6).log10() * trips;
-            line.high_shelf.set(Coefficients::high_shelf(sr, high_f, SHELF_Q, db(high_g)));
-            line.low_pass.set(FirstOrderCoefficients::lowpass(sr, high_f / trips.sqrt()));
-            line.low_shelf.set(Coefficients::low_shelf(sr, low_f, SHELF_Q, db(low_g)));
-            line.air.set(FirstOrderCoefficients::high_shelf(sr, AIR_FREQUENCY, db_to_gain(-air_db * trips)));
+            tune(&mut line.damper, base * room / 1_000.0 / LOSS_TRIP_SECONDS);
         }
+        tune(&mut self.input_damper, INPUT_TRIPS);
     }
 
     /// Size moves toward its setting, as fast as Smooth says, over one control period.
@@ -1351,7 +1388,7 @@ impl Device for Reverb {
             for (diffuser, &length) in self.diffusers.iter_mut().zip(&t.diffusers) {
                 u = diffuser.process(u, length, diffusion);
             }
-            let u = f64::from(u) * t.feed;
+            let u = self.input_damper.damp(f64::from(u) * t.feed, &damping);
 
             // The network. Without Chorus the swing is zero whatever the phase.
             let (chorus_sin, chorus_cos) =
@@ -1368,7 +1405,7 @@ impl Device for Reverb {
             {
                 let swing = chorus_swing.min(0.5 * length) * (chorus_sin * c + chorus_cos * s);
                 let y = f64::from(line.delay.read_hermite(length + swing));
-                *slot = line.damp(y, &damping) * gain;
+                *slot = line.damper.damp(y, &damping) * gain;
             }
             // The tail is heard after each line's gain and damping, so even a line's first arrival
             // has decayed for as long as the line is.
