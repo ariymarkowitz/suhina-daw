@@ -8,6 +8,7 @@ covers:
   - devices/saturator/**
   - crates/dsp/src/shape.rs
   - crates/dsp/src/iir_oversample.rs
+  - crates/dsp/src/emphasis.rs
 ---
 
 # Saturator
@@ -61,7 +62,7 @@ Waveshaper parameters are in the groups "Color" and "Waveshaper".
 Per side and frame:
 
 ```text
-input ─► DC filter (when on) ─► ┌ at twice the sample rate ─────────────────────────────────────┐ ─► post clip ─► Output ─► Dry/Wet ─► out
+input ─► DC filter (when on) ─► ┌ at four times the sample rate ────────────────────────────────┐ ─► post clip ─► Output ─► Dry/Wet ─► out
                                 │ Color filters ─► Drive ─► curve ─► inverse Color filters      │
                                 └───────────────────────────────────────────────────────────────┘
 input (delayed by the latency) ─────────────────────────────────────────────────────────────────────────────────────────► dry ─┘
@@ -96,15 +97,18 @@ input (delayed by the latency) ────────────────�
   `|x|`, so the second harmonic stays at −31.7 dB (Curve 100 %) however quiet the input; Depth is
   the ripple's height (its square, up to 0.5) and Period its frequency, from one period over ±1
   to thirty. Shaper Drive blends the straight line `x` (0 %) with this curve (100 %). The offset
-  is taken out after the curve by a one-pole high-pass at 5 Hz (at twice the sample rate), as
+  is taken out after the curve by a one-pole high-pass at 5 Hz (at four times the sample rate), as
   the original's output has none; it runs only while the Waveshaper plays.
 - **Color.** Two peaking filters (the cookbook bell) run before Drive. Color Low: ±100 % =
   ±36 dB at 41.4 Hz with Q 0.103, so wide that above 100 Hz it falls about 6 dB per octave like
   a shelf, is gone by 5 kHz, and falls again below its centre. Color High: ±100 % = ±24 dB at
   Color Frequency, with Q `2.04 − 1.74 · width` (2.04 at 0 %, 1.52 at 30 %, 0.30 at 100 %).
-  After the curve the same filters with the opposite gains run, the exact inverse, so while the
-  curve stays straight the device is flat whatever the Color settings; only how hard each band
-  is driven changes. Color off sets both amounts to 0.
+  After the curve their exact inverses run (`dsp::Emphasis`: each filter and its inverse in
+  direct form I, sharing one set of coefficients, the inverse solving the filter's equation for
+  its input), so while the curve stays straight the device is flat whatever the Color settings,
+  sample for sample even while they glide; only how hard each band is driven changes. Color off
+  sets both amounts to 0; back at 0 the filters run on until what they held has died away, and
+  only then are they skipped (Decisions 10).
 - **Post clip.** At the base rate, after the downsampler, so it also holds the downsampler's
   overshoot (the original's hard clip peaks at exactly 1). Soft: straight to 0.6, then
   `0.6 + 0.4 · tanh((|y| − 0.6) / 0.4)` towards ±1 (slope 1 at the knee); Hard: held to ±1.
@@ -113,11 +117,13 @@ input (delayed by the latency) ────────────────�
   `dry × (1 − mix) + wet × mix`; the dry signal is the input, untouched by Drive and Output.
 - **DC filter.** Two identical one-pole high-passes at 27 Hz in series (magnitude
   `(f / 27)² / (1 + (f / 27)²)`, the original's step response and sweep) before everything.
-- **Oversampling and latency.** The curve and the Color filters (not the post clip) run at twice the sample rate
-  between two polyphase IIR half-band filters (`dsp::IirOversampler2x`, four allpasses, an
-  elliptic design). The round trip delays the audio band by 2.2 frames and up to 7 frames more
-  near 20 kHz (at 44.1 kHz). The device reports 2 frames of latency and delays the dry signal by
-  the same, so a dry/wet blend lines up.
+- **Oversampling and latency.** The curve and the Color filters (not the post clip) run at four
+  times the sample rate, as the original's Hi-Quality does: two stages of polyphase IIR half-band
+  filters (`dsp::IirOversampler4x`, two `dsp::IirOversampler2x` in series, each four allpasses
+  of an elliptic design). The round trip delays the audio band by 3.29 frames and up to 7.5
+  frames more near 20 kHz (at 44.1 kHz); three samples of delay at the high rate bring it to
+  4.04. The device reports 4 frames of latency and delays the dry signal by the same, so a
+  dry/wet blend lines up.
 - **Changes while playing.** Drive, Output, Dry/Wet, the Bass Threshold, the Waveshaper amounts
   and the DC filter switch ramp over 20 ms; the Color amounts, frequency and width glide over
   20 ms with the filters retuned every 16 frames; a change of Type crossfades from the old curve
@@ -149,7 +155,8 @@ Live's Saturator is the element `Saturator`; every value is `<Element>/Manual@Va
 | `WsDrive`, `WsCurve`, `WsDepth`, `WsLin`, `WsDamp`, `WsPeriod` | 0 … 1 | `shaperDrive`, `shaperCurve`, `shaperDepth`, `shaperLinear`, `shaperDamp`, `shaperPeriod` |
 
 A stepped value outside its list is left at the default with a warning. Live's Hi-Quality option
-(the plain value `Oversampling`) is not read: Suhina always oversamples (Decisions 3).
+(the plain value `Oversampling`) is not read: Suhina always oversamples four times, as the
+original does with it on, its default (Decisions 3).
 
 ## Decisions
 
@@ -165,14 +172,22 @@ Each entry: what was chosen, what it costs, why.
 2. **The Bass Shaper's threshold is the knee of the same curve.** Only −50 dB was measured; the
    manual's "soft clip at −50 dB, hard clip at 0 dB" is what the knee clip does at its two ends.
    Candidate run: Measurement plan 2 of the note.
-3. **Always oversampled, by an IIR half-band of four allpasses.** Its phase was chosen to match
-   the measured one: 0.13, 0.6, 1.8 and 7.2 frames more delay at 5, 10, 15 and 20 kHz against the
-   measured 0.1, 0.6, 2.0 and 7.9. A linear-phase FIR (`dsp::Oversampler2x`) was turned down: 31
-   frames of latency the original does not have, a pre-ring the latency check catches on a
-   full-band path, and a dry/wet blend 2 dB off at 16 kHz. Steeper elliptic designs (10 allpasses,
-   110 dB) were turned down too: more dispersion than measured. Cost: images 38 dB down at 0.28 of
-   the high rate and 64 dB from 0.30, so hard curves driven hard alias about as much as the
-   original's renders show. There is no Hi-Quality switch; Live's off state was never measured.
+3. **Always oversampled four times, by two IIR half-bands of four allpasses each.** The
+   original's Hi-Quality, on when the device is added, is 4x: the lines a 10 and a 15 kHz sine
+   fold back to through Digital Clip at Drive +24 dB (`saturator-hiquality-types`) match an
+   ideal 4x model to 0.1 dB, and Suhina's to 0.4 dB (Analog Clip, Digital Clip; the strongest
+   lines of the Waveshaper and Sinoid Fold too). At 2x, the earlier design, the 10 kHz sine
+   had lines 15 dB louder (18.2 kHz at −18 dB, 1.8 kHz at −21 dB), heard as chirps falling
+   against the top of a sweep. The phase matches the measured one: 0.14, 0.65, 2.0 and 7.5
+   frames more delay at 5, 10, 15 and 20 kHz against the measured 0.1, 0.6, 2.0 and 7.9 (2x:
+   0.13, 0.6, 1.8, 7.2). A linear-phase FIR (`dsp::Oversampler2x`) was turned down: 31 frames of
+   latency the original does not have, a pre-ring the latency check catches on a full-band path,
+   and a dry/wet blend 2 dB off at 16 kHz. Steeper elliptic designs (10 allpasses, 110 dB) were
+   turned down too: more dispersion than measured. The wet path is delayed three samples at the
+   high rate to a whole number of frames; without it the 0.29 frames left over against the dry
+   signal put Dry/Wet 50 % 1.3 dB under the original at 16 kHz. Cost: about twice the CPU of
+   2x (Cost) and 4 frames of latency instead of 2. There is no Hi-Quality switch: its off state
+   (no oversampling, the 10 kHz sine's strongest line at −9.7 dB) is measured but not offered.
 4. **Color Low is a very wide bell, not a shelf.** The measured boost of +100 % (36 dB stored)
    fits neither a first-order nor a second-order shelf to within the tolerance (first-order
    shelves of 36 to 38.4 dB and second-order ones of Q 0.33 to 0.45 were 1.2 to 3.1 dB off); a
@@ -213,12 +228,24 @@ Each entry: what was chosen, what it costs, why.
    misses by 1 to 2 dB. The other curves are flat that far out (Hard Curve rises 0.02 dB more
    without the limit), so they are left alone. It also keeps the fold and the ripple bounded
    however hard they are driven.
+10. **The Color filters and their inverses share their history (direct form I).** Two biquads of
+   opposite gain cancel only while their coefficients hold still: each retune of a glide left a
+   little of the filter's state uncancelled, which grew to −31 dB under a 100 Hz tone through
+   Color Low's 20 ms glide to +100 % and then vanished within a frame when the glide ended, a
+   click with the curve straight. Solved for its input, the inverse is exact at every sample.
+   Switching the filters off the moment Color Low reached 0 clicked too: the wide 41 Hz bell
+   still rang, so what reached the curve jumped (1.4 times the steady step through Digital
+   Clip); they now run until both filters have settled to within −140 dB. Cost: direct form I
+   takes a few more operations than the transposed form (2.7 % against 2.3 % of a core with
+   both amounts on).
 
 ## Known differences
 
 Every case is rendered through the device at 44.1 kHz from the probe signal with the values the
 original's runs stored (Drive and Output sit on a 1/64 grid of their range, so "+12 dB" is
-12.375 dB; rendering the nominal values instead leaves nine cases 0.37 dB off).
+12.375 dB; rendering the nominal values instead leaves nine cases 0.37 dB off). The counts
+below were taken with 2x oversampling; since the change to 4x only the folded-back lines
+(Decisions 3) and Dry/Wet 50 % have been measured again.
 
 `compare.py` (the harness's comparison, default tolerances 0.5 dB, 10 %, 0.5 ms) on the 22 cases
 of the first three runs: **1 of 22** within tolerance. What keeps the others out:
@@ -248,7 +275,8 @@ the curves, Color, post clip and Waveshaper were refitted). Outside it:
   (THD over 1000 %); the noise response is 2.2 dB off at 28 Hz for the same reason. Depth 25 and
   75 % at Period 50 % behave the same on the extended probe (21 points at 361 %, gain within
   0.1 dB).
-- **Dry/Wet 50 %** is at the edge: 0.50 dB at 16 kHz, the oversamplers' phase (Decisions 3).
+- **Dry/Wet 50 %** is within it: 0.32 dB under the original at 16 kHz and 0.26 dB at 18 kHz, the
+  oversamplers' phase (Decisions 3; 0.71 dB at 2x).
 
 The extended probe's readings (the staircase at 100 Hz, the ramp up and down, single tones, the
 DC step) of the 38 cases of `saturator-curves-ramp`, `-hiquality`, `-hiquality-types`,
@@ -260,20 +288,23 @@ with 2.11 ms against 1.95 ms.
 
 ## Cost
 
-One instance at its defaults: 0.60 % of one core at 48 kHz (60 s rendered in 0.36 s, release
-build, Apple M-series), inside the 1 % budget. With Hard Curve, both Color amounts and the soft
-post clip: 1.4 %. Run `cargo test --release -p suhina-device-saturator cost -- --ignored
+One instance at its defaults: 1.2 % of one core at 48 kHz (60 s rendered in 0.70 s, release
+build, Apple M-series), just over the 1 % budget, for the original's 4x oversampling
+(Decisions 3; 0.5 % at 2x). With Hard Curve, both Color amounts and the soft post clip: 2.7 %. Run `cargo test --release -p suhina-device-saturator cost -- --ignored
 --nocapture` to measure it.
 
 ## Tests
 
 `devices/saturator/src/tests.rs`: the device contract (`device_api::conformance`, latency
 included); the dry path delayed exactly; each curve's small-signal gain against the measured one;
-Drive as a gain before the curve; the Waveshaper's Linear as the straight path's gain and its
+Drive as a gain before the curve; the lines a hard clip folds back to, against the original's
+with Hi-Quality; the Waveshaper's Linear as the straight path's gain and its
 Curve as even harmonics with no offset; Analog Clip's knee and ceiling; the fold and the soft sine; the
 Bass Threshold moving the knee; Color flat while the curve is straight and changing only the
 saturation; the bell at its frequency; the post clip holding the Output level; Output and the
-equal-gain mix; the DC filter; eleven changes while playing without a click; two quick curve
+equal-gain mix; the DC filter; eleven changes while playing without a click (on a 97 Hz tone, so
+that a clip's edges do not land on the same fraction of a frame every cycle); the Color glides
+leaving a straight curve's sound untouched, sample for sample; two quick curve
 changes morphing in turn instead of jumping; the post clip's switch fading; mixed `process` call
 sizes leaving the sound bit-identical; the same sound at 44.1 and 96 kHz; silence in, silence out.
 
@@ -282,6 +313,9 @@ every curve, the waveshaper, Color, both post clips, changes while playing), com
 1e-6 with the files in `devices/saturator/tests/golden`; its README lists them and how to make
 them again when a change to the sound is intended.
 
-`crates/dsp/src/shape.rs` and
-`crates/dsp/src/iir_oversample.rs` test the curves and the oversampler (flat to 0.02 dB, its
-latency, images removed, broken input). `crates/als/src/devices_tests.rs` tests the import.
+`crates/dsp/src/shape.rs`,
+`crates/dsp/src/iir_oversample.rs` and `crates/dsp/src/emphasis.rs` test the curves, the
+oversamplers (2x and 4x: flat to 0.02 and 0.04 dB, their latency, images removed, 4x folding back
+far less of a hard clip than 2x, broken input) and the Color filters' pairs (the inverse exact
+while the filter is retuned, where two biquads of opposite gain are not; transparent only once
+settled). `crates/als/src/devices_tests.rs` tests the import.

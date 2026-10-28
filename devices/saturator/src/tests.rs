@@ -134,6 +134,33 @@ fn analog_clip_bends_from_minus_3_db_to_full_scale() {
 }
 
 #[test]
+fn folds_back_as_little_as_the_original_with_hi_quality() {
+    // The original's Hi-Quality, on by default, runs the curves at four times the rate. Its
+    // Digital Clip at Drive +24 dB, a sine at -6 dBFS and 44.1 kHz, folds the harmonics back to
+    // these lines (dB under the fundamental); at twice the rate the 10 kHz sine had a line at
+    // 18.2 kHz, -18 dB, and one at 1.8 kHz, -21 dB.
+    let measured: [(f64, &[(f64, f64)]); 2] = [
+        (10_000.0, &[(6_400.0, -32.7), (13_600.0, -36.5), (2_800.0, -44.2), (17_200.0, -44.8)]),
+        (15_000.0, &[(11_400.0, -23.8), (18_600.0, -26.6), (4_200.0, -44.2), (7_800.0, -48.8)]),
+    ];
+    let rate = 44_100.0;
+    for (hz, lines) in measured {
+        let mut s = saturator(&[(param::TYPE, 6.0), (param::DRIVE, 24.0)]);
+        let _ = s.prepare(rate);
+        // One second after the first 4800 frames: whole cycles of every multiple of 100 Hz.
+        let mut signal = sine(hz, 0.501, 48_900, rate);
+        s.process(&ProcessContext::default(), &mut signal);
+        let fundamental = level_at(&signal, hz, rate);
+        let under = |line| db(level_at(&signal, line, rate) / fundamental);
+        for &(line, expected) in lines {
+            assert!((under(line) - expected).abs() < 0.5, "{hz} Hz: {line} Hz at {} dB", under(line));
+        }
+        let loudest = (1..220).map(|k| f64::from(k) * 100.0).filter(|&f| f != hz).map(under).fold(f64::MIN, f64::max);
+        assert!((loudest - lines[0].1).abs() < 0.5, "{hz} Hz: {loudest} dB");
+    }
+}
+
+#[test]
 fn sinoid_fold_folds_and_soft_sine_holds() {
     // Driven to an amplitude of 2 the fold is back at zero at the sine's peak, so less of the
     // fundamental comes out than at 1; the soft sine holds at 1.
@@ -260,7 +287,11 @@ type Change = (&'static [(usize, f64)], usize, f64);
 #[test]
 fn changes_while_playing_do_not_click() {
     // Each change ramps: while it moves, no step between frames is larger than the largest
-    // step of the steady sound before it or after it.
+    // step of the steady sound before it or after it. The tone is 97 Hz, not 100: at 48 kHz a
+    // 100 Hz cycle is a whole 480 frames, so a clip's edges land on the same fraction of a frame
+    // every cycle, and the steady sound shows only the smallest of the steps an edge can make
+    // (0.289 where other fractions reach 0.332); edges that drift during a change then read as
+    // a click.
     let changes: [Change; 11] = [
         (&[], param::TYPE, 6.0),
         (&[], param::TYPE, 5.0),
@@ -276,7 +307,7 @@ fn changes_while_playing_do_not_click() {
     ];
     for (settings, index, value) in changes {
         let mut s = saturator(settings);
-        let mut signal = sine(100.0, 0.25, 48_000, SR);
+        let mut signal = sine(97.0, 0.25, 48_000, SR);
         let (before, after) = signal.split_at_mut(2 * 24_000);
         s.process(&ProcessContext::default(), before);
         s.set_param(index, value);
@@ -285,6 +316,33 @@ fn changes_while_playing_do_not_click() {
         let steady = largest_step(&frames[12_000..24_000]).max(largest_step(&frames[36_000..]));
         let moving = largest_step(&frames[23_999..26_000]);
         assert!(moving <= 1.05 * steady + 1e-4, "{index} to {value}: {moving} against {steady}");
+    }
+}
+
+#[test]
+fn a_color_glide_leaves_a_straight_curve_alone() {
+    // Drive -36 dB keeps the curve straight even with Color Low at +100 % (+36 dB), so the
+    // filters and their inverses cancel as they glide: the output stays the input times Drive,
+    // with no step between frames larger than the steady sound's. Retuning that clicked would
+    // show here, where nothing else moves.
+    for (index, value) in [(param::COLOR_LOW, 1.0), (param::COLOR_HIGH, 1.0), (param::COLOR_FREQUENCY, 100.0)] {
+        let mut s = saturator(&[(param::TYPE, 6.0), (param::DRIVE, -36.0), (param::COLOR_HIGH, 0.5)]);
+        let mut signal = sine(100.0, 0.8, 48_000, SR);
+        let (before, after) = signal.split_at_mut(2 * 24_000);
+        s.process(&ProcessContext::default(), before);
+        s.set_param(index, value);
+        s.process(&ProcessContext::default(), after);
+        let frames = signal.as_chunks::<2>().0;
+        let steady = largest_step(&frames[12_000..24_000]).max(largest_step(&frames[36_000..]));
+        let moving = largest_step(&frames[23_999..26_000]);
+        assert!(moving <= 1.05 * steady, "{index} to {value}: {moving} against {steady}");
+        let gain = 0.8 * f64::from(db_to_gain(-36.0f32));
+        let worst = (12_000..48_000)
+            .map(|n| {
+                (f64::from(frames[n][0]) - gain * (std::f64::consts::TAU * 100.0 * (n - DELAY) as f64 / SR).sin()).abs()
+            })
+            .fold(0.0, f64::max);
+        assert!(worst < 0.05 * gain, "{index} to {value}: {worst} against {gain}");
     }
 }
 

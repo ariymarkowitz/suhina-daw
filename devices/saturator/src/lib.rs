@@ -3,8 +3,8 @@
 
 //! Saturator: a waveshaper with eight curves (docs/spec/saturator.md).
 //!
-//! Per side: an optional DC filter, then at twice the sample rate the Color filters (a low shelf
-//! and a bell), the drive, the curve, the Color filters' exact inverse and the post clip; then
+//! Per side: an optional DC filter, then at four times the sample rate the Color filters (a low
+//! shelf and a bell), the drive, the curve, the Color filters' exact inverse and the post clip; then
 //! the output level and the dry/wet mix. Because the inverse filters undo the Color filters,
 //! Color changes only how hard each band is driven, never the tone of what stays clean. A change
 //! of curve or post clip fades over 20 ms from the sound that is playing; one that arrives while
@@ -18,10 +18,16 @@ use suhina_device_api::{
 };
 use suhina_dsp::gain::db_to_gain;
 use suhina_dsp::shape::{Waveshaper, arctan_curve, knee_clip, quadratic_clip, sine_fold, soft_sine};
-use suhina_dsp::{Biquad, Coefficients, DcBlocker, FirstOrder, FirstOrderCoefficients, IirOversampler2x, Smoother};
+use suhina_dsp::{Coefficients, DcBlocker, Emphasis, FirstOrder, FirstOrderCoefficients, IirOversampler4x, Smoother};
 
 /// Delay the device adds, in frames.
-pub const LATENCY: u32 = IirOversampler2x::LATENCY;
+pub const LATENCY: u32 = IirOversampler4x::LATENCY + 1;
+/// How many times the sample rate the curve and the Color filters run at.
+const OVERSAMPLING: f64 = 4.0;
+/// The oversampler delays the audio band by 3.29 frames; this many frames at the high rate (0.75
+/// at the base rate) bring the wet signal to 4.04, so that against the dry signal, delayed by
+/// [`LATENCY`], only the oversampler's phase turn above 5 kHz remains.
+const ALIGN: usize = 3;
 /// Ramp for every continuous change, and the crossfade when the curve changes.
 pub const RAMP_SECONDS: f64 = 0.02;
 /// Where Analog Clip stops being a straight line (-2.7 dB).
@@ -236,26 +242,28 @@ const DC_FILTER_HZ: f64 = 27.0;
 struct Path {
     /// The DC filter: two identical one-pole high-passes at `DC_FILTER_HZ`.
     dc: [FirstOrder; 2],
-    /// Takes the offset of the Waveshaper's squared term out, at twice the rate.
+    /// Takes the offset of the Waveshaper's squared term out, at four times the rate.
     shaper_dc: DcBlocker,
-    oversampler: IirOversampler2x,
-    /// The Color filters before the curve and their inverses after it, at twice the rate.
-    shelf: Biquad,
-    bell: Biquad,
-    unbell: Biquad,
-    unshelf: Biquad,
+    oversampler: IirOversampler4x,
+    /// The last [`ALIGN`] samples at the high rate, and where the next goes.
+    align: [f64; ALIGN],
+    align_at: usize,
+    /// The Color filters before the curve and their exact inverses after it, at four times the
+    /// rate: the inverses undo them sample for sample even while they glide.
+    shelf: Emphasis,
+    bell: Emphasis,
 }
 
 impl Path {
     fn new(sample_rate: f64) -> Self {
         Self {
             dc: [FirstOrder::new(FirstOrderCoefficients::highpass(sample_rate, DC_FILTER_HZ)); 2],
-            shaper_dc: DcBlocker::new(2.0 * sample_rate),
-            oversampler: IirOversampler2x::new(),
-            shelf: Biquad::default(),
-            bell: Biquad::default(),
-            unbell: Biquad::default(),
-            unshelf: Biquad::default(),
+            shaper_dc: DcBlocker::new(OVERSAMPLING * sample_rate),
+            oversampler: IirOversampler4x::new(),
+            align: [0.0; ALIGN],
+            align_at: 0,
+            shelf: Emphasis::default(),
+            bell: Emphasis::default(),
         }
     }
 }
@@ -288,8 +296,10 @@ pub struct Saturator {
     post_next: usize,
     /// A curve and post clip waiting for the running fade to finish.
     pending: Option<(Shape, usize)>,
-    /// Whether the Color filters are doing anything (they pass the signal unchanged at 0).
+    /// Whether the Color filters run (at 0 they pass the signal unchanged).
     color_active: bool,
+    /// Whether the Color amounts are at 0: the filters stop running once they have settled.
+    color_idle: bool,
     retune_in: u32,
     /// Whether the Color controls were moving at the last frame.
     gliding: bool,
@@ -319,6 +329,7 @@ impl Saturator {
             post_next: 0,
             pending: None,
             color_active: false,
+            color_idle: true,
             retune_in: 0,
             gliding: false,
             paths: [Path::new(sr); 2],
@@ -367,26 +378,28 @@ impl Saturator {
 
     /// Sets the Color filters from the smoothed values.
     fn tune(&mut self) {
-        let sr = 2.0 * self.sample_rate;
+        let sr = OVERSAMPLING * self.sample_rate;
         let value = |i: usize| f64::from(self.smoothers.get(i).map_or(0.0, Smoother::current));
         let (low, high) = (value(smoothed::COLOR_LOW), value(smoothed::COLOR_HIGH));
         let frequency = 2.0f64.powf(value(smoothed::COLOR_OCTAVE));
         let width = value(smoothed::COLOR_WIDTH);
         let q = COLOR_NARROW_Q - COLOR_WIDER_Q * width.clamp(0.0, 1.0);
         let shelf = Coefficients::peak(sr, COLOR_LOW_HZ, COLOR_LOW_Q, COLOR_LOW_DB * low);
-        let unshelf = Coefficients::peak(sr, COLOR_LOW_HZ, COLOR_LOW_Q, -COLOR_LOW_DB * low);
         let bell = Coefficients::peak(sr, frequency, q, COLOR_HIGH_DB * high);
-        let unbell = Coefficients::peak(sr, frequency, q, -COLOR_HIGH_DB * high);
         for path in &mut self.paths {
             path.shelf.set(shelf);
-            path.unshelf.set(unshelf);
             path.bell.set(bell);
-            path.unbell.set(unbell);
         }
         let settled = [smoothed::COLOR_LOW, smoothed::COLOR_HIGH]
             .iter()
             .all(|&i| self.smoothers.get(i).is_some_and(|s| s.is_settled() && s.target() == 0.0));
-        self.color_active = !settled;
+        self.color_idle = settled;
+        self.color_active = !(settled && self.color_transparent());
+    }
+
+    /// Whether every Color filter passes the signal unchanged, with nothing left ringing.
+    fn color_transparent(&self) -> bool {
+        self.paths.iter().all(|path| path.shelf.is_transparent() && path.bell.is_transparent())
     }
 
     /// Smoothers and filters for the current sample rate, every state cleared.
@@ -458,9 +471,9 @@ impl Saturator {
 /// One sample of one side through the oversampled stage.
 #[inline]
 fn shape_sample(path: &mut Path, x: f64, f: &Frame) -> f64 {
-    let Path { oversampler, shelf, bell, unbell, unshelf, shaper_dc, .. } = path;
+    let Path { oversampler, align, align_at, shelf, bell, shaper_dc, .. } = path;
     let y = oversampler.process(x, |v| {
-        let v = if f.color { bell.process(shelf.process(v)) } else { v };
+        let v = if f.color { bell.emphasise(shelf.emphasise(v)) } else { v };
         let u = f.drive * v;
         let (before, now) = f.shapes;
         let fading = f.fade < 1.0;
@@ -478,7 +491,10 @@ fn shape_sample(path: &mut Path, x: f64, f: &Frame) -> f64 {
             let old = if before == now { y } else { branch(before) };
             y = old + (y - old) * f.fade;
         }
-        if f.color { unshelf.process(unbell.process(y)) } else { y }
+        let y = if f.color { shelf.deemphasise(bell.deemphasise(y)) } else { y };
+        let slot = align.get_mut(*align_at).map_or(y, |slot| std::mem::replace(slot, y));
+        *align_at = (*align_at + 1) % ALIGN;
+        slot
     });
     // The post clip runs at the base rate, after the downsampler, so it also holds the
     // downsampler's overshoot (the original's hard clip peaks at exactly 1).
@@ -578,6 +594,10 @@ impl Device for Saturator {
                 self.tune();
                 self.gliding = false;
                 self.retune_in = 0;
+            } else if self.color_active && self.color_idle && self.color_transparent() {
+                // Back at 0 the filters run on until what they held has died away: switched off
+                // while it rings, what reaches the curve would jump.
+                self.color_active = false;
             }
             let at = |i: usize| get(smoothed::SHAPER + i);
             let f = Frame {

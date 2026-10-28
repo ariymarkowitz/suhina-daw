@@ -83,6 +83,37 @@ impl IirOversampler2x {
     }
 }
 
+/// Runs a per-sample process at four times the sample rate for one channel: two
+/// [`IirOversampler2x`] in series, the inner one at twice the rate. The inner stage's delay is
+/// half the outer one's in base frames, and its phase turn starts an octave higher.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct IirOversampler4x {
+    outer: IirOversampler2x,
+    inner: IirOversampler2x,
+}
+
+impl IirOversampler4x {
+    /// Delay of the round trip through the audio band, in frames at the base rate (the exact
+    /// group delay at low frequencies is 3.29 frames).
+    pub const LATENCY: u32 = 3;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feeds one sample, runs `process` on the four samples at the high rate, and returns one
+    /// sample at the base rate.
+    #[inline]
+    pub fn process(&mut self, x: f64, mut process: impl FnMut(f64) -> f64) -> f64 {
+        let Self { outer, inner } = self;
+        outer.process(x, |v| inner.process(v, &mut process))
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +185,49 @@ mod tests {
         o.process(1.0, |_| f64::NAN);
         let out: Vec<f64> = (0..200).map(|n| o.process(sine(1_000.0, n), |x| x)).collect();
         assert!(out[150..].iter().all(|v| v.is_finite() && v.abs() < 1.1));
+    }
+
+    #[test]
+    fn four_times_passes_the_audio_band_at_full_level() {
+        for hz in [50.0, 1_000.0, 10_000.0, 18_000.0, 21_000.0] {
+            let mut o = IirOversampler4x::new();
+            let out: Vec<f64> = (0..48_000).map(|n| o.process(sine(hz, n), |x| x)).collect();
+            let gain = 20.0 * level(&out[4_800..], hz).log10();
+            assert!(gain.abs() < 0.04, "{hz} Hz: {gain} dB");
+        }
+    }
+
+    #[test]
+    fn four_times_delays_the_audio_band_by_its_latency() {
+        // As the 2x test: a 1 kHz sine comes out LATENCY frames later, to within a third of a
+        // frame (the exact delay is 3.29 frames).
+        let mut o = IirOversampler4x::new();
+        let out: Vec<f64> = (0..4_800).map(|n| o.process(sine(1_000.0, n), |x| x)).collect();
+        let lag = IirOversampler4x::LATENCY as usize;
+        let worst = (1_000..4_800).map(|n| (out[n] - sine(1_000.0, n - lag)).abs()).fold(0.0, f64::max);
+        assert!(worst < 0.34 * std::f64::consts::TAU * 1_000.0 / SR, "{worst}");
+    }
+
+    #[test]
+    fn four_times_folds_back_far_less_of_a_hard_clip() {
+        // A 10 kHz sine at -6 dBFS driven 24 dB into a hard clip: at 2x its 9th harmonic
+        // (90 kHz) folds back from 96 kHz to 6 kHz, and the 11th to 18 kHz; at 4x the first fold
+        // lands from 192 kHz, on the 19th harmonic, which is much weaker.
+        let clip = |x: f64| (x * 15.85 * 0.5).clamp(-1.0, 1.0);
+        let worst = |out: &[f64]| {
+            let fundamental = level(out, 10_000.0);
+            (1..48)
+                .map(|k| f64::from(k) * 500.0)
+                .filter(|hz| (hz - 10_000.0).abs() > 1.0)
+                .map(|hz| 20.0 * (level(out, hz) / fundamental).log10())
+                .fold(f64::NEG_INFINITY, f64::max)
+        };
+        let mut two = IirOversampler2x::new();
+        let out: Vec<f64> = (0..48_000).map(|n| two.process(sine(10_000.0, n), clip)).collect();
+        let at_two = worst(&out[4_800..]);
+        let mut four = IirOversampler4x::new();
+        let out: Vec<f64> = (0..48_000).map(|n| four.process(sine(10_000.0, n), clip)).collect();
+        let at_four = worst(&out[4_800..]);
+        assert!(at_four < -30.0 && at_four < at_two - 10.0, "2x {at_two} dB, 4x {at_four} dB");
     }
 }
