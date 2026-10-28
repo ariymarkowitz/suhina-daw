@@ -5,17 +5,18 @@
 //! `docs/spec/reverb.md`.
 //!
 //! ```text
-//! in -> mono sum -> 90 Hz roll-off, Low Cut, High Cut -> predelay line -+-> 32 taps (Spin) -> Reflect -+
-//!                                                                        |                              +-> Stereo -> Dry/Wet
-//!                                                                        +-> Shape delay -> 4 allpasses |
-//!                                                                            -> network -> Diffuse -----+
+//! in -> mono sum -> roll-off, Low Cut, High Cut -> predelay line -+-> reflection taps (Spin) -> Reflect -+
+//!                                                                  |                                    +-> Stereo -> Dry/Wet
+//!                                                                  +-> Shape delay -> direct taps       |
+//!                                                                      -> 4 allpasses -> network -> Diffuse
 //! ```
 //!
-//! The late reverb is a feedback delay network of 4, 8, 12 or 16 lines (Density) mixed by a
-//! Hadamard matrix, the textbook design (Jot and Chaigne, 1991); each line's gain sets the
-//! same decay time whatever its length, and shelves in the loop take away more of the highs or
-//! lows per second. Size scales every delay with the cube root of the room's
-//! volume. The delay lengths, tap pattern and constants are this device's own.
+//! The early reflections are the measured tap pattern (docs/spec/reverb.md); the network takes the
+//! direct taps again after the Shape delay. The late reverb is a feedback delay network of 4, 8,
+//! 12 or 16 lines (Density) mixed by a Hadamard matrix, the textbook design (Jot and Chaigne,
+//! 1991); each line's gain sets the same decay time whatever its length, and shelves in the loop
+//! take away more of the highs or lows per second. Size scales every delay with the cube root of
+//! the room's volume. The network's delay lengths and constants are this device's own.
 
 use suhina_device_api::{
     DEFAULT_SAMPLE_RATE, Device, DeviceError, DeviceInfo, ParamBank, ParamInfo, ProcessContext, Role, Scale, Unit,
@@ -29,88 +30,320 @@ pub const RAMP_SECONDS: f64 = 0.02;
 /// Ramp for predelay changes: slower, so a long jump bends the pitch less on the way.
 pub const PREDELAY_RAMP_SECONDS: f64 = 0.1;
 /// Size glides with this time constant when Smooth is Slow.
-pub const SMOOTH_SLOW_SECONDS: f64 = 0.5;
+pub const SMOOTH_SLOW_SECONDS: f64 = 0.045;
 /// Size glides with this time constant when Smooth is Fast.
-pub const SMOOTH_FAST_SECONDS: f64 = 0.1;
+pub const SMOOTH_FAST_SECONDS: f64 = 0.015;
 /// Frames between updates of delay lengths, tap levels and filters, counted from the last reset.
 const CONTROL_FRAMES: u64 = 32;
 
 /// The reference room: delays below are for Size 100, and scale with `(size / 100)^(1/3)`.
 const REFERENCE_SIZE: f64 = 100.0;
-/// Early-reflection taps: time after the predelay (ms, Size 100), output side (0 left, 1 right)
-/// and a level offset (dB).
-const TAPS: [(f64, usize, f64); 32] = [
-    (0.00, 0, 0.00),
-    (2.24, 0, 0.46),
-    (4.03, 0, 0.60),
-    (6.11, 1, 0.94),
-    (10.55, 0, -0.22),
-    (14.10, 1, 0.77),
-    (17.33, 1, -0.36),
-    (20.65, 1, 1.47),
-    (22.67, 1, -0.04),
-    (26.38, 1, 0.98),
-    (32.88, 1, -0.11),
-    (36.63, 0, 0.80),
-    (40.34, 1, -1.79),
-    (42.86, 1, -0.05),
-    (47.37, 1, -1.13),
-    (51.30, 0, 1.08),
-    (57.74, 1, 0.70),
-    (62.17, 0, 0.58),
-    (64.86, 1, -1.97),
-    (68.97, 1, 1.37),
-    (76.21, 0, 0.76),
-    (78.69, 0, -0.01),
-    (83.23, 0, 0.50),
-    (88.23, 0, -1.53),
-    (93.18, 1, -1.24),
-    (99.04, 0, 0.21),
-    (105.56, 0, -0.70),
-    (109.34, 0, -1.67),
-    (115.68, 1, -1.63),
-    (118.70, 0, 0.94),
-    (123.05, 0, -0.31),
-    (130.75, 1, 0.58),
+/// Which side an early reflection is heard on.
+const LEFT: usize = 0;
+/// See [`LEFT`].
+const RIGHT: usize = 1;
+/// A reflection heard as it is read.
+const DIRECT: bool = false;
+/// A reflection heard through the reflections' low-pass ([`reflection_lowpass`]).
+const FILTERED: bool = true;
+
+/// One early reflection: its time after the predelay in the reference room (ms), its side, its
+/// level against the first (before the fade) and whether it passes the reflections' low-pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Tap {
+    ms: f64,
+    side: usize,
+    gain: f64,
+    filtered: bool,
+}
+
+/// A [`Tap`].
+const fn tap(ms: f64, side: usize, gain: f64, filtered: bool) -> Tap {
+    Tap { ms, side, gain, filtered }
+}
+
+// The early reflections of each Density, as measured at 44.1 kHz (docs/spec/reverb.md
+// › Decisions): times are whole frames at 44.1 kHz in the reference room.
+const TAPS_SPARSE: [Tap; 9] = [
+    tap(0.000, RIGHT, 1.5008, DIRECT),
+    tap(26.553, LEFT, -1.4980, DIRECT),
+    tap(37.166, RIGHT, 0.6930, FILTERED),
+    tap(37.211, RIGHT, 0.1117, FILTERED),
+    tap(41.134, LEFT, 1.4991, DIRECT),
+    tap(52.971, RIGHT, 1.2012, FILTERED),
+    tap(53.016, RIGHT, 0.1981, FILTERED),
+    tap(55.646, RIGHT, 1.4936, DIRECT),
+    tap(63.719, RIGHT, 0.0705, FILTERED),
 ];
-/// Each tap's side as a number, 0.0 left and 1.0 right.
-const TAP_SIDES: [f64; 32] = {
-    let mut sides = [0.0; 32];
-    let mut k = 0;
-    while k < 32 {
-        sides[k] = TAPS[k].1 as f64;
-        k += 1;
-    }
-    sides
-};
-/// Level of the first tap against the input.
-const TAP_GAIN: f64 = 0.064;
-/// How fast the reflections fade, in dB per ms after the first: this plus the next times Shape at
-/// [`TAP_FADE_DECAY`], faster in proportion for shorter decays and slower for longer ones.
-const TAP_FADE: f64 = 0.020;
-/// How much faster the reflections fade per unit of Shape, in dB per ms.
-const TAP_FADE_PER_SHAPE: f64 = 0.055;
-/// Decay time (seconds) at which the reflections fade at [`TAP_FADE`] plus [`TAP_FADE_PER_SHAPE`]
-/// times Shape.
-const TAP_FADE_DECAY: f64 = 1.2;
-/// The reflections are this many dB quieter per ms of predelay.
-const TAP_PREDELAY_FADE: f64 = 0.057;
-/// Peak swing of a tap's delay per unit of Spin Amount.
-const SPIN_SECONDS: f64 = 0.000_7;
+const TAPS_LOW: [Tap; 70] = [
+    tap(0.000, RIGHT, 1.0006, DIRECT),
+    tap(7.370, RIGHT, -1.0015, DIRECT),
+    tap(8.957, RIGHT, 1.0133, FILTERED),
+    tap(11.429, LEFT, 0.9997, DIRECT),
+    tap(16.327, RIGHT, -1.0113, FILTERED),
+    tap(17.914, LEFT, -1.0005, DIRECT),
+    tap(20.385, RIGHT, 0.6052, FILTERED),
+    tap(26.553, LEFT, -0.9953, DIRECT),
+    tap(26.871, RIGHT, 0.0851, FILTERED),
+    tap(28.435, LEFT, 0.9985, DIRECT),
+    tap(30.272, LEFT, -0.6020, FILTERED),
+    tap(34.172, RIGHT, -0.9989, DIRECT),
+    tap(35.510, RIGHT, 0.0910, FILTERED),
+    tap(37.166, RIGHT, 0.1253, FILTERED),
+    tap(37.392, RIGHT, -0.3660, FILTERED),
+    tap(37.642, LEFT, 0.6036, FILTERED),
+    tap(41.134, LEFT, 0.9976, DIRECT),
+    tap(41.701, LEFT, 0.7245, FILTERED),
+    tap(43.129, RIGHT, -0.2250, FILTERED),
+    tap(44.535, RIGHT, -0.1168, FILTERED),
+    tap(48.186, LEFT, -0.3636, FILTERED),
+    tap(48.299, RIGHT, -0.9966, DIRECT),
+    tap(48.594, RIGHT, 0.5363, FILTERED),
+    tap(50.091, RIGHT, 0.6059, FILTERED),
+    tap(52.971, RIGHT, 0.2329, FILTERED),
+    tap(55.079, RIGHT, 0.8618, FILTERED),
+    tap(55.646, RIGHT, 0.9951, DIRECT),
+    tap(56.825, LEFT, -0.3581, FILTERED),
+    tap(57.256, RIGHT, 0.5709, FILTERED),
+    tap(58.707, LEFT, -0.1423, FILTERED),
+    tap(60.340, RIGHT, -0.2436, FILTERED),
+    tap(63.719, RIGHT, 0.8558, FILTERED),
+    tap(64.399, RIGHT, 0.4778, FILTERED),
+    tap(64.444, LEFT, -0.9218, FILTERED),
+    tap(64.603, RIGHT, -0.5960, FILTERED),
+    tap(65.601, RIGHT, 0.8453, FILTERED),
+    tap(67.619, LEFT, -0.6661, FILTERED),
+    tap(70.884, RIGHT, -0.1951, FILTERED),
+    tap(71.338, RIGHT, -0.0884, FILTERED),
+    tap(71.406, LEFT, 0.7380, FILTERED),
+    tap(72.336, LEFT, -0.1142, FILTERED),
+    tap(74.989, LEFT, 0.6729, FILTERED),
+    tap(78.299, RIGHT, 0.5238, FILTERED),
+    tap(78.571, LEFT, -0.1164, FILTERED),
+    tap(79.048, LEFT, 0.4080, FILTERED),
+    tap(79.524, RIGHT, -0.1918, FILTERED),
+    tap(79.705, LEFT, 0.1119, FILTERED),
+    tap(81.406, RIGHT, -0.5369, FILTERED),
+    tap(83.764, LEFT, 0.5699, FILTERED),
+    tap(85.465, RIGHT, -0.3676, FILTERED),
+    tap(85.533, LEFT, 0.6592, FILTERED),
+    tap(85.918, LEFT, 0.1043, FILTERED),
+    tap(87.143, RIGHT, 0.5185, FILTERED),
+    tap(90.249, LEFT, -0.7494, FILTERED),
+    tap(92.812, RIGHT, 0.3672, FILTERED),
+    tap(94.104, RIGHT, 0.4855, FILTERED),
+    tap(94.172, LEFT, 0.6641, FILTERED),
+    tap(96.054, LEFT, -0.5707, FILTERED),
+    tap(98.889, LEFT, -0.7425, FILTERED),
+    tap(100.771, LEFT, 0.6469, FILTERED),
+    tap(101.270, RIGHT, -1.0155, FILTERED),
+    tap(101.791, LEFT, 0.5313, FILTERED),
+    tap(106.508, LEFT, 0.6654, FILTERED),
+    tap(108.617, RIGHT, 1.0143, FILTERED),
+    tap(108.753, LEFT, 0.4033, FILTERED),
+    tap(113.469, LEFT, 0.5671, FILTERED),
+    tap(115.918, LEFT, 0.4828, FILTERED),
+    tap(120.635, LEFT, 0.3813, FILTERED),
+    tap(123.265, LEFT, -0.4962, FILTERED),
+    tap(127.982, LEFT, -0.3889, FILTERED),
+];
+const TAPS_MID: [Tap; 68] = [
+    tap(0.000, RIGHT, 0.9999, DIRECT),
+    tap(7.370, RIGHT, 0.9984, DIRECT),
+    tap(8.957, RIGHT, -0.3243, FILTERED),
+    tap(9.002, RIGHT, -0.0930, FILTERED),
+    tap(11.429, LEFT, 0.9975, DIRECT),
+    tap(16.327, RIGHT, -0.0959, FILTERED),
+    tap(17.914, RIGHT, -1.0004, DIRECT),
+    tap(20.385, RIGHT, -0.2883, FILTERED),
+    tap(20.431, RIGHT, -0.0751, FILTERED),
+    tap(21.769, LEFT, 0.2313, FILTERED),
+    tap(21.814, LEFT, 0.0552, FILTERED),
+    tap(26.553, LEFT, -0.9997, DIRECT),
+    tap(26.871, RIGHT, 0.3325, FILTERED),
+    tap(26.916, RIGHT, 0.0901, FILTERED),
+    tap(28.435, LEFT, 0.9947, DIRECT),
+    tap(29.138, LEFT, -0.5521, FILTERED),
+    tap(29.184, LEFT, -0.1745, FILTERED),
+    tap(30.272, LEFT, 0.5428, FILTERED),
+    tap(30.317, LEFT, 0.1487, FILTERED),
+    tap(34.172, RIGHT, -0.9990, DIRECT),
+    tap(35.510, RIGHT, 0.7019, FILTERED),
+    tap(35.556, RIGHT, 0.2115, FILTERED),
+    tap(37.166, RIGHT, 0.4920, FILTERED),
+    tap(37.211, RIGHT, 0.1396, FILTERED),
+    tap(37.392, RIGHT, -0.2298, FILTERED),
+    tap(37.438, RIGHT, -0.0672, FILTERED),
+    tap(37.642, LEFT, 0.3740, FILTERED),
+    tap(37.687, LEFT, 0.1050, FILTERED),
+    tap(39.683, LEFT, -0.2365, FILTERED),
+    tap(39.728, LEFT, -0.0703, FILTERED),
+    tap(41.134, LEFT, 0.9948, DIRECT),
+    tap(41.701, LEFT, -0.4166, FILTERED),
+    tap(41.746, LEFT, -0.1356, FILTERED),
+    tap(43.129, RIGHT, 0.0909, FILTERED),
+    tap(44.535, RIGHT, -0.0578, FILTERED),
+    tap(48.186, LEFT, -0.5616, FILTERED),
+    tap(48.231, LEFT, -0.1676, FILTERED),
+    tap(48.299, RIGHT, 0.9974, DIRECT),
+    tap(48.322, LEFT, 0.0534, FILTERED),
+    tap(48.594, RIGHT, 0.1661, FILTERED),
+    tap(50.091, RIGHT, 0.3534, FILTERED),
+    tap(50.136, RIGHT, 0.0890, FILTERED),
+    tap(50.204, LEFT, 0.7100, FILTERED),
+    tap(50.249, LEFT, 0.2019, FILTERED),
+    tap(52.971, RIGHT, -0.4531, FILTERED),
+    tap(53.016, RIGHT, -0.1261, FILTERED),
+    tap(55.079, RIGHT, -0.5074, FILTERED),
+    tap(55.125, RIGHT, -0.1552, FILTERED),
+    tap(55.646, RIGHT, 0.9977, DIRECT),
+    tap(55.941, LEFT, 0.5233, FILTERED),
+    tap(55.986, LEFT, 0.1455, FILTERED),
+    tap(56.531, RIGHT, 0.0881, FILTERED),
+    tap(56.825, LEFT, -0.3520, FILTERED),
+    tap(56.871, LEFT, -0.1065, FILTERED),
+    tap(57.256, RIGHT, 0.4620, FILTERED),
+    tap(57.302, RIGHT, 0.1168, FILTERED),
+    tap(58.707, LEFT, -0.2352, FILTERED),
+    tap(58.753, LEFT, -0.0722, FILTERED),
+    tap(60.340, RIGHT, -0.1047, FILTERED),
+    tap(62.902, LEFT, 0.3710, FILTERED),
+    tap(62.948, LEFT, 0.0919, FILTERED),
+    tap(63.719, RIGHT, 0.1637, FILTERED),
+    tap(63.900, RIGHT, -0.3854, FILTERED),
+    tap(63.946, RIGHT, -0.1070, FILTERED),
+    tap(64.399, RIGHT, -0.5616, FILTERED),
+    tap(64.444, LEFT, -0.3751, FILTERED),
+    tap(64.444, RIGHT, -0.1646, FILTERED),
+    tap(64.490, LEFT, -0.1110, FILTERED),
+];
+const TAPS_HIGH: [Tap; 82] = [
+    tap(0.000, RIGHT, 1.0004, DIRECT),
+    tap(7.370, RIGHT, 0.9988, DIRECT),
+    tap(8.957, RIGHT, -0.5414, FILTERED),
+    tap(9.002, RIGHT, -0.1130, FILTERED),
+    tap(11.429, LEFT, 1.0015, DIRECT),
+    tap(16.327, RIGHT, -0.1198, FILTERED),
+    tap(17.914, LEFT, -0.9986, DIRECT),
+    tap(20.385, RIGHT, -0.0536, FILTERED),
+    tap(21.769, LEFT, 0.5502, FILTERED),
+    tap(21.814, LEFT, 0.1266, FILTERED),
+    tap(26.553, LEFT, -0.9944, DIRECT),
+    tap(26.871, RIGHT, 0.6640, FILTERED),
+    tap(26.916, RIGHT, 0.1495, FILTERED),
+    tap(28.435, LEFT, 0.9996, DIRECT),
+    tap(29.138, LEFT, -0.1803, FILTERED),
+    tap(33.197, LEFT, -0.3384, FILTERED),
+    tap(33.243, LEFT, -0.0642, FILTERED),
+    tap(34.172, RIGHT, -0.9995, DIRECT),
+    tap(35.510, RIGHT, -0.5205, FILTERED),
+    tap(35.556, RIGHT, -0.0994, FILTERED),
+    tap(37.166, RIGHT, -0.3920, FILTERED),
+    tap(37.211, RIGHT, -0.0858, FILTERED),
+    tap(37.392, RIGHT, -0.0612, FILTERED),
+    tap(37.642, LEFT, -0.5796, FILTERED),
+    tap(37.687, LEFT, -0.1241, FILTERED),
+    tap(39.683, LEFT, 0.3041, FILTERED),
+    tap(39.728, LEFT, 0.0711, FILTERED),
+    tap(41.134, LEFT, 1.0016, DIRECT),
+    tap(41.701, LEFT, -0.2980, FILTERED),
+    tap(41.746, LEFT, -0.0792, FILTERED),
+    tap(43.129, RIGHT, -0.0932, FILTERED),
+    tap(44.535, RIGHT, 0.1600, FILTERED),
+    tap(44.580, RIGHT, 0.0441, FILTERED),
+    tap(48.186, LEFT, 0.4243, FILTERED),
+    tap(48.231, LEFT, 0.0891, FILTERED),
+    tap(48.299, RIGHT, 0.9996, DIRECT),
+    tap(48.322, LEFT, -0.5038, FILTERED),
+    tap(48.367, LEFT, -0.1114, FILTERED),
+    tap(48.594, RIGHT, -0.2113, FILTERED),
+    tap(48.639, RIGHT, -0.0503, FILTERED),
+    tap(50.091, RIGHT, 0.1738, FILTERED),
+    tap(50.204, LEFT, 0.2577, FILTERED),
+    tap(50.249, LEFT, 0.0575, FILTERED),
+    tap(52.971, RIGHT, 0.2971, FILTERED),
+    tap(53.016, RIGHT, 0.0592, FILTERED),
+    tap(54.240, LEFT, -0.3783, FILTERED),
+    tap(54.286, LEFT, -0.0722, FILTERED),
+    tap(54.331, RIGHT, -0.3856, FILTERED),
+    tap(54.376, RIGHT, -0.0799, FILTERED),
+    tap(55.079, RIGHT, -0.3337, FILTERED),
+    tap(55.125, RIGHT, -0.0902, FILTERED),
+    tap(55.646, RIGHT, 0.9986, DIRECT),
+    tap(55.941, LEFT, -0.2493, FILTERED),
+    tap(55.986, LEFT, -0.0456, FILTERED),
+    tap(56.531, RIGHT, -0.4672, FILTERED),
+    tap(56.576, RIGHT, -0.1130, FILTERED),
+    tap(56.825, LEFT, 0.4531, FILTERED),
+    tap(56.871, LEFT, 0.0984, FILTERED),
+    tap(57.256, RIGHT, 0.2385, FILTERED),
+    tap(57.302, RIGHT, 0.0468, FILTERED),
+    tap(58.390, RIGHT, 0.3103, FILTERED),
+    tap(58.435, RIGHT, 0.0613, FILTERED),
+    tap(58.707, LEFT, -0.0976, FILTERED),
+    tap(60.340, RIGHT, -0.1917, FILTERED),
+    tap(60.385, RIGHT, -0.0504, FILTERED),
+    tap(61.610, LEFT, -0.4693, FILTERED),
+    tap(61.655, LEFT, -0.1009, FILTERED),
+    tap(62.902, LEFT, -0.1595, FILTERED),
+    tap(63.719, RIGHT, -0.0854, FILTERED),
+    tap(63.900, RIGHT, -0.2018, FILTERED),
+    tap(64.399, RIGHT, 0.6327, FILTERED),
+    tap(64.444, LEFT, 0.4632, FILTERED),
+    tap(64.444, RIGHT, 0.1422, FILTERED),
+    tap(64.490, LEFT, 0.1039, FILTERED),
+    tap(64.603, RIGHT, 0.3208, FILTERED),
+    tap(64.649, RIGHT, 0.0637, FILTERED),
+    tap(64.875, RIGHT, -0.2754, FILTERED),
+    tap(64.921, RIGHT, -0.0610, FILTERED),
+    tap(65.601, RIGHT, 0.4961, FILTERED),
+    tap(65.646, RIGHT, 0.1092, FILTERED),
+    tap(65.669, LEFT, -0.2511, FILTERED),
+    tap(65.714, LEFT, -0.0461, FILTERED),
+];
+
+/// The tap tables in Density order.
+const TAP_TABLES: [&[Tap]; 4] = [&TAPS_SPARSE, &TAPS_LOW, &TAPS_MID, &TAPS_HIGH];
+/// The most taps a table has.
+const MAX_TAPS: usize = 82;
+/// The reflections are read this long after the predelay (seconds), as measured.
+const TAP_OFFSET_SECONDS: f64 = 3.0 / 44_100.0;
+/// Level of the first reflection against the input, before the predelay's fade.
+const TAP_GAIN: f64 = 0.0942;
+/// How fast the reflections fade, in dB per ms of their delay, times the Decay setting in
+/// seconds: this plus [`TAP_FADE_PER_SHAPE`] times Shape.
+const TAP_FADE: f64 = 0.0328;
+/// How much faster the reflections fade per unit of Shape (dB per ms, times Decay in seconds).
+const TAP_FADE_PER_SHAPE: f64 = 0.0668;
+/// The whole wet signal is this many dB quieter per ms of predelay.
+const PREDELAY_FADE: f64 = 0.0565;
+/// Spin swings every reflection's delay, predelay included, by this fraction of it per unit of
+/// Spin Amount, all in step.
+const SPIN_FRACTION: f64 = 0.0097;
 /// Peak swing of a line's delay per unit of Chorus Amount.
 const CHORUS_SECONDS: f64 = 0.001_8;
+/// The reflections' low-pass: a cookbook low-pass with this Q ...
+const REFLECTION_Q: f64 = 0.508;
+/// ... whose corner rises towards this frequency (Hz) with the Decay setting ...
+const REFLECTION_TOP: f64 = 12_000.0;
+/// ... being this many hertz lower at a decay of one second ...
+const REFLECTION_SPAN: f64 = 818.0;
+/// ... and less, as Decay to this power, for longer decays.
+const REFLECTION_POWER: f64 = 0.886;
+/// The input band's high cut never goes above this frequency, and the input passes a low-pass
+/// at it when High Cut is off.
+const TOP_CUT: f64 = 18_000.0;
 
 /// Delay from the predelay to the diffusers: this plus the next times the size factor, plus the
 /// next again times Shape - 0.5 and the size factor (ms). Puts the tail's onset where it sits for
 /// the reference room.
-const SHAPE_DELAY_MS: (f64, f64, f64) = (10.0, 14.0, 34.0);
+const SHAPE_DELAY_MS: (f64, f64, f64) = (32.0, 18.5, 34.83);
 /// The diffusers' delays at Scale 100 % in the reference room (ms).
-const DIFFUSERS: [f64; 4] = [4.7, 7.3, 11.1, 16.9];
+const DIFFUSERS: [f64; 4] = [1.41, 2.19, 3.33, 5.07];
 /// The network's lines in the reference room (ms), in the order Density turns them on: the first
 /// 4, 8, 12 or all 16.
-const LINES: [f64; 16] = [
-    33.25, 72.60, 47.93, 103.32, 40.67, 85.46, 57.08, 127.18, 37.20, 78.39, 54.62, 115.08, 43.33, 93.96, 66.02, 140.45,
-];
+const LINES: [f64; 16] =
+    [18.29, 39.93, 26.36, 56.83, 22.37, 47.00, 31.39, 69.95, 20.46, 43.11, 30.04, 63.29, 23.83, 51.68, 36.31, 77.25];
 /// How many lines each Density runs.
 const DENSITY_LINES: [usize; 4] = [4, 8, 12, 16];
 /// Level of the tail for each Density against Low (dB), so the four sound equally loud, as
@@ -130,7 +363,7 @@ const OUTPUT_SIGNS: [[f64; 16]; 2] = [
 ];
 /// Level of the late reverb against the input, for the longest decays; shorter ones start lower,
 /// as if the tail had already decayed for [`TAIL_FADE_SECONDS`] when it is heard.
-const TAIL_GAIN: f64 = 1.525;
+const TAIL_GAIN: f64 = 1.06;
 /// How long the shortest decays' tail counts as having decayed already when it is heard.
 const TAIL_FADE_SECONDS: f64 = 0.027;
 /// The damping filters' loss is per trip round a loop this long (seconds, reference room).
@@ -138,8 +371,6 @@ const LOSS_TRIP_SECONDS: f64 = 0.17;
 /// The damping shelves are second-order (a cookbook shelf with this Q, half way at the set
 /// frequency), steeper than first-order ones.
 const SHELF_Q: f64 = BUTTERWORTH_Q;
-/// The reflections after the first are this many dB louder than its level and the fade give.
-const TAP_LATER_DB: f64 = 2.0;
 /// A loss of the highs built into the loop: a high shelf half way at this frequency, this many dB
 /// per trip up to [`AIR_DECAY`]; longer decays lose less, with the cube root of the decay.
 const AIR_FREQUENCY: f64 = 8_000.0;
@@ -151,18 +382,21 @@ const AIR_DECAY: f64 = 3.46;
 const DECAY_RATIO: f64 = 0.9;
 /// Low Cut: a first-order shelf this deep (linear), half way at the band's lower edge.
 const LOW_CUT_DEPTH: f64 = 0.2;
-/// The input always passes a first-order high-pass at this frequency: the reverb, reflections and
-/// tail alike, holds 3 to 8 dB less at 63 Hz and 2 to 3 dB less at 125 Hz than a flat input gives,
-/// whatever Low Cut does (docs/spec/reverb.md).
-const RUMBLE_FREQUENCY: f64 = 90.0;
-/// High Cut is left out above this frequency.
-const HIGH_CUT_LIMIT: f64 = 20_000.0;
+/// The input always passes a first-order high-pass at this frequency, as measured
+/// (docs/spec/reverb.md).
+const RUMBLE_FREQUENCY: f64 = 127.0;
+/// ... and a second one at this frequency.
+const SUBSONIC_FREQUENCY: f64 = 19.0;
+/// A frozen tail still falls this many dB per second with Flat on, as measured ...
+const FREEZE_DRAIN: f64 = 0.25;
+/// ... and this many with Flat off.
+const FREEZE_DRAIN_UNFLAT: f64 = 0.4;
 /// Inside a frozen loop that still takes input, levels above this are compressed so the tail
 /// cannot grow without end.
 const FREEZE_LIMIT: f64 = 2.0;
 
 /// Longest delay the predelay line needs, with some room.
-const PREDELAY_LINE_SECONDS: f64 = 0.6;
+const PREDELAY_LINE_SECONDS: f64 = 1.0;
 /// Longest delay a network line needs, with some room.
 const LINE_SECONDS: f64 = 0.3;
 /// Longest delay a diffuser needs, with some room.
@@ -319,9 +553,11 @@ pub const INFO: DeviceInfo = DeviceInfo { id: "reverb", name: "Reverb", role: Ro
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Tuning {
     /// Each tap's delay after the predelay (frames).
-    tap_delays: [f64; 32],
+    tap_delays: [f64; MAX_TAPS],
     /// Each tap's gain (linear).
-    tap_gains: [f64; 32],
+    tap_gains: [f64; MAX_TAPS],
+    /// Each tap's share of the network's input (zero for filtered taps).
+    feed_gains: [f64; MAX_TAPS],
     /// Delay from the predelay to the diffusers (frames).
     shape_delay: f64,
     /// The diffusers' lengths (frames).
@@ -338,8 +574,9 @@ impl Default for Tuning {
     /// Silent taps and lines at the shortest lengths, until the first tuning.
     fn default() -> Self {
         Self {
-            tap_delays: [2.0; 32],
-            tap_gains: [0.0; 32],
+            tap_delays: [2.0; MAX_TAPS],
+            tap_gains: [0.0; MAX_TAPS],
+            feed_gains: [0.0; MAX_TAPS],
             shape_delay: 2.0,
             diffusers: [2.0; 4],
             lines: [2.0; 16],
@@ -359,6 +596,7 @@ impl Tuning {
         }
         mix(&mut self.tap_delays, &from.tap_delays, &to.tap_delays, t);
         mix(&mut self.tap_gains, &from.tap_gains, &to.tap_gains, t);
+        mix(&mut self.feed_gains, &from.feed_gains, &to.feed_gains, t);
         mix(&mut self.diffusers, &from.diffusers, &to.diffusers, t);
         mix(&mut self.lines, &from.lines, &to.lines, t);
         mix(&mut self.gains, &from.gains, &to.gains, t);
@@ -506,7 +744,7 @@ ramps! {
     low_cut,
     /// How much of High Cut is heard (0 off, 1 on).
     high_cut,
-    /// Spin's swing (frames).
+    /// Spin's swing, as a fraction of each reflection's delay.
     spin,
     /// Chorus's swing (frames).
     chorus,
@@ -575,8 +813,16 @@ pub struct Reverb {
     low_cut: FirstOrder,
     /// The fixed roll-off of the lowest octaves at the input.
     rumble: FirstOrder,
+    /// A second, lower high-pass of the lowest octave at the input.
+    subsonic: FirstOrder,
     /// High Cut, a second-order low-pass.
     high_cut: Biquad,
+    /// The low-pass the input passes while High Cut is off.
+    top_cut: Biquad,
+    /// The reflections' low-pass, for the filtered taps of each side.
+    reflection_filters: [Biquad; 2],
+    /// The early reflections of the Density setting.
+    taps: &'static [Tap],
     /// The predelay line, which the taps and the Shape delay read.
     input: DelayLine,
     /// The allpasses in front of the network.
@@ -587,8 +833,6 @@ pub struct Reverb {
     active: usize,
     /// Each line's share of the input.
     weights: [f64; 16],
-    /// Cosine and sine of each tap's phase offset.
-    spin_offsets: [(f64, f64); 32],
     /// Cosine and sine of each line's phase offset.
     chorus_offsets: [(f64, f64); 16],
     /// The size factor `(size / 100)^(1/3)` as it glides.
@@ -632,11 +876,11 @@ fn phase_offsets<const N: usize>(first: usize) -> [(f64, f64); N] {
     })
 }
 
-/// Each line's share of the network's input with `active` lines running: the longer lines take
-/// more, so the tail builds up rather than starting at its loudest.
+/// Each line's share of the network's input with `active` lines running: all the same, so the
+/// tail sets in at its full level, as measured.
 fn input_weights(active: usize) -> [f64; 16] {
-    let norm = LINES.iter().take(active).map(|l| l * l).sum::<f64>().sqrt().max(1e-9);
-    std::array::from_fn(|k| LINES.get(k).map_or(0.0, |l| l / norm) * INPUT_SIGNS.get(k).copied().unwrap_or(1.0))
+    let share = 1.0 / (active.max(1) as f64).sqrt();
+    std::array::from_fn(|k| if k < active { share * INPUT_SIGNS.get(k).copied().unwrap_or(1.0) } else { 0.0 })
 }
 
 /// Mixes the first `n` lines' outputs with an orthogonal matrix in which every line feeds every
@@ -701,13 +945,16 @@ impl Reverb {
             ramps: Ramps::splat(Smoother::new(0.0, 1)),
             low_cut: FirstOrder::default(),
             rumble: FirstOrder::default(),
+            subsonic: FirstOrder::default(),
             high_cut: Biquad::default(),
+            top_cut: Biquad::default(),
+            reflection_filters: Default::default(),
+            taps: &TAPS_LOW,
             input: DelayLine::default(),
             diffusers: Default::default(),
             lines: Default::default(),
             active: 8,
             weights: input_weights(8),
-            spin_offsets: phase_offsets(0),
             chorus_offsets: phase_offsets(7),
             room: 1.0,
             from: Tuning::default(),
@@ -752,8 +999,9 @@ impl Reverb {
     fn targets(&self) -> Ramps<f64> {
         let sr = self.sample_rate;
         let flag = |index| if self.on(index) { 1.0 } else { 0.0 };
-        // Frozen with Flat on, the damping is left out; frozen at all, the fixed loss is.
-        let filtered = if self.frozen() && self.on(param::FLAT) { 0.0 } else { 1.0 };
+        // Frozen, the damping and the fixed loss are left out: the tail drains slowly instead,
+        // a little faster with Flat off (FREEZE_DRAIN), as measured.
+        let filtered = if self.frozen() { 0.0 } else { 1.0 };
         Ramps {
             predelay: self.value(param::PREDELAY) * sr,
             reflect: db_to_gain(self.value(param::REFLECT)),
@@ -763,7 +1011,7 @@ impl Reverb {
             feed: if self.frozen() && self.on(param::CUT) { 0.0 } else { 1.0 },
             low_cut: flag(param::LOW_CUT),
             high_cut: flag(param::HIGH_CUT),
-            spin: flag(param::SPIN) * SPIN_SECONDS * self.value(param::SPIN_AMOUNT) * sr,
+            spin: flag(param::SPIN) * SPIN_FRACTION * self.value(param::SPIN_AMOUNT),
             chorus: flag(param::CHORUS) * CHORUS_SECONDS * self.value(param::CHORUS_AMOUNT) * sr,
             shape: self.value(param::SHAPE),
             scale: self.value(param::SCALE),
@@ -798,7 +1046,15 @@ impl Reverb {
         self.ramps.predelay.set_ramp(Smoother::ramp_frames(PREDELAY_RAMP_SECONDS, self.sample_rate));
         self.low_cut.reset();
         self.rumble = FirstOrder::new(FirstOrderCoefficients::highpass(self.sample_rate, RUMBLE_FREQUENCY));
+        self.subsonic = FirstOrder::new(FirstOrderCoefficients::highpass(self.sample_rate, SUBSONIC_FREQUENCY));
         self.high_cut.reset();
+        self.top_cut = Biquad::new(Coefficients::lowpass(self.sample_rate, TOP_CUT, BUTTERWORTH_Q));
+        if TOP_CUT >= 0.45 * self.sample_rate {
+            self.top_cut.set(Coefficients::IDENTITY);
+        }
+        for filter in &mut self.reflection_filters {
+            filter.reset();
+        }
         self.input.clear();
         for diffuser in &mut self.diffusers {
             diffuser.clear();
@@ -822,6 +1078,7 @@ impl Reverb {
     /// Runs the first `lines` lines of the network.
     fn set_active(&mut self, lines: usize) {
         self.active = lines.clamp(1, LINES.len());
+        self.taps = TAP_TABLES.get(self.value(param::DENSITY) as usize).copied().unwrap_or(&TAPS_LOW);
         self.weights = input_weights(self.active);
     }
 
@@ -837,7 +1094,8 @@ impl Reverb {
         let half = f64::from(self.ramps.width.current()) / 2.0;
         let (low, high) = (centre / 2.0f64.powf(half), centre * 2.0f64.powf(half));
         self.low_cut.set(FirstOrderCoefficients::low_shelf(sr, low, LOW_CUT_DEPTH));
-        self.high_cut.set(if high < HIGH_CUT_LIMIT.min(sr * 0.45) {
+        let high = high.min(TOP_CUT);
+        self.high_cut.set(if high < sr * 0.45 {
             Coefficients::lowpass(sr, high, BUTTERWORTH_Q)
         } else {
             Coefficients::IDENTITY
@@ -853,7 +1111,7 @@ impl Reverb {
         let shape = f64::from(self.ramps.shape.current());
         let scale = f64::from(self.ramps.scale.current());
         let setting = f64::from(self.ramps.decay.current()).exp();
-        let fade = (TAP_FADE + TAP_FADE_PER_SHAPE * shape) * TAP_FADE_DECAY / setting;
+        let fade = (TAP_FADE + TAP_FADE_PER_SHAPE * shape) / setting;
         let predelay_ms = self.value(param::PREDELAY) * 1_000.0;
         let frozen = self.frozen();
         let decay = setting * DECAY_RATIO;
@@ -862,14 +1120,23 @@ impl Reverb {
         // glide they move smoothly between frames.
         let settled = self.room == self.room_target() && !self.ramps.control_moving();
         let density = DENSITY_TRIM_DB.get(self.value(param::DENSITY) as usize).copied().unwrap_or(0.0);
+        let predelay_gain = db_to_gain(-PREDELAY_FADE * predelay_ms);
+        let taps = self.taps;
+        // The network is fed by the direct reflections, each at its own level and fade.
+        let norm = taps.iter().filter(|tap| !tap.filtered).map(|tap| tap.gain * tap.gain).sum::<f64>().sqrt().max(1e-9);
         let t = &mut self.to;
-        for (k, ((delay, gain), &(time, _, level))) in
-            t.tap_delays.iter_mut().zip(&mut t.tap_gains).zip(&TAPS).enumerate()
+        t.tap_gains = [0.0; MAX_TAPS];
+        t.feed_gains = [0.0; MAX_TAPS];
+        for (((delay, gain), feed), tap) in
+            t.tap_delays.iter_mut().zip(&mut t.tap_gains).zip(&mut t.feed_gains).zip(taps)
         {
-            let time = time * room;
-            *delay = time * ms;
-            let later = if k > 0 { TAP_LATER_DB } else { 0.0 };
-            *gain = TAP_GAIN * db_to_gain(level + later - TAP_PREDELAY_FADE * predelay_ms - fade * time);
+            let time = tap.ms * room;
+            *delay = time * ms + TAP_OFFSET_SECONDS * sr;
+            let level = tap.gain * db_to_gain(-fade * time);
+            *gain = TAP_GAIN * predelay_gain * level;
+            if !tap.filtered {
+                *feed = level / norm;
+            }
         }
         let (a, b, c) = SHAPE_DELAY_MS;
         t.shape_delay = ((a + (b + c * (shape - 0.5)) * room) * ms).max(0.0);
@@ -879,10 +1146,21 @@ impl Reverb {
         for ((length, gain), base) in t.lines.iter_mut().zip(t.gains.iter_mut()).zip(LINES) {
             let frames = base * room * ms;
             *length = if settled { frames.round() } else { frames }.max(2.0);
-            *gain = if frozen { 1.0 } else { db_to_gain(-60.0 * base * room / 1_000.0 / decay) };
+            let seconds = base * room / 1_000.0;
+            *gain = if frozen {
+                db_to_gain(-seconds * if self.params.on(param::FLAT) { FREEZE_DRAIN } else { FREEZE_DRAIN_UNFLAT })
+            } else {
+                db_to_gain(-60.0 * seconds / decay)
+            };
         }
-        t.feed =
-            TAIL_GAIN * db_to_gain(density - 60.0 * TAIL_FADE_SECONDS / setting) * room.max(1.0).powf(LARGE_ROOM_POWER);
+        t.feed = TAIL_GAIN
+            * predelay_gain
+            * db_to_gain(density - 60.0 * TAIL_FADE_SECONDS / setting)
+            * room.max(1.0).powf(LARGE_ROOM_POWER);
+        let corner = (REFLECTION_TOP - REFLECTION_SPAN * setting.powf(-REFLECTION_POWER)).clamp(20.0, 0.45 * sr);
+        for filter in &mut self.reflection_filters {
+            filter.set(Coefficients::lowpass(sr, corner, REFLECTION_Q));
+        }
 
         let air_db = AIR_LOSS_DB * (AIR_DECAY / setting).cbrt().min(1.0);
         let r = &self.ramps;
@@ -1034,44 +1312,42 @@ impl Device for Reverb {
             };
 
             let input = frame.map(|s| if s.is_finite() { f64::from(s) } else { 0.0 });
-            // Both cuts always run, so switching one crossfades instead of clicking.
-            let mut x = self.rumble.process((input[0] + input[1]) / 2.0);
+            // Both cuts always run, so switching one crossfades instead of clicking; High Cut
+            // takes the place of the fixed top cut.
+            let mut x = self.subsonic.process(self.rumble.process((input[0] + input[1]) / 2.0));
             x += (self.low_cut.process(x) - x) * low_cut;
-            x += (self.high_cut.process(x) - x) * high_cut;
+            let top = self.top_cut.process(x);
+            x = top + (self.high_cut.process(x) - top) * high_cut;
             let t = if self.moving { &self.now } else { &self.to };
 
-            // Early reflections.
-            let mut early = [0.0f64; 2];
-            if spin_swing > 0.0 {
-                let (spin_sin, spin_cos) = (std::f64::consts::TAU * self.spin_phase).sin_cos();
-                for (((&delay, &gain), &(c, s)), &side) in
-                    t.tap_delays.iter().zip(&t.tap_gains).zip(&self.spin_offsets).zip(&TAP_SIDES)
-                {
-                    // Each tap swings either way round its place; the earliest ones by less, so
-                    // they never read ahead of the input.
-                    let at = predelay + delay;
-                    let swing = spin_swing.min(0.9 * at) * (spin_sin * c + spin_cos * s);
-                    let v = f64::from(self.input.read_hermite(at + swing)) * gain;
-                    early[0] += v * (1.0 - side);
-                    early[1] += v * side;
+            // Early reflections and the network's input, read from the predelay line. Spin
+            // stretches every reflection's delay, predelay included, by the same fraction; without
+            // it, and with nothing moving, the taps fall on whole frames.
+            let stretch = 1.0 + spin_swing * (std::f64::consts::TAU * self.spin_phase).sin();
+            let whole = spin_swing == 0.0 && !self.moving && self.ramps.predelay.is_settled();
+            let line = &self.input;
+            let read = |at: f64| f64::from(if whole { line.read(at.round() as usize) } else { line.read_hermite(at) });
+            // Direct and filtered reflections, left and right.
+            let (mut direct, mut filtered) = ([0.0f64; 2], [0.0f64; 2]);
+            let mut u = 0.0f64;
+            for (((tap, &delay), &gain), &share) in
+                self.taps.iter().zip(&t.tap_delays).zip(&t.tap_gains).zip(&t.feed_gains)
+            {
+                let v = read((predelay + delay) * stretch) * gain;
+                let sides = if tap.filtered { &mut filtered } else { &mut direct };
+                if let Some(side) = sides.get_mut(tap.side) {
+                    *side += v;
                 }
-            } else {
-                // Without Spin, and with nothing moving, the taps fall on whole frames.
-                let whole = !self.moving && self.ramps.predelay.is_settled();
-                for ((&delay, &gain), &side) in t.tap_delays.iter().zip(&t.tap_gains).zip(&TAP_SIDES) {
-                    let at = predelay + delay;
-                    let v = f64::from(if whole {
-                        self.input.read(at.round() as usize)
-                    } else {
-                        self.input.read_hermite(at)
-                    }) * gain;
-                    early[0] += v * (1.0 - side);
-                    early[1] += v * side;
+                if share != 0.0 {
+                    u += read(predelay + t.shape_delay + delay) * share;
                 }
             }
+            let [left_filter, right_filter] = &mut self.reflection_filters;
+            let early = [direct[0] + left_filter.process(filtered[0]), direct[1] + right_filter.process(filtered[1])];
 
-            // The network's input: after the Shape delay and the diffusers.
-            let mut u = self.input.read_hermite(predelay + t.shape_delay) * feed as f32;
+            // The network's input: the direct reflections after the Shape delay, then the
+            // diffusers.
+            let mut u = (u * feed) as f32;
             for (diffuser, &length) in self.diffusers.iter_mut().zip(&t.diffusers) {
                 u = diffuser.process(u, length, diffusion);
             }

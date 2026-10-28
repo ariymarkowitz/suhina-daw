@@ -167,8 +167,29 @@ fn the_first_reflection_arrives_after_the_predelay() {
         let mut r = reverb(sr, &[(param::PREDELAY, predelay), (param::DIFFUSE, MIN_LEVEL_DB)]);
         let ir = impulse_response(&mut r, sr, 0.3);
         let first = ir.iter().skip(1).position(|[l, r]| l.abs().max(r.abs()) > 1e-4).map(|n| n + 1);
-        let expected = (predelay * sr).round() as usize;
+        // Three frames (at 44.1 kHz) after the predelay, as measured.
+        let expected = ((predelay + TAP_OFFSET_SECONDS) * sr).round() as usize;
         assert!(first.is_some_and(|n| n.abs_diff(expected) <= 2), "{predelay}: {first:?} against {expected}");
+    }
+}
+
+#[test]
+fn the_reflections_fade_with_shape_and_decay_as_measured() {
+    // The left reflection at 41.13 ms against the one at 11.43 ms, both on whole frames at
+    // 44.1 kHz in the reference room, so they keep the same shape through the input filters.
+    let sr = 44_100.0;
+    for (shape, decay) in [(0.0, 1.2), (0.5, 1.2), (1.0, 0.5)] {
+        let settings =
+            [(param::SHAPE, shape), (param::DECAY, decay), (param::DIFFUSE, MIN_LEVEL_DB), (param::SIZE, 100.0)];
+        let mut r = reverb(sr, &settings);
+        let ir = impulse_response(&mut r, sr, 0.06);
+        let tap = |ms: f64| {
+            let at = ((0.0025 + TAP_OFFSET_SECONDS + ms / 1_000.0) * sr).round() as usize;
+            ir.get(at - 2..at + 3).unwrap_or_default().iter().map(|[l, _]| l.abs()).fold(0.0f32, f32::max)
+        };
+        let fall = 20.0 * f64::from(tap(41.134) / tap(11.429)).log10();
+        let expected = -(TAP_FADE + TAP_FADE_PER_SHAPE * shape) / decay * (41.134 - 11.429);
+        assert!((fall - expected).abs() < 0.05, "shape {shape}, decay {decay}: {fall} against {expected}");
     }
 }
 
