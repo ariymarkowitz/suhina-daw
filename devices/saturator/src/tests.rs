@@ -72,11 +72,40 @@ fn fully_dry_is_the_input_delayed_exactly() {
 #[test]
 fn small_signal_gain_of_each_curve() {
     // Measured from the device the saturator imports from: the slope of each curve at zero.
-    for (shape, expected_db) in [(0, 0.0), (1, 3.92), (2, 0.0), (3, 6.02), (4, 16.5), (5, 3.92), (6, 0.0), (7, 0.0)] {
+    for (shape, expected_db) in [(0, 0.0), (1, 3.92), (2, 0.0), (3, 6.02), (4, 16.5), (5, 3.92), (6, 0.0), (7, -6.02)] {
         let s = drive_sine(&mut saturator(&[(param::TYPE, f64::from(shape))]), 1_000.0, 0.001, 24_000);
         let gain = db(level(&s, 1_000.0) / 0.001);
         assert!((gain - expected_db).abs() < 0.2, "{}: {gain}", TYPE_NAMES[shape as usize]);
     }
+}
+
+#[test]
+fn waveshaper_linear_is_the_gain_of_the_straight_path() {
+    // Measured: 0 % is silent, 50 % is -6.0 dB, 100 % is unity, at every level.
+    for (linear, expected_db) in [(0.5, -6.02), (1.0, 0.0)] {
+        for amplitude in [0.001, 0.5] {
+            let settings = [(param::TYPE, 7.0), (param::SHAPER_CURVE, 0.0), (param::SHAPER_LINEAR, linear)];
+            let s = drive_sine(&mut saturator(&settings), 1_000.0, amplitude, 24_000);
+            let gain = db(level(&s, 1_000.0) / amplitude);
+            assert!((gain - expected_db).abs() < 0.1, "{linear} at {amplitude}: {gain}");
+        }
+    }
+    let silent = [(param::TYPE, 7.0), (param::SHAPER_CURVE, 0.0), (param::SHAPER_LINEAR, 0.0)];
+    assert!(peak(&drive_sine(&mut saturator(&silent), 1_000.0, 0.5, 24_000)) < 1e-6);
+}
+
+#[test]
+fn waveshaper_curve_adds_even_harmonics_without_an_offset() {
+    // Measured at Curve 100 %: the second harmonic is 2π · A of the fundamental for a small tone
+    // (+3.9 dB at -12 dBFS), the odd ones are absent, and the output has no DC.
+    let settings = [(param::TYPE, 7.0), (param::SHAPER_CURVE, 1.0)];
+    let s = drive_sine(&mut saturator(&settings), 1_000.0, 0.0316, 24_000);
+    let ratio = level(&s, 2_000.0) / level(&s, 1_000.0);
+    assert!((ratio - std::f64::consts::TAU * 0.0316).abs() < 0.02, "{ratio}");
+    assert!(level(&s, 3_000.0) < 1e-4 * level(&s, 1_000.0), "{}", level(&s, 3_000.0));
+    let tail = &s[s.len() - 4_800..];
+    let mean = tail.iter().map(|v| f64::from(*v)).sum::<f64>() / tail.len() as f64;
+    assert!(mean.abs() < 1e-3, "{mean}");
 }
 
 #[test]
@@ -168,7 +197,7 @@ fn color_high_is_a_bell_at_its_frequency() {
 #[test]
 fn post_clip_holds_the_output_level() {
     // A steep waveshaper goes past full scale; the hard post clip stops it at the output level.
-    let steep = [(param::TYPE, 7.0), (param::SHAPER_LINEAR, 1.0), (param::SHAPER_CURVE, 0.0), (param::DRIVE, 6.0)];
+    let steep = [(param::TYPE, 7.0), (param::SHAPER_LINEAR, 1.0), (param::SHAPER_CURVE, 0.0), (param::DRIVE, 12.0)];
     let free = drive_sine(&mut saturator(&steep), 100.0, 1.0, 24_000);
     assert!(peak(&free) > 2.0, "{}", peak(&free));
     for (mode, ceiling) in [(1.0, 1.0), (2.0, 1.0)] {
@@ -208,6 +237,16 @@ fn dc_filter_removes_an_offset() {
     };
     assert!(offset(1.0).abs() < 0.01, "{}", offset(1.0));
     assert!((offset(0.0) - 0.3).abs() < 1e-3, "{}", offset(0.0));
+}
+
+#[test]
+fn dc_filter_is_two_one_pole_high_passes_at_27_hz() {
+    // Measured: magnitude (f / 27)² / (1 + (f / 27)²), 0.002, 0.034 and 0.341 at 1, 5 and 20 Hz.
+    for (hz, expected) in [(5.0, 0.033), (20.0, 0.354), (60.0, 0.832)] {
+        let on = drive_sine(&mut saturator(&[(param::DC_FILTER, 1.0)]), hz, 0.1, 48_000);
+        let gain = level(&on, hz) / 0.1;
+        assert!((gain - expected).abs() < 0.03 * expected.max(0.1), "{hz} Hz: {gain}");
+    }
 }
 
 /// The largest step between two frames on the left side in `frames`.

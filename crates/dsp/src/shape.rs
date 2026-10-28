@@ -76,49 +76,87 @@ pub fn sine_fold(v: f64) -> f64 {
     (std::f64::consts::FRAC_PI_2 * v).sin()
 }
 
-/// A steep sigmoid: `g·v / (1 + |g·v|^n)^(1/n)`, slope `gain` at the origin, approaching ±1.
-/// A larger `sharpness` (n) turns the corner more abruptly.
+/// Linear up to `knee`, then a parabola that meets ±1 with slope 0 at `2 - knee`, then flat:
+/// `v - (v - knee)² / (4 (1 - knee))` between the two. Unlike [`knee_clip`] it reaches the
+/// ceiling at a finite value. `knee` is limited to 0 … 1 (1 is a hard clip). Non-finite input
+/// gives 0.
 #[inline]
-pub fn sigmoid(v: f64, gain: f64, sharpness: f64) -> f64 {
-    let x = gain * v;
-    if !x.is_finite() || sharpness <= 0.0 {
+pub fn quadratic_clip(v: f64, knee: f64) -> f64 {
+    if !v.is_finite() {
         return 0.0;
     }
-    (x / (1.0 + x.abs().powf(sharpness)).powf(1.0 / sharpness)).clamp(-1.0, 1.0)
+    let knee = if knee.is_finite() { knee.clamp(0.0, 1.0) } else { 1.0 };
+    let a = v.abs();
+    if a <= knee {
+        return v;
+    }
+    let room = 1.0 - knee;
+    if room <= 0.0 || a >= 2.0 - knee {
+        return v.signum();
+    }
+    let over = a - knee;
+    (a - over * over / (4.0 * room)).copysign(v)
 }
 
-/// A curve shaped by six amounts, each 0 … 1: a dead zone around zero, the slope of the
-/// straight part, a rounding that adds mostly third harmonics, and a sine ripple on top. Its
-/// [`drive`](Self::drive) blends it with the straight line `v`.
+/// An arctangent normalised to 1 at `v` = 1: `atan(g·v) / atan(g)`, slope `g / atan(g)` at the
+/// origin, still rising slowly past 1 towards `π/2 / atan(g)`.
+#[inline]
+pub fn arctan_curve(v: f64, gain: f64) -> f64 {
+    let scale = gain.atan();
+    if !v.is_finite() || !gain.is_finite() || scale <= 0.0 {
+        return 0.0;
+    }
+    (gain * v).atan() / scale
+}
+
+/// A curve shaped by six amounts, each 0 … 1, fitted to a measured original: the slope of the
+/// straight part (the amplitude gain of the linear path), a soft dead zone around zero, an even
+/// term `sin(2π · curve · x²)` that starts as a square and folds back once it reaches 1, and a
+/// sine ripple on top. Its [`drive`](Self::drive) blends it with the straight line `v`. The even
+/// term has even harmonics and a DC offset, which the caller takes out after the curve.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Waveshaper {
     /// 0: the straight line, 1: the shaped curve.
     pub drive: f64,
-    /// Rounding of the curve (third-order).
+    /// Size of the even term.
     pub curve: f64,
-    /// Height of the sine ripple.
+    /// Height of the sine ripple, as the square of this.
     pub depth: f64,
-    /// Slope of the straight part: 0 is 0.5, ½ is 1, 1 is 1.5.
+    /// Gain of the straight part: 0 is silence, ½ is half, 1 is unity.
     pub linear: f64,
-    /// Width of the dead zone around zero, up to 0.25.
+    /// Strength of the dead zone around zero.
     pub damp: f64,
-    /// How many ripples: 0 is one over ±1, 1 is sixteen.
+    /// Frequency of the ripple: 0 is one period over ±1, 1 is thirty.
     pub period: f64,
 }
 
 impl Default for Waveshaper {
-    /// The straight line.
+    /// Half the input: Linear at ½ and nothing else on.
     fn default() -> Self {
         Self { drive: 1.0, curve: 0.0, depth: 0.0, linear: 0.5, damp: 0.0, period: 0.0 }
     }
 }
 
-/// Widest dead zone of a [`Waveshaper`].
-const MAX_DAMP: f64 = 0.25;
-/// Most ripples of a [`Waveshaper`] across ±1.
-const MAX_RIPPLES: f64 = 16.0;
-/// Height of a [`Waveshaper`]'s ripple at full depth.
-const RIPPLE_HEIGHT: f64 = 0.25;
+/// The even term is `sin(2π · curve · x²)`: against the fundamental of a small tone the second
+/// harmonic is `2π · curve · A`, as measured to 2 % up to −12 dBFS, and it folds back past 1
+/// (at `x` = ½ for Curve 100 %) as the measured transfer curves do.
+const CURVE_GAIN: f64 = std::f64::consts::TAU;
+/// Below this `|x|` (−46 dBFS) the even term is `CURVE_FLOOR · |x|` instead of `x²`: the
+/// original's second harmonic stops falling with level there (−31.7 dB against the fundamental
+/// at Curve 100 %, the fourth 14 dB under it, as a rectified sine has).
+const CURVE_FLOOR: f64 = 0.0049;
+/// The ripple's height at full depth.
+const RIPPLE_HEIGHT: f64 = 0.5;
+/// The ripple's angular frequency per unit of `x` at `period` 0, and the added per unit of period.
+const RIPPLE_BASE: f64 = std::f64::consts::PI;
+const RIPPLE_SPAN: f64 = 94.1;
+/// The dead zone's slope at the origin is `1 / (1 + DAMP_STEEPNESS · damp)` of the straight
+/// part's; it is half open at `|x|` = `DAMP_WIDTH + DAMP_GROWTH · damp - DAMP_BEND · damp²`
+/// (0.204, 0.240 and 0.264 at 25, 50 and 75 %, as measured), opening as `x⁴ / (x⁴ + width⁴)`.
+const DAMP_STEEPNESS: f64 = 64.2;
+const DAMP_WIDTH: f64 = 0.156;
+const DAMP_GROWTH: f64 = 0.216;
+const DAMP_BEND: f64 = 0.096;
 
 impl Waveshaper {
     /// The curve at `v`. Non-finite input gives 0.
@@ -128,13 +166,22 @@ impl Waveshaper {
             return 0.0;
         }
         let unit = |x: f64| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
-        let zone = MAX_DAMP * unit(self.damp);
-        let x = (v.abs() - zone).max(0.0).copysign(v);
-        let y = (0.5 + unit(self.linear)) * x;
-        // Monotonic for any rounding: the subtracted term's slope never exceeds 9/8 of y's.
-        let mut shaped = y - unit(self.curve) * y * y * y / (3.0 * (1.0 + y * y));
-        let ripples = 1.0 + (MAX_RIPPLES - 1.0) * unit(self.period);
-        shaped += RIPPLE_HEIGHT * unit(self.depth) * (std::f64::consts::FRAC_PI_2 * ripples * x).sin();
+        let (damp, depth) = (unit(self.damp), unit(self.depth));
+        let x = if damp > 0.0 {
+            let floor = 1.0 / (1.0 + DAMP_STEEPNESS * damp);
+            let width = DAMP_WIDTH + (DAMP_GROWTH - DAMP_BEND * damp) * damp;
+            let (v2, w2) = (v * v, width * width);
+            let (v4, w4) = (v2 * v2, w2 * w2);
+            let opened = v4 / (v4 + w4);
+            v * (floor + (1.0 - floor) * opened)
+        } else {
+            v
+        };
+        let squared = CURVE_GAIN * unit(self.curve) * (x * x).max(CURVE_FLOOR * x.abs());
+        let mut shaped = unit(self.linear) * x + squared.sin();
+        if depth > 0.0 {
+            shaped += RIPPLE_HEIGHT * depth * depth * ((RIPPLE_BASE + RIPPLE_SPAN * unit(self.period)) * x).sin();
+        }
         v + unit(self.drive) * (shaped - v)
     }
 }
@@ -214,36 +261,75 @@ mod tests {
     }
 
     #[test]
-    fn sigmoid_starts_at_its_gain_and_stays_inside_one() {
-        let slope = sigmoid(1e-6, 6.7, 1.75) / 1e-6;
-        assert!((slope - 6.7).abs() < 1e-3, "{slope}");
-        assert!(sigmoid(1e9, 6.7, 1.75) <= 1.0);
-        assert!((sigmoid(-0.3, 6.7, 1.75) + sigmoid(0.3, 6.7, 1.75)).abs() < 1e-12);
-        assert_eq!(sigmoid(f64::NAN, 6.7, 1.75), 0.0);
+    fn quadratic_clip_reaches_one_at_two_minus_the_knee() {
+        let k = 2.0 / 3.0;
+        assert_eq!(quadratic_clip(0.6, k), 0.6);
+        assert_eq!(quadratic_clip(-0.6, k), -0.6);
+        assert!((quadratic_clip(1.0, k) - 11.0 / 12.0).abs() < 1e-12);
+        assert_eq!(quadratic_clip(4.0 / 3.0, k), 1.0);
+        assert_eq!(quadratic_clip(-5.0, k), -1.0);
+        // No corner at either end: slope 1 at the knee, 0 at the ceiling.
+        let slope = |v: f64| (quadratic_clip(v + 1e-7, k) - quadratic_clip(v, k)) / 1e-7;
+        assert!((slope(k) - 1.0).abs() < 1e-5);
+        assert!(slope(4.0 / 3.0 - 1e-6).abs() < 1e-5);
+        assert_eq!(quadratic_clip(0.5, 1.0), 0.5);
+        assert_eq!(quadratic_clip(1.5, 1.0), 1.0);
+        assert_eq!(quadratic_clip(f64::NAN, k), 0.0);
+        let values: Vec<f64> = (-400..=400).map(|i| quadratic_clip(f64::from(i) * 0.01, k)).collect();
+        assert!(values.windows(2).all(|w| w[1] >= w[0]));
+    }
+
+    #[test]
+    fn arctan_curve_is_one_at_one_and_odd() {
+        let slope = arctan_curve(1e-7, 10.0) / 1e-7;
+        assert!((slope - 10.0 / 10.0f64.atan()).abs() < 1e-4, "{slope}");
+        assert!((arctan_curve(1.0, 10.0) - 1.0).abs() < 1e-12);
+        assert!((arctan_curve(-0.3, 10.0) + arctan_curve(0.3, 10.0)).abs() < 1e-12);
+        assert!(arctan_curve(1e9, 10.0) < std::f64::consts::FRAC_PI_2 / 10.0f64.atan() + 1e-9);
+        assert_eq!(arctan_curve(f64::NAN, 10.0), 0.0);
+        assert_eq!(arctan_curve(0.5, f64::INFINITY), 0.0);
     }
 
     #[test]
     fn waveshaper_amounts() {
-        // At its defaults, or with drive 0, it is the straight line.
+        // At its defaults it is half the input; with drive 0 it is the straight line.
         for v in [-2.0, -0.3, 0.0, 0.4, 1.5] {
-            assert_eq!(Waveshaper::default().apply(v), v);
+            assert_eq!(Waveshaper::default().apply(v), 0.5 * v);
             let off = Waveshaper { drive: 0.0, curve: 1.0, depth: 1.0, damp: 1.0, ..Waveshaper::default() };
             assert_eq!(off.apply(v), v);
         }
-        // Damp silences small values; Linear sets the slope.
-        let damped = Waveshaper { damp: 1.0, ..Waveshaper::default() };
-        assert_eq!(damped.apply(0.2), 0.0);
-        let steep = Waveshaper { linear: 1.0, ..Waveshaper::default() };
-        assert!((steep.apply(0.1) - 0.15).abs() < 1e-12);
-        // Curve rounds the top and stays rising; it adds odd harmonics only.
-        let round = Waveshaper { curve: 1.0, ..Waveshaper::default() };
-        let values: Vec<f64> = (-400..=400).map(|i| round.apply(f64::from(i) * 0.01)).collect();
-        assert!(values.windows(2).all(|w| w[1] > w[0]));
-        assert!(harmonic(|v| round.apply(v), 1.0, 3) > 0.01);
-        assert!(harmonic(|v| round.apply(v), 1.0, 2) < 1e-9);
-        // Depth adds a ripple, Period makes it denser.
-        let ripple = |period| Waveshaper { depth: 1.0, period, ..Waveshaper::default() };
-        assert!(harmonic(|v| ripple(1.0).apply(v), 1.0, 15) > 10.0 * harmonic(|v| ripple(0.0).apply(v), 1.0, 15));
+        // Linear is the gain of the straight part: 0 is silence, 1 is unity, ½ is half.
+        let gain = |linear| Waveshaper { linear, ..Waveshaper::default() }.apply(0.1) / 0.1;
+        assert_eq!(gain(0.0), 0.0);
+        assert!((gain(0.5) - 0.5).abs() < 1e-12);
+        assert!((gain(1.0) - 1.0).abs() < 1e-12);
+        // Damp takes the slope at the origin down by 1 / (1 + 64.2 damp) and gives it back with
+        // level: half way back at 0.240 for Damp 50 %.
+        let damped = |damp| Waveshaper { damp, ..Waveshaper::default() };
+        assert!((damped(0.5).apply(1e-4) / 1e-4 - 0.5 / 33.1).abs() < 1e-6);
+        let half = 0.5 * (1.0 / 33.1 + 1.0) / 2.0;
+        assert!((damped(0.5).apply(0.240) / 0.240 - half).abs() < 1e-6);
+        assert!((damped(0.5).apply(1.0) - 0.5).abs() < 0.002);
+        // Curve adds a squared term: even harmonics only, proportional to the setting, with the
+        // second harmonic of a small tone at 2π · curve · A against the fundamental.
+        let round = |curve| Waveshaper { curve, ..Waveshaper::default() };
+        let second =
+            |curve, a: f64| harmonic(|v| round(curve).apply(v), a, 2) / harmonic(|v| round(curve).apply(v), a, 1);
+        assert!((second(1.0, 0.05) - std::f64::consts::TAU * 0.05).abs() < 2e-3, "{}", second(1.0, 0.05));
+        assert!((second(0.5, 0.05) * 2.0 - second(1.0, 0.05)).abs() < 2e-3);
+        assert!(harmonic(|v| round(1.0).apply(v), 0.05, 3) < 1e-6);
+        // It folds back once it reaches 1, at x = ½ for Curve 100 %: bounded however hard it is
+        // driven.
+        assert!((round(1.0).apply(0.5) - (0.25 + 1.0)).abs() < 1e-12);
+        assert!((round(1.0).apply(1.0 / 2.0f64.sqrt()) - (0.5 / 2.0f64.sqrt())).abs() < 1e-9);
+        assert!((round(1.0).apply(100.0) - 0.5 * 100.0).abs() <= 1.0 + 1e-9);
+        // Depth adds a ripple (as its square), Period makes it denser.
+        let ripple = |depth, period| Waveshaper { depth, period, ..Waveshaper::default() };
+        assert!(
+            harmonic(|v| ripple(1.0, 1.0).apply(v), 1.0, 15) > 10.0 * harmonic(|v| ripple(1.0, 0.0).apply(v), 1.0, 15)
+        );
+        let part = |depth: f64| ripple(depth, 0.0).apply(0.3) - 0.15;
+        assert!((part(0.5) - part(1.0) / 4.0).abs() < 1e-12);
         assert_eq!(Waveshaper::default().apply(f64::NAN), 0.0);
     }
 }

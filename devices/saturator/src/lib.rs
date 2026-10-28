@@ -17,30 +17,32 @@ use suhina_device_api::{
     check_sample_rate,
 };
 use suhina_dsp::gain::db_to_gain;
-use suhina_dsp::shape::{Waveshaper, knee_clip, sigmoid, sine_fold, soft_sine};
+use suhina_dsp::shape::{Waveshaper, arctan_curve, knee_clip, quadratic_clip, sine_fold, soft_sine};
 use suhina_dsp::{Biquad, Coefficients, DcBlocker, FirstOrder, FirstOrderCoefficients, IirOversampler2x, Smoother};
 
 /// Delay the device adds, in frames.
 pub const LATENCY: u32 = IirOversampler2x::LATENCY;
 /// Ramp for every continuous change, and the crossfade when the curve changes.
 pub const RAMP_SECONDS: f64 = 0.02;
-/// Where Analog Clip stops being a straight line (-3 dB).
-const ANALOG_KNEE: f64 = 0.707_946;
-/// Medium Curve is Analog Clip with this much more gain.
+/// Where Analog Clip stops being a straight line (-2.7 dB).
+const ANALOG_KNEE: f64 = 0.73;
+/// Medium Curve doubles the signal into a quadratic clip with its knee here: straight to a third
+/// of full scale before the doubling, flat from two thirds.
 const MEDIUM_GAIN: f64 = 2.0;
-/// Hard Curve's slope at zero and how sharply it turns.
-const HARD_GAIN: f64 = 6.7;
-const HARD_SHARPNESS: f64 = 1.75;
-/// Color Low at ±100 %: the low shelf's gain in decibels.
-const COLOR_LOW_DB: f64 = 37.0;
-/// Color Low's shelf is half way (in decibels) at this frequency, and its Q.
-const COLOR_LOW_HZ: f64 = 400.0;
+const MEDIUM_KNEE: f64 = 2.0 / 3.0;
+/// Hard Curve is `atan(HARD_GAIN · u) / atan(HARD_GAIN)`: slope 6.8 at zero, 1 at `u` = 1.
+const HARD_GAIN: f64 = 10.0;
+/// Color Low at ±100 %: the gain of its very wide bell in decibels, at its centre.
+const COLOR_LOW_DB: f64 = 36.0;
+/// Color Low's bell: its centre and Q. So wide that above 100 Hz it falls about 6 dB per octave
+/// like a shelf, and it is gone by 5 kHz; below the centre it falls again.
+const COLOR_LOW_HZ: f64 = 41.4;
+const COLOR_LOW_Q: f64 = 0.103;
 /// Color High at ±100 %: the bell's gain in decibels.
 const COLOR_HIGH_DB: f64 = 24.0;
-/// Color Width 0 and the extra at 100 %: the bell's width between its half-gain points, in
-/// octaves, is `NARROW + WIDER × width²`.
-const COLOR_NARROW_OCTAVES: f64 = 0.71;
-const COLOR_WIDER_OCTAVES: f64 = 2.89;
+/// The bell's Q is `NARROW_Q - WIDER_Q × width`: 2.04 at Color Width 0, 0.30 at 100 %.
+const COLOR_NARROW_Q: f64 = 2.04;
+const COLOR_WIDER_Q: f64 = 1.74;
 /// While the Color controls move, the filters are retuned every this many frames.
 const RETUNE_FRAMES: u32 = 16;
 
@@ -154,9 +156,9 @@ impl Shape {
             Self::AnalogClip => knee_clip(u, ANALOG_KNEE),
             Self::SoftSine => soft_sine(u),
             Self::BassShaper => knee_clip(u, knee),
-            Self::MediumCurve => knee_clip(MEDIUM_GAIN * u, ANALOG_KNEE),
-            Self::HardCurve => sigmoid(u, HARD_GAIN, HARD_SHARPNESS),
-            Self::SinoidFold => sine_fold(u),
+            Self::MediumCurve => quadratic_clip(MEDIUM_GAIN * u, MEDIUM_KNEE),
+            Self::HardCurve => arctan_curve(u, HARD_GAIN),
+            Self::SinoidFold => sine_fold(held(u, FOLD_LIMIT)),
             Self::DigitalClip => {
                 if u.is_finite() {
                     u.clamp(-1.0, 1.0)
@@ -164,18 +166,44 @@ impl Shape {
                     0.0
                 }
             }
-            Self::Waveshaper => shaper.apply(u),
+            Self::Waveshaper => shaper.apply(held(u, SHAPER_LIMIT)),
         }
     }
 }
 
+/// Sinoid Fold stops folding at its fifth peak: the driven signal is held to ±9 (the original's
+/// fold at Drive +24 dB, gain and THD, from −5 to 0 dBFS).
+const FOLD_LIMIT: f64 = 9.0;
+/// The Waveshaper's driven signal is held to ±10, as measured at Drive +24 dB.
+const SHAPER_LIMIT: f64 = 10.0;
+
+/// `u` held to ±`limit`; non-finite input stays as it is for the curve to reject.
+#[inline]
+fn held(u: f64, limit: f64) -> f64 {
+    if u.is_finite() { u.clamp(-limit, limit) } else { u }
+}
+
+/// Where the soft post clip stops being a straight line, as measured.
+const SOFT_POST_KNEE: f64 = 0.6;
+
 /// The post clip of [`POST_CLIP_NAMES`] at `y`; its ceiling is 1, before the output level.
+/// Soft is straight to 0.6 and then a `tanh` towards ±1 (slope 1 at the knee); Hard holds ±1.
 #[inline]
 fn post_clip(mode: usize, y: f64) -> f64 {
+    if !y.is_finite() {
+        return if mode == 0 { y } else { 0.0 };
+    }
     match mode {
-        1 => knee_clip(y, ANALOG_KNEE),
-        2 if y.is_finite() => y.clamp(-1.0, 1.0),
-        2 => 0.0,
+        1 => {
+            let a = y.abs();
+            if a <= SOFT_POST_KNEE {
+                y
+            } else {
+                let room = 1.0 - SOFT_POST_KNEE;
+                (SOFT_POST_KNEE + room * ((a - SOFT_POST_KNEE) / room).tanh()).copysign(y)
+            }
+        }
+        2 => y.clamp(-1.0, 1.0),
         _ => y,
     }
 }
@@ -199,27 +227,35 @@ mod smoothed {
     pub const COUNT: usize = 16;
 }
 
+/// Corner of each of the DC filter's two one-pole high-passes: the original's, from its step
+/// response and magnitude.
+const DC_FILTER_HZ: f64 = 27.0;
+
 /// The signal path of one side.
 #[derive(Clone, Copy)]
 struct Path {
-    dc: DcBlocker,
+    /// The DC filter: two identical one-pole high-passes at `DC_FILTER_HZ`.
+    dc: [FirstOrder; 2],
+    /// Takes the offset of the Waveshaper's squared term out, at twice the rate.
+    shaper_dc: DcBlocker,
     oversampler: IirOversampler2x,
     /// The Color filters before the curve and their inverses after it, at twice the rate.
-    shelf: FirstOrder,
+    shelf: Biquad,
     bell: Biquad,
     unbell: Biquad,
-    unshelf: FirstOrder,
+    unshelf: Biquad,
 }
 
 impl Path {
     fn new(sample_rate: f64) -> Self {
         Self {
-            dc: DcBlocker::new(sample_rate),
+            dc: [FirstOrder::new(FirstOrderCoefficients::highpass(sample_rate, DC_FILTER_HZ)); 2],
+            shaper_dc: DcBlocker::new(2.0 * sample_rate),
             oversampler: IirOversampler2x::new(),
-            shelf: FirstOrder::default(),
+            shelf: Biquad::default(),
             bell: Biquad::default(),
             unbell: Biquad::default(),
-            unshelf: FirstOrder::default(),
+            unshelf: Biquad::default(),
         }
     }
 }
@@ -336,10 +372,9 @@ impl Saturator {
         let (low, high) = (value(smoothed::COLOR_LOW), value(smoothed::COLOR_HIGH));
         let frequency = 2.0f64.powf(value(smoothed::COLOR_OCTAVE));
         let width = value(smoothed::COLOR_WIDTH);
-        let q = Coefficients::q_for_octaves(COLOR_NARROW_OCTAVES + COLOR_WIDER_OCTAVES * width * width);
-        let shelf_gain = suhina_dsp::gain::db_to_gain_f64(COLOR_LOW_DB * low);
-        let shelf = FirstOrderCoefficients::low_shelf(sr, COLOR_LOW_HZ, shelf_gain);
-        let unshelf = FirstOrderCoefficients::low_shelf(sr, COLOR_LOW_HZ, 1.0 / shelf_gain);
+        let q = COLOR_NARROW_Q - COLOR_WIDER_Q * width.clamp(0.0, 1.0);
+        let shelf = Coefficients::peak(sr, COLOR_LOW_HZ, COLOR_LOW_Q, COLOR_LOW_DB * low);
+        let unshelf = Coefficients::peak(sr, COLOR_LOW_HZ, COLOR_LOW_Q, -COLOR_LOW_DB * low);
         let bell = Coefficients::peak(sr, frequency, q, COLOR_HIGH_DB * high);
         let unbell = Coefficients::peak(sr, frequency, q, -COLOR_HIGH_DB * high);
         for path in &mut self.paths {
@@ -423,26 +458,38 @@ impl Saturator {
 /// One sample of one side through the oversampled stage.
 #[inline]
 fn shape_sample(path: &mut Path, x: f64, f: &Frame) -> f64 {
-    let Path { oversampler, shelf, bell, unbell, unshelf, .. } = path;
-    oversampler.process(x, |v| {
+    let Path { oversampler, shelf, bell, unbell, unshelf, shaper_dc, .. } = path;
+    let y = oversampler.process(x, |v| {
         let v = if f.color { bell.process(shelf.process(v)) } else { v };
         let u = f.drive * v;
         let (before, now) = f.shapes;
-        let mut y = now.apply(u, f.knee, &f.shaper);
-        if f.fade < 1.0 {
-            let old = before.apply(u, f.knee, &f.shaper);
+        let fading = f.fade < 1.0;
+        if now != Shape::Waveshaper && !(fading && before == Shape::Waveshaper) {
+            shaper_dc.reset();
+        }
+        // The Waveshaper's squared term leaves an offset; the original's output has none.
+        let mut branch = |shape: Shape| {
+            let y = shape.apply(u, f.knee, &f.shaper);
+            if shape == Shape::Waveshaper { shaper_dc.process(y) } else { y }
+        };
+        let mut y = branch(now);
+        if fading {
+            // Both are the Waveshaper only when its own fade-in is still running: nothing to blend.
+            let old = if before == now { y } else { branch(before) };
             y = old + (y - old) * f.fade;
         }
-        let y = if f.color { unshelf.process(unbell.process(y)) } else { y };
-        let (from, to) = f.posts;
-        if from == to {
-            post_clip(from, y)
-        } else {
-            let a = post_clip(from, y);
-            let b = post_clip(to, y);
-            a + (b - a) * f.fade
-        }
-    })
+        if f.color { unshelf.process(unbell.process(y)) } else { y }
+    });
+    // The post clip runs at the base rate, after the downsampler, so it also holds the
+    // downsampler's overshoot (the original's hard clip peaks at exactly 1).
+    let (from, to) = f.posts;
+    if from == to {
+        post_clip(from, y)
+    } else {
+        let a = post_clip(from, y);
+        let b = post_clip(to, y);
+        a + (b - a) * f.fade
+    }
 }
 
 impl Device for Saturator {
@@ -558,7 +605,8 @@ impl Device for Saturator {
                     *slot = *sample;
                 }
                 let wet = self.paths.get_mut(side).map_or(0.0, |path| {
-                    let filtered = path.dc.process(x);
+                    let first = path.dc[0].process(x);
+                    let filtered = path.dc[1].process(first);
                     let input = x + (filtered - x) * dc;
                     shape_sample(path, input, &f) * output
                 });
