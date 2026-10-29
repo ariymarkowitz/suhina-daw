@@ -26,8 +26,8 @@ parameter for parameter ([`device-import.md`](device-import.md)).
 - **Sources:** Live 12 Reference Manual, 29.32 Reverb (what each control is for); the
   measurements above (how it sounds); the feedback delay network of Jot and Chaigne (1991) and
   the Schroeder allpass, textbook designs. The early reflections' tap pattern is read from Live's
-  renders (Decisions 12); the network's delay lengths and the other constants are this device's
-  own, tuned to the measured laws below.
+  renders (Decisions 12), and so is Density Low's network (Decisions 19); the other networks'
+  delay lengths and the other constants are this device's own, tuned to the measured laws below.
 
 ## Parameters
 
@@ -121,7 +121,21 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   larger than the reference it rises with the size factor to the power 0.75, in smaller ones with
   the square root of how much longer the lines are than the room's (at most 1.6 times, +4 dB),
   and Density Sparse and High are trimmed by −0.3 and +1 dB. Freeze with Cut on fades it out (20 ms).
-- **Network.** 8, 8, 12 or 16 lines (Density Sparse, Low, Mid, High), 18 to 77 ms long in the
+- **Network, Density Low.** Live's own network, as measured (Decisions 19; `devices/reverb/src/measured.rs`
+  has the numbers). The ten direct taps are summed in six groups and the groups into four
+  patterns (unit vectors over the groups), read `17.39 + 34.83 × (shape − 0.5) × size factor` ms
+  after the first direct tap from the same damped copy of the predelay line, at the same levels
+  and fades as above, times 0.545. Seven loop lines, mixed after every trip by one 7 × 7
+  orthogonal matrix: six are a delay and a Schroeder allpass (Diffusion as its gain), 52 to 194 ms
+  long at Scale 40 % in the reference room, of which the allpass is 0.03 to 2.9 ms per 10 % of
+  Scale; the seventh is a plain 1641-frame (37.2 ms) delay that feeds the third line. Each line's
+  length at Scale 5, 20, 40, 60, 80 and 100 % is Live's, and in between it is read off the straight
+  line between them. The patterns enter the lines directly and through four plain delays (9.1,
+  30.3, 72.4 and 48.3 ms) that feed the lines without taking anything back. Six lines are heard,
+  three on the right and three on the left, each at its own level (G, which the fit left unheard,
+  on the right, so the two sides stay level once the loop has spread its energy, as Live's do). Every length scales with the size
+  factor, small rooms too; each line's gain per trip, damping and chorus are as below.
+- **Network, Density Sparse, Mid and High.** 8, 12 or 16 lines (Density Sparse, Mid, High), 18 to 77 ms long in the
   reference room, 1.3 times that at Sparse. Each line's output passes a Schroeder allpass with the
   Diffusion as its gain (0.2 of it at Sparse) and a delay of its own,
   3.6 to 15.2 ms times Scale and the size factor, on every trip. The lines are mixed after every
@@ -141,7 +155,11 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   0.17 s loop, raised to the power of the line's length and its allpass delay (in the room as it
   is) over 0.17 s, so the loss per second does not depend on Size. A fixed loss of the highs is
   always in the loop: a first-order high shelf half way at 8 kHz, 0.96 dB per 0.17 s trip, less for
-  decays over 3.46 s (by the ratio to the power 0.15). Lines and their allpasses are whole frames
+  decays over 3.46 s (by the ratio to the power 0.15). In the measured network (Density Low)
+  it shrinks with the power 0.33, and with Smooth None it is 0.06 dB per trip at every decay:
+  Live's loss of the highs comes almost all with Smooth Slow or Fast (with None its 16 kHz octave
+  decays 0.3 to 0.4 dB/s faster than 1 kHz at Decay 3.46, 14.4 and 60 s, against 2 to 3.5 dB/s
+  with Fast), which the measurements of the decay per band were made with. Lines and their allpasses are whole frames
   long once Size, Scale and Decay have settled, so a line without chorus is not interpolated.
 - **Chorus.** Swings every line's delay either way by up to `1.8 ms × amount` (at most half the
   line), each with its own phase of one LFO at the Chorus rate; lines are read with cubic
@@ -359,6 +377,23 @@ Each entry: what was chosen, what it costs, why.
     (the jump from the default Size to the largest stepped the output by 0.030 against the
     still signal's 0.012). Only near-instant jumps across most of the range glide more slowly than
     Smooth says.
+19. **Density Low runs Live's own network, identified from its renders,** in place of the
+    Householder network (which Sparse, Mid and High keep: their networks are different and not
+    measured). Live's impulse responses at Diffusion 0.1 % (the allpasses then pass the signal on
+    as plain delays) and Decay 60 s, at Size 100 and Scale 5 to 100 %, were read as sparse
+    arrivals; each arrival moves with Scale by the allpass length on its path, which tells the
+    lines apart, and the network (patterns, lines, plain delays, mixing, outputs) was fitted to
+    all six Scales at once with the mixing held orthogonal. Live renders the same tail every time
+    (two renders bit-identical over 10 s), so the fit is against the waveform itself. Against
+    Live's renders it does not see (`reverb-network-id default`, Smooth None) the tail explains 93 %
+    of the energy of each side to 135 ms, 81 / 77 % (left / right) to 204 ms, 67 / 59 % to 272 ms
+    and 57 / 31 % to 363 ms, with no timing lag; the old network was uncorrelated past its first
+    arrivals. What is not found: what Live adds after about 300 ms on the right, Live's own
+    allpasses (one per line here), and what Live's right side hears after 0.2 s: with only the
+    fitted lines heard it fell 2 to 3 dB behind the left, so G is heard there too (the late tail's
+    sides now within 0.3 dB of Live's balance, its waveform less like Live's on the right) and how Smooth Fast changes the network (Live's Fast renders run its delays a
+    little shorter, up to 11 frames by 0.25 s, so they do not match its Smooth None renders sample
+    for sample). Cost: 7 lines and 4 plain delays against 8 lines, and a 7 × 7 mix.
 
 ## Known differences
 
