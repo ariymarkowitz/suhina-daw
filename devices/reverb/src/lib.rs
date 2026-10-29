@@ -1675,6 +1675,8 @@ impl Reverb {
         for (line, &trips) in self.measured.lines.iter_mut().zip(&self.to.measured.trips) {
             tune(&mut line.damper, trips, trips, measured_air_db);
         }
+        let trips = self.to.measured.return_trips;
+        tune(&mut self.measured.return_line.damper, trips, trips, measured_air_db);
         tune(&mut self.input_damper, INPUT_TRIPS, INPUT_PASS_TRIPS, air_db);
     }
 

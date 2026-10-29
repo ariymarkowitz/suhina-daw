@@ -10,6 +10,8 @@
 //!                                        +-> 4 plain delays (feed forward) --> loop lines
 //! loop lines: A B C D F G (delay + allpass) and a 1641-frame plain delay, each line's output
 //! mixed by MIX into every line's input; A and C are heard on the right, B, D and F on the left
+//! direct taps -> 6 groups -> RETURN_FEED -> return line (A's and G's delays, one allpass) --+-> right
+//! loop lines' outputs -----> RETURN_LOOP --^      ^------------- RETURN_SELF -------------+
 //! ```
 //!
 //! Times are frames at 44.1 kHz in the reference room (Size 100). A line is a delay of the first
@@ -106,13 +108,37 @@ const DELAY_FROM_PATTERNS: [[f64; PATTERNS]; PLAIN] =
 /// The 2129-frame delay also takes this much of the 3193-frame one's output.
 const DELAY_CHAIN: f64 = 0.3364;
 /// Each loop line's level in its side (before Stereo's rotation) and the side (0 left, 1 right).
-/// The fit heard A and C on the right and B, D and F on the left; G is heard on the right too, at
-/// a little above the others' level, though the fit gave it none. The loop shares its energy out evenly among its
-/// lines once it has rung a while, so with two lines heard against three the right fell 2 to 3 dB
-/// behind the left from 0.2 s on (when G's first arrivals come out), where Live's two sides stay
-/// level; G evens them.
+/// The fit heard A and C on the right and B, D and F on the left, and G nowhere: Live is silent
+/// where G's first pass would be heard. The return line ([`RETURN_LOOP`]) is the right's third.
 pub(crate) const OUTPUTS: [(f64, usize); LOOP] =
-    [(1.1667, 1), (1.1510, 0), (0.9296, 1), (1.1588, 0), (0.9648, 0), (-1.5, 1), (0.0, 1)];
+    [(1.1667, 1), (1.1510, 0), (0.9296, 1), (1.1588, 0), (0.9648, 0), (0.0, 1), (0.0, 1)];
+/// What the return line takes from each group of direct reflections (a unit vector). Live hears
+/// every direct reflection again on the right alone, A's and G's lengths and 2 frames after it
+/// reaches the network, with the same weight for the reflections of one group (Stereo 120,
+/// Diffusion 0.1 %; the source of each arrival told by how Shape tilts it, docs/spec/reverb.md).
+const RETURN_FEED: [f64; GROUPS] = [0.155, 0.328, 0.137, 0.738, -0.398, -0.384];
+/// How much of its own output the return line takes again: Live's returns repeat one length later
+/// at about three quarters.
+const RETURN_SELF: f64 = 0.757;
+/// What the return line takes from each loop line's output, so it carries a share of the late tail
+/// as the loop lines do. With A and C alone the right fell 2 dB behind the left once the loop's
+/// energy had spread over its lines, where Live's sides stay level; with these it stays within
+/// 0.6 dB from 0.5 to 1.4 s, and the right's waveform matches Live's better past 0.36 s. The line
+/// feeds nothing back, so the loop's stability does not depend on it.
+const RETURN_LOOP: [f64; LOOP] = [-0.420, 0.288, 0.265, -0.336, 0.125, 0.275, 0.005];
+/// The return line's level on the right: Live's return, and its repeat, against the left side's
+/// first arrivals at Scale 5, 40 and 100 and Diffusion 0.1 %. ([`RETURN_LOOP`] was fitted with the
+/// level 2.3 dB higher and is raised by as much, so the late tail keeps its share.)
+pub(crate) const RETURN_LEVEL: f64 = 1.266;
+/// The return line is this many frames longer than A and G together (at 44.1 kHz, reference room).
+const RETURN_EXTRA: f64 = 2.0;
+/// Line A and line G: the return line runs both delays and then one allpass as long as both of
+/// theirs. Live's return comes at the delays' time and again at multiples of the two allpasses
+/// together (649 frames at Scale 100), never at either one's own, with Diffusion as the gain
+/// (`reverb-network-allpass`, Stereo 120, Diffusion 30, 60 and 96 %).
+const RETURN_LINES: [usize; 2] = [0, 5];
+/// Longest delay the return line needs (seconds, with room for Size 500).
+const RETURN_SECONDS: f64 = 0.45;
 /// The input's delay to the lines after the first direct reflection, at Shape 0.5 (ms), and how
 /// much more per unit of Shape (ms, times the size factor): 767 frames, 384 more per 0.25 of
 /// Shape at Size 100.
@@ -169,6 +195,16 @@ pub(crate) struct Lengths {
     pub delays: [f64; PLAIN],
     /// Each plain delay's gain per pass.
     pub delay_gains: [f64; PLAIN],
+    /// The return line's delay (frames).
+    pub return_line: f64,
+    /// The return line's allpass, as long as A's and G's together (frames).
+    pub return_allpass: f64,
+    /// The return line's gain per trip through its delay.
+    pub return_gain: f64,
+    /// Its allpass's gain per pass.
+    pub return_loss: f64,
+    /// The return line's share of a damping trip.
+    pub return_trips: f64,
 }
 
 impl Default for Lengths {
@@ -181,6 +217,11 @@ impl Default for Lengths {
             trips: [0.0; LOOP],
             delays: [1.0; PLAIN],
             delay_gains: [0.0; PLAIN],
+            return_line: 2.0,
+            return_allpass: 2.0,
+            return_gain: 0.0,
+            return_loss: 0.0,
+            return_trips: 0.0,
         }
     }
 }
@@ -200,6 +241,11 @@ impl Lengths {
         mix(&mut self.trips, &from.trips, &to.trips, t);
         mix(&mut self.delays, &from.delays, &to.delays, t);
         mix(&mut self.delay_gains, &from.delay_gains, &to.delay_gains, t);
+        self.return_line = from.return_line + (to.return_line - from.return_line) * t;
+        self.return_allpass = from.return_allpass + (to.return_allpass - from.return_allpass) * t;
+        self.return_loss = from.return_loss + (to.return_loss - from.return_loss) * t;
+        self.return_gain = from.return_gain + (to.return_gain - from.return_gain) * t;
+        self.return_trips = from.return_trips + (to.return_trips - from.return_trips) * t;
     }
 
     /// The lengths for size factor `room`, Scale `scale` (0..1) at `sample_rate`; `gain` gives a
@@ -215,8 +261,8 @@ impl Lengths {
     ) {
         let frames = room * sample_rate / RATE;
         let whole = |x: f64, least: f64| if settled { x.round() } else { x }.max(least);
+        let percent = scale * 100.0;
         for (k, rate) in ALLPASS_RATES.iter().enumerate() {
-            let percent = scale * 100.0;
             let allpass = if DIFFUSED[k] { rate * percent * frames } else { 0.0 };
             let line = length_at(k, percent) * frames - allpass;
             self.lines[k] = whole(line, 2.0);
@@ -228,6 +274,14 @@ impl Lengths {
             self.losses[k] = gain(allpass / sample_rate);
             self.trips[k] = seconds / trip_seconds;
         }
+        // The return line runs A's and G's delays and then one allpass as long as theirs together.
+        let allpass = RETURN_LINES.iter().map(|&k| ALLPASS_RATES[k]).sum::<f64>() * percent * frames;
+        let line = (RETURN_LINES.iter().map(|&k| length_at(k, percent)).sum::<f64>() + RETURN_EXTRA) * frames - allpass;
+        self.return_line = whole(line, 2.0);
+        self.return_allpass = whole(allpass, 2.0);
+        self.return_gain = gain(line / sample_rate);
+        self.return_loss = gain(allpass / sample_rate);
+        self.return_trips = (line + allpass) / sample_rate / trip_seconds;
         // The plain delays decay too, so every path fades with its whole time from the input.
         for ((d, g), base) in self.delays.iter_mut().zip(&mut self.delay_gains).zip(DELAYS) {
             *d = whole(base * frames, 1.0);
@@ -237,7 +291,9 @@ impl Lengths {
 
     /// The longest delay of the network (frames).
     pub fn longest(room: f64, sample_rate: f64) -> f64 {
-        LENGTHS.iter().flatten().copied().fold(0.0, f64::max) * room * sample_rate / RATE
+        let longest = |k: usize| LENGTHS[k].iter().copied().fold(0.0, f64::max);
+        let return_line = RETURN_LINES.iter().map(|&k| longest(k)).sum::<f64>() + RETURN_EXTRA;
+        (0..LOOP).map(longest).fold(return_line, f64::max) * room * sample_rate / RATE
     }
 }
 
@@ -248,6 +304,8 @@ pub(crate) struct Network {
     pub lines: [Line; LOOP],
     /// The plain delays in front of the loop.
     delays: [DelayLine; PLAIN],
+    /// The return line, its allpass and its damping.
+    pub return_line: Line,
     /// Each pattern as a unit vector over the groups.
     patterns: [[f64; GROUPS]; PATTERNS],
     /// The loop's mixing, exactly orthogonal.
@@ -264,6 +322,11 @@ impl Network {
                 damper: Damper::default(),
             }),
             delays: std::array::from_fn(|_| DelayLine::for_seconds(DELAY_SECONDS, sample_rate)),
+            return_line: Line {
+                delay: DelayLine::for_seconds(RETURN_SECONDS, sample_rate),
+                diffuser: Allpass::for_seconds(ALLPASS_SECONDS, sample_rate),
+                damper: Damper::default(),
+            },
             patterns: patterns(),
             mix: orthonormal(),
         }
@@ -277,6 +340,7 @@ impl Network {
         for delay in &mut self.delays {
             delay.clear();
         }
+        self.return_line.clear();
     }
 
     /// One frame: `groups` is the input of each group of direct reflections; returns the tail of
@@ -319,6 +383,19 @@ impl Network {
             }
             delay.push(x as f32);
         }
+        // The return line: the groups again, A's and G's lengths later, heard on the right.
+        let r = &mut self.return_line;
+        let read = r.delay.read_hermite(n.return_line);
+        let y = f64::from(r.diffuser.process_lossy(read, n.return_allpass, diffusion, n.return_loss as f32));
+        let back = r.damper.damp(y, damping) * n.return_gain;
+        tail[1] += RETURN_LEVEL * back;
+        let fed = RETURN_FEED.iter().zip(groups).map(|(a, g)| a * g).sum::<f64>();
+        let looped = RETURN_LOOP.iter().zip(&outs).map(|(a, y)| a * y).sum::<f64>();
+        let mut next = fed + looped + RETURN_SELF * back;
+        if frozen {
+            next = crate::limit(next);
+        }
+        r.delay.push(next as f32);
         for (k, line) in self.lines.iter_mut().enumerate() {
             let mixed: f64 = self.mix[k].iter().zip(&outs).map(|(m, y)| m * y).sum();
             let fed: f64 = FROM_DELAYS[k].iter().zip(&delayed).map(|(m, y)| m * y).sum();

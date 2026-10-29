@@ -143,9 +143,11 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   Scale; the seventh is a plain 1641-frame (37.2 ms) delay that feeds the third line. Each line's
   length at Scale 5, 20, 40, 60, 80 and 100 % is Live's, and in between it is read off the straight
   line between them. The patterns enter the lines directly and through four plain delays (9.1,
-  30.3, 72.4 and 48.3 ms) that feed the lines without taking anything back. Six lines are heard,
-  three on the right and three on the left, each at its own level (G, which the fit left unheard,
-  on the right, so the two sides stay level once the loop has spread its energy, as Live's do). Every length scales with the size
+  30.3, 72.4 and 48.3 ms) that feed the lines without taking anything back. Five lines are heard,
+  two on the right and three on the left, each at its own level. A return line (Decision 21)
+  takes the groups again, runs the first and sixth lines' delays and 2 frames more (227.5 ms at
+  Scale 40 %) through one allpass as long as both of theirs, takes 0.757 of its own output and a share of every loop line's, and
+  is heard on the right only; it feeds nothing back. Every length scales with the size
   factor, small rooms too; damping and chorus are as below. Every path fades with its whole time
   from the input: each line's gain covers its delay, its allpass loses its own delay's gain on
   every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`), and each plain delay its own.
@@ -427,7 +429,7 @@ Each entry: what was chosen, what it costs, why.
    off, and 4 to 7 dB bright at 8 to 16 kHz with Flat on; now each band's drain is within
    0.2 dB/s of Live's from 125 Hz to 8 kHz. The soft limit with Cut
    off is Suhina's, so a frozen tail fed for minutes cannot overflow.
-16. **Cost: about 3 % of a core at the defaults,** over the 1 % budget, as the device notes allow
+16. **Cost: about 3.2 % of a core at the defaults,** over the 1 % budget, as the device notes allow
     for reverbs: the ten direct taps (cubic while Spin moves them), the filtered taps (up to 168,
     at High) as one mix per offset into up to twenty delay lines read at whole frames once the
     room settles (Decision 10), and 8 to 16 modulated lines with an allpass and three to four
@@ -462,12 +464,11 @@ Each entry: what was chosen, what it costs, why.
     Live's renders it does not see (`reverb-network-id default`, Smooth None) the tail explains 93 %
     of the energy of each side to 135 ms, 81 / 77 % (left / right) to 204 ms, 67 / 59 % to 272 ms
     and 57 / 31 % to 363 ms, with no timing lag; the old network was uncorrelated past its first
-    arrivals. What is not found: what Live adds after about 300 ms on the right, Live's own
-    allpasses (one per line here), and what Live's right side hears after 0.2 s: with only the
-    fitted lines heard it fell 2 to 3 dB behind the left, so G is heard there too (the late tail's
-    sides now within 0.3 dB of Live's balance, its waveform less like Live's on the right) and how Smooth Fast changes the network (Live's Fast renders run its delays a
-    little shorter, up to 11 frames by 0.25 s, so they do not match its Smooth None renders sample
-    for sample). Cost: 7 lines and 4 plain delays against 8 lines, and a 7 × 7 mix.
+    arrivals. What is not found: Live's own allpasses (one per line here; the return line's alone is
+    measured, Decision 21) and how Smooth Fast changes the network (Live's Fast renders run its delays a
+    little shorter, up to 11 frames by 0.25 s and 39 by 0.9 s at Size 500, so they do not match
+    its Smooth None renders sample for sample). Cost: 7 lines and 4 plain delays against 8 lines,
+    and a 7 × 7 mix.
 20. **In the measured network every path fades with its whole time** (Density Low). Live's tail
     at Decay 0.2 s falls at 336 dB/s from its first arrivals down (a T60 of 0.18 s, 0.9 of the
     setting); Suhina's fell half as fast (0.33 s) and its first arrivals were 8 to 12 dB weak, 10 dB
@@ -481,6 +482,38 @@ Each entry: what was chosen, what it costs, why.
     (Shape 0 to 1 then within 0.7 dB of Live's, against 1 dB without). Against Live: Decay 0.2 s
     +0.5 dB and T60 0.20 s (was −9.9 dB, 0.31 s), 0.83 s +0.1 dB (−1.1), the default −0.1 dB
     (−0.5), 3.46 s −0.6 dB and 3.01 s against 3.01, 60 s −0.1 dB (+0.9).
+
+21. **Density Low's network has a return line heard on the right,** which the first fit missed
+    (it explained a third of Live's right side past 0.27 s). Live hears every direct reflection
+    again on the right alone, A's and G's lengths and 2 frames after it reaches the network
+    (10,034 frames at Size 100 and Scale 40 %, moving with Scale by A's and G's allpasses and with
+    Size like the lines), and again one length later at about three quarters; the 48.3 and 55.7
+    ms reflections' return is 13 times the tail's rms, the echo heard at 1.37 s at Size 500. It
+    was found in `reverb-network-taps` (Stereo 120, so each side apart): each arrival's source
+    reflection is told by how Shape tilts it (Shape 0 against 1 at Decay 0.2 s moves a
+    reflection's level by 0.336 dB per ms of its own delay), which put every reflection's return
+    at the same delay with one weight per group of the network's input. Its allpass was read in
+    `reverb-network-allpass` (Diffusion 0.1, 30 and 96 %, Scale 100 %): the return comes as one
+    pulse and copies 649 frames apart (A's and G's allpass lengths together), at −g, 1 − g² and
+    (1 − g²)·g of it with g the Diffusion setting, so one allpass of both lengths and not one each
+    (two allpasses had fitted the energy windows better, which is why fitting alone could not
+    choose). So the return line takes the six groups (`RETURN_FEED`), runs A's and G's delays
+    through that allpass, takes 0.757 of its own output and a share of each loop line's
+    (`RETURN_LOOP`, fitted to the renders' waveforms, the least sure part), and is heard on the
+    right at 1.266, the level that makes its first return match Live's against the left side's
+    reflections; G, heard on the right at −1.5 before to even the sides, is not heard (Live is
+    silent where G's first pass would be). Live's input to the network is mono: impulses on the
+    left alone and on the right alone (`reverb-network-sides`) give identical renders, so the
+    return line hears no side of the input. The Size 500 echo now peaks at 1.383 s, 19 dB over the
+    tail's rms against Live's 1.382 s and 17 dB (it was missing). Over the `reverb-impulse`
+    comparison set the right side's late windows are closer (1 to 2 s −0.08 dB median against
+    −0.54, 2 to 4 s 0.00 against −0.27), but 0.15 to 1 s are now 0.5 to 0.9 dB quiet (−0.13 and
+    −0.73 before), so 787 of 1,084 energy windows are within 1 dB (824 before): Live's right side
+    has energy there that this network does not explain. Separating the six groups' own responses
+    with Spin (`reverb-network-spin`, each reflection swung by its own LFO, 10 impulses) was well
+    conditioned but did not predict an impulse left out above 1 kHz, so whether the reflections of
+    one group share one response is not known. Cost: one line and one allpass, about 0.3 % of a
+    core.
 
 ## Known differences
 
@@ -530,18 +563,10 @@ What is further off, and why it is left:
   repeat correlates 0.25 to 0.45, this device's strongest about 0.1 to 0.2. That loop sets the
   pitch of the ringing at Size 1.53 (about 56 Hz apart; this device's strongest repeat there is
   36.8 ms).
-- **Live's right side after 0.27 s** (Density Low): its strongest discrete echo is the first two
-  direct reflections (0 and 7.37 ms, both right, opposite signs) arriving again on the right only,
-  13,045 frames after the input at Size 100 and Scale 40 % (`reverb-network-id default`), 11 times
-  the tail's rms, then 2,337 and 10,034 frames later at about two thirds of that. It moves 6.48
-  frames per % of Scale (6.4 in steps of 128 per 20 %, the 8-frame allpass grid) and scales with
-  the size factor: at Size 500 it is the echo heard at 1.37 s (0.88 s after the impulse). Measured
-  from the 2129-frame plain delay's output it is 10,036 frames later, about A and G together.
-  Suhina has nothing there, and instead hears G's first pass on the right at 10,536 frames, where
-  Live is silent. Refitting the A–G mixing, the plain delay's feeds or G's length against the
-  render did not help (the model explains 30 % of Live's right side from 12,000 frames whatever
-  was tried), so the network's later structure needs identifying again, with renders that excite
-  one direct reflection at a time.
+- **Live's right side from 0.15 to 1 s** (Decision 21): 0.5 to 0.9 dB louder than Suhina's
+  over the `reverb-impulse` set, and at Size 1.53 and 10.54 the late right side is 0.8 to 1.4 dB
+  above Live's from 1 s, most at Diffusion 0.1 %. The return line was identified at Size 100
+  only, and its feed from the loop lines is fitted, not read.
 - **The tail's echoes thicken differently from Live's:** its kurtosis is 26 from 100 to 150 ms,
   5.8 from 150 to 200 and 3.0 (noise) from 200 to 400 ms, Live's 15, 10.5 and 4; from 50 to 250
   ms it has about four fifths of Live's strong clicks per second, and from 150 to 900 ms a third
@@ -586,7 +611,8 @@ What is further off, and why it is left:
   falling. Its law is not understood (Decisions 9).
 - **Spin (Decision 10).** Tracked tap by tap the reflections match: the swing of each of the
   clearest taps is within 0.02 ms of Live's at every predelay from 0.5 to 250 ms and at Amount
-  17.5 and 55, its phase within about 0.1 rad. A 330 Hz tone's pitch swing, reflections only (semitones peak to peak,
+  17.5 and 55, its phase within about 0.1 rad (in `reverb-network-spin`, Live's ten phases are all 0.06 to
+  0.18 rad later than `SPIN_VOICES`, which may be a fixed lag still to correct). A 330 Hz tone's pitch swing, reflections only (semitones peak to peak,
   Predelay 0.5, 2.5, 10, 25, 50, 100, 250 ms): 0.37, 0.41, 0.27, 0.06, 0.04, 0.03, 0.02 against
   Live's 0.44, 0.47, 0.29, 0.06, 0.04, 0.03, 0.02 at Amount 17.5, and 1.61, 1.77, 0.74, 0.38,
   0.21, 0.15, 0.11 against 1.81, 1.75, 0.61, 0.40, 0.26, 0.26, 0.15 at 55 (1.24 and 3.03 at every
