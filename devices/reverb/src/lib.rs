@@ -688,14 +688,22 @@ const AIR_DECAY: f64 = 3.46;
 /// Above [`AIR_DECAY`] the fixed loss of the highs shrinks with the decay to this power.
 const AIR_POWER: f64 = 0.15;
 /// The same for the measured network (Density Low) while Smooth is Slow or Fast: Live's highs
-/// decay at 4 to 16 kHz as this gives at Decay 14.4 and 60 s (the Householder network's own
-/// losses need the smaller power).
-const MEASURED_AIR_POWER: f64 = 0.33;
+/// decay at 4 to 16 kHz about as this gives at Decay 14.4 and 60 s (the Householder network's
+/// own losses need the smaller power). 0.33 left the 60 s tail 4 dB bright at 8 kHz by 4 s.
+const MEASURED_AIR_POWER: f64 = 0.25;
 /// The measured network's fixed loss of the highs per trip with Smooth None (dB), whatever the
 /// decay. Live's loss of the highs comes almost all with Smooth Slow or Fast: with None its
 /// 16 kHz octave decays only 0.3 to 0.4 dB/s faster than 1 kHz at Decay 3.46, 14.4 and 60 s,
 /// against 2 to 3.5 dB/s with Fast.
 const MEASURED_AIR_NONE_DB: f64 = 0.06;
+/// In rooms below this size factor (Size 10.5) the measured network's loss of the highs with
+/// Smooth Slow or Fast grows per second as the room shrinks: Live's 8 kHz octave decays 3.8 dB/s
+/// faster than 1 kHz at Size 1.53 against 1.5 to 1.9 dB/s at Size 10.54, 100 and 500.
+const MEASURED_AIR_ROOM: f64 = 0.47;
+/// A frozen tail loses its highs as one of this decay (seconds) does: Live's frozen tail with
+/// Flat on decays 0.2, 0.55, 1.0 and 1.5 dB/s faster at 2, 4, 8 and 16 kHz than at 1 kHz, as the
+/// 60 s tail does.
+const FROZEN_AIR_DECAY: f64 = 60.0;
 /// Decay time the network is tuned to, against the Decay setting.
 const DECAY_RATIO: f64 = 0.9;
 /// Low Cut: a first-order shelf this deep (linear), half way at the band's lower edge.
@@ -705,10 +713,11 @@ const LOW_CUT_DEPTH: f64 = 0.2;
 const RUMBLE_FREQUENCY: f64 = 127.0;
 /// ... and a second one at this frequency.
 const SUBSONIC_FREQUENCY: f64 = 19.0;
-/// A frozen tail still falls this many dB per second with Flat on, as measured ...
-const FREEZE_DRAIN: f64 = 0.25;
-/// ... and this many with Flat off.
-const FREEZE_DRAIN_UNFLAT: f64 = 0.4;
+/// A frozen tail still falls this many dB per second with Flat on, besides its loss of the highs
+/// ([`FROZEN_AIR_DECAY`]), as measured: 0.25 dB/s in all, most of it from 2 to 8 kHz ...
+const FREEZE_DRAIN: f64 = 0.07;
+/// ... and this many with Flat off, where the damping stays in too.
+const FREEZE_DRAIN_UNFLAT: f64 = 0.2;
 /// Inside a frozen loop that still takes input, levels above this are compressed so the tail
 /// cannot grow without end.
 const FREEZE_LIMIT: f64 = 2.0;
@@ -1044,7 +1053,7 @@ impl Damper {
             y
         };
         let y = y + (heard(&mut self.low_shelf, y, amounts.low) - y) * amounts.low;
-        y + (heard(&mut self.air, y, amounts.air) - y) * amounts.air
+        self.air.process(y)
     }
 }
 
@@ -1057,8 +1066,6 @@ struct Damping {
     low_pass: f64,
     /// Low damping.
     low: f64,
-    /// The fixed loss of the highs.
-    air: f64,
 }
 
 /// Declares [`Ramps`] from one list of fields, so the smoothers and their targets are paired by
@@ -1135,8 +1142,6 @@ ramps! {
     low_pass,
     /// How much low damping is heard (see [`Damping`]).
     low,
-    /// How much of the fixed loss of the highs is heard (see [`Damping`]).
-    air,
 }
 
 impl Ramps<Smoother> {
@@ -1412,9 +1417,10 @@ impl Reverb {
     fn targets(&self) -> Ramps<f64> {
         let sr = self.sample_rate;
         let flag = |index| if self.on(index) { 1.0 } else { 0.0 };
-        // Frozen, the damping and the fixed loss are left out: the tail drains slowly instead,
-        // a little faster with Flat off (FREEZE_DRAIN), as measured.
-        let filtered = if self.frozen() { 0.0 } else { 1.0 };
+        // Frozen with Flat on, the damping is left out; with Flat off it stays in, as Live's frozen
+        // tail goes on losing the bands the shelves take. The fixed loss of the highs stays in
+        // either way, at its longest decay's (FREEZE_DRAIN).
+        let filtered = if self.frozen() && self.on(param::FLAT) { 0.0 } else { 1.0 };
         Ramps {
             predelay: self.value(param::PREDELAY) * sr,
             reflect: db_to_gain(self.value(param::REFLECT)),
@@ -1439,7 +1445,6 @@ impl Reverb {
             high: flag(param::HIGH_DAMPING) * filtered,
             low_pass: flag(param::HIGH_DAMPING_TYPE),
             low: flag(param::LOW_DAMPING) * filtered,
-            air: if self.frozen() { 0.0 } else { 1.0 },
         }
     }
 
@@ -1626,11 +1631,14 @@ impl Reverb {
             filter.set(Coefficients::lowpass(sr, corner, REFLECTION_Q));
         }
 
-        let air_db = AIR_LOSS_DB * (AIR_DECAY / setting).powf(AIR_POWER).min(1.0);
+        let air_setting = if frozen { FROZEN_AIR_DECAY } else { setting };
+        let air_db = AIR_LOSS_DB * (AIR_DECAY / air_setting).powf(AIR_POWER).min(1.0);
         let measured_air_db = if self.value(param::SMOOTH) as usize == 0 {
             MEASURED_AIR_NONE_DB
         } else {
-            AIR_LOSS_DB * (AIR_DECAY / setting).powf(MEASURED_AIR_POWER).min(1.0)
+            AIR_LOSS_DB
+                * (AIR_DECAY / air_setting).powf(MEASURED_AIR_POWER).min(1.0)
+                * (MEASURED_AIR_ROOM / room).max(1.0)
         };
         let r = &self.ramps;
         let (high_f, high_g) = (2.0f64.powf(f64::from(r.high_frequency.current())), f64::from(r.high_gain.current()));
@@ -1839,7 +1847,6 @@ impl Device for Reverb {
                 high: f64::from(r.high.next_value()),
                 low_pass: f64::from(r.low_pass.next_value()),
                 low: f64::from(r.low.next_value()),
-                air: f64::from(r.air.next_value()),
             };
 
             let input = frame.map(|s| if s.is_finite() { f64::from(s) } else { 0.0 });

@@ -170,7 +170,8 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   is) over 0.17 s, so the loss per second does not depend on Size. A fixed loss of the highs is
   always in the loop: a first-order high shelf half way at 8 kHz, 0.96 dB per 0.17 s trip, less for
   decays over 3.46 s (by the ratio to the power 0.15). In the measured network (Density Low)
-  it shrinks with the power 0.33, and with Smooth None it is 0.06 dB per trip at every decay:
+  it shrinks with the power 0.25, grows in rooms below Size 10.5 by the ratio of the size
+  factors (twice at Size 1.53), and with Smooth None it is 0.06 dB per trip at every decay:
   Live's loss of the highs comes almost all with Smooth Slow or Fast (with None its 16 kHz octave
   decays 0.3 to 0.4 dB/s faster than 1 kHz at Decay 3.46, 14.4 and 60 s, against 2 to 3.5 dB/s
   with Fast), which the measurements of the decay per band were made with. Lines and their allpasses are whole frames
@@ -186,9 +187,10 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   them apart, 100 gives a correlation of about 0.25 (Live's 0.25) and 0 makes them mono. Dry/Wet is an equal-power
   crossfade, `dry × cos(mix·π/2) + wet × sin(mix·π/2)`. The dry signal is not delayed; the device
   adds no latency.
-- **Freeze.** The damping and the fixed loss of the highs are left out and every line's gain is
-  set so the tail falls 0.25 dB per second with Flat on and 0.4 dB per second with Flat off, as
-  Live's frozen tail drains. Cut decides whether
+- **Freeze.** Every line's gain is set so the tail falls 0.07 dB per second with Flat on and 0.2
+  with Flat off; the fixed loss of the highs stays in at its 60 s amount, and with Flat off the
+  damping stays in too, so a frozen tail drains as Live's does: 0.25 and 0.4 dB per second in
+  all, most of it above 2 kHz (Decision 15). Cut decides whether
   new input still enters the network; if it does, levels above 2 are compressed toward 4 so the
   tail cannot grow without end. The early reflections go on.
 - **Changes while playing.** Levels, mix, Stereo, every switch, the Spin and Chorus swings,
@@ -416,7 +418,14 @@ Each entry: what was chosen, what it costs, why.
    an exponential glide (`reverb-smooth-glide`: 50 ms after a jump Fast has finished, Slow has 30
    to 40 % left); the curve itself was not measured.
 15. **Freeze, Flat and Cut** follow Live's renders: a frozen tail drains 0.25 dB per second with
-   Flat on and 0.4 with Flat off, and Cut keeps new input out entirely. The soft limit with Cut
+   Flat on and 0.4 with Flat off, and Cut keeps new input out entirely. Per band
+   (`reverb-freeze-static`, 2 to 10 s), Live's frozen tail with Flat on falls 0.1 dB/s at 1 kHz
+   and 0.2, 0.6, 1.1 and 1.6 at 2, 4, 8 and 16 kHz, the loss of the highs of its 60 s tail; with
+   Flat off the shelves stay in: 3.7 dB/s at 4 kHz, 14 at 8 kHz and 1.7 at 125 Hz with the
+   preset's filters, against 0.2 at 1 kHz. Leaving out every filter and draining all bands alike
+   had Suhina's frozen tail 30 dB bright at 4 kHz and over 100 dB at 16 kHz after 8 s with Flat
+   off, and 4 to 7 dB bright at 8 to 16 kHz with Flat on; now each band's drain is within
+   0.2 dB/s of Live's from 125 Hz to 8 kHz. The soft limit with Cut
    off is Suhina's, so a frozen tail fed for minutes cannot overflow.
 16. **Cost: about 3 % of a core at the defaults,** over the 1 % budget, as the device notes allow
     for reverbs: the ten direct taps (cubic while Spin moves them), the filtered taps (up to 168,
@@ -521,6 +530,18 @@ What is further off, and why it is left:
   repeat correlates 0.25 to 0.45, this device's strongest about 0.1 to 0.2. That loop sets the
   pitch of the ringing at Size 1.53 (about 56 Hz apart; this device's strongest repeat there is
   36.8 ms).
+- **Live's right side after 0.27 s** (Density Low): its strongest discrete echo is the first two
+  direct reflections (0 and 7.37 ms, both right, opposite signs) arriving again on the right only,
+  13,045 frames after the input at Size 100 and Scale 40 % (`reverb-network-id default`), 11 times
+  the tail's rms, then 2,337 and 10,034 frames later at about two thirds of that. It moves 6.48
+  frames per % of Scale (6.4 in steps of 128 per 20 %, the 8-frame allpass grid) and scales with
+  the size factor: at Size 500 it is the echo heard at 1.37 s (0.88 s after the impulse). Measured
+  from the 2129-frame plain delay's output it is 10,036 frames later, about A and G together.
+  Suhina has nothing there, and instead hears G's first pass on the right at 10,536 frames, where
+  Live is silent. Refitting the A–G mixing, the plain delay's feeds or G's length against the
+  render did not help (the model explains 30 % of Live's right side from 12,000 frames whatever
+  was tried), so the network's later structure needs identifying again, with renders that excite
+  one direct reflection at a time.
 - **The tail's echoes thicken differently from Live's:** its kurtosis is 26 from 100 to 150 ms,
   5.8 from 150 to 200 and 3.0 (noise) from 200 to 400 ms, Live's 15, 10.5 and 4; from 50 to 250
   ms it has about four fifths of Live's strong clicks per second, and from 150 to 900 ms a third
@@ -549,6 +570,12 @@ What is further off, and why it is left:
   16 % faster than Live's and 1 and 2 kHz up to 6 % slower, in almost every case. Few modes fall in
   those octaves within the fit's half second, and the figure moves by up to half with the fit's
   range, so it was not tuned.
+- **The highs of long and small-room tails** (Decision 8): Live's tail with Smooth Fast loses its
+  8 to 16 kHz octaves fastest in its first few seconds and more slowly after, which a fixed shelf
+  per trip cannot do. At Decay 60 s and in frozen tails the 8 kHz octave ends up to 2.8 dB and 16
+  kHz up to 5 dB bright (2 to 7 s; 4 and 7 dB with the power 0.33); at Size 1.53 the 8 kHz octave
+  now decays within 0.4 dB/s of Live's but stays 3 dB bright from its first second (Live's darkens
+  by then), and 16 kHz decays 2 dB/s too fast.
 - **Single cases off in level:** Scale 100 % at Size 1.53 is 0.6 to 0.7 dB loud throughout (Scale
   5 % is within 0.3 dB), as measured once; Size 500 is 2 dB quiet up to 0.24 s (below).
 - **Density Sparse's onset is spikier than Live's** from 100 to 200 ms (kurtosis 76 and 36 against

@@ -411,13 +411,48 @@ fn freeze_holds_the_tail_and_cut_keeps_new_input_out() {
     let mut held = vec![0.0f32; 44_100 * 2 * 2];
     run(&mut r, &mut held);
     let (early, late) = (level(&held[17_640..35_280]), level(&held[158_760..]));
-    // Lossless, but the energy spreads evenly over the lines, which moves the output a little.
-    assert!((early - late).abs() < 2.0, "{early} dB then {late} dB");
+    // Nearly lossless, but the energy spreads evenly over the lines, which moves the output a
+    // little (Live's frozen tail rises up to 2.7 dB the same way).
+    assert!((early - late).abs() < 3.0, "{early} dB then {late} dB");
     // With Cut on, another burst while frozen adds nothing to the tail.
     let mut more = burst(sr, 1.0);
     run(&mut r, &mut more);
     let after = level(&more[44_100..]);
     assert!((after - late).abs() < 2.0, "{late} dB, then {after} dB after more input");
+}
+
+#[test]
+fn a_frozen_tail_keeps_its_damping_with_flat_off() {
+    // Frozen with Flat off, high damping goes on taking the highs, as Live's does (8 kHz falls
+    // 14 dB/s, 1 kHz 0.2); with Flat on the highs fall barely faster than the mids.
+    let sr = 44_100.0;
+    let band = |flat: f64| {
+        let settings = [(param::REFLECT, MIN_LEVEL_DB), (param::FLAT, flat), (param::CUT, 0.0), (param::MIX, 1.0)];
+        let mut r = reverb(sr, &settings);
+        r.set_param(param::FREEZE, 1.0);
+        let mut signal = conformance::test_signal(4_410);
+        signal.resize(44_100 * 2 * 4, 0.0);
+        for block in signal.chunks_mut(512) {
+            r.process(&ProcessContext::default(), block);
+        }
+        // The level above 6 kHz against the level below it (dB), 1 s and 3.5 s in.
+        let highs = |from: usize| {
+            let left: Vec<f64> =
+                signal[from * 2..(from + 22_050) * 2].iter().step_by(2).map(|v| f64::from(*v)).collect();
+            let (mut high, mut all) = (0.0, 0.0);
+            // A first difference is a crude high-pass (it weights the mids in too, so the gap is
+            // smaller than the highs' own), enough to tell the two settings apart.
+            for w in left.windows(2) {
+                high += (w[1] - w[0]).powi(2);
+                all += w[1].powi(2);
+            }
+            10.0 * (high / all).log10()
+        };
+        highs(44_100) - highs(132_300)
+    };
+    let (flat, unflat) = (band(1.0), band(0.0));
+    assert!(flat < 2.0, "Flat on: the highs fell {flat} dB more than the rest");
+    assert!(unflat > flat + 1.0, "Flat off: the highs fell {unflat} dB more than the rest, against {flat}");
 }
 
 #[test]
