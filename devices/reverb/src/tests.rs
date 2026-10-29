@@ -94,6 +94,30 @@ fn the_tail_decays_in_the_decay_time_at_every_sample_rate() {
     }
 }
 
+#[test]
+fn the_measured_network_decays_in_the_decay_time_at_every_diffusion() {
+    // Every path fades with its whole time: the allpasses' echoes and the plain delays too, so
+    // even the shortest decay falls as tuned once the first arrivals are out (Decision 20).
+    let sr = 44_100.0;
+    for diffusion in [0.001, 0.6, 0.96] {
+        let mut r = reverb(
+            sr,
+            &[
+                (param::DENSITY, LOW as f64),
+                (param::DECAY, 0.2),
+                (param::DIFFUSION, diffusion),
+                (param::REFLECT, MIN_LEVEL_DB),
+                (param::HIGH_DAMPING, 0.0),
+                (param::LOW_DAMPING, 0.0),
+            ],
+        );
+        let ir = impulse_response(&mut r, sr, 0.6);
+        let (a, b) = (energy(&ir, sr, 0.15, 0.25), energy(&ir, sr, 0.35, 0.45));
+        let t60 = 60.0 * 0.2 / (10.0 * (a / b).log10());
+        assert!((t60 / (0.2 * DECAY_RATIO) - 1.0).abs() < 0.12, "diffusion {diffusion}: {t60}");
+    }
+}
+
 /// A 1 kHz sine burst, 0.2 s long, then silence, `seconds` in all.
 fn burst(sample_rate: f64, seconds: f64) -> Vec<f32> {
     let frames = (seconds * sample_rate) as usize;

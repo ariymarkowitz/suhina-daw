@@ -632,7 +632,7 @@ const INPUT_SIGNS: [f64; 16] = [1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0,
 /// Householder network.
 const LOW: usize = 1;
 /// Level of the measured network's tail against the Householder network's (the same feed).
-const MEASURED_GAIN: f64 = 0.545;
+const MEASURED_GAIN: f64 = 0.486;
 /// Sign of each line in the output.
 const OUTPUT_SIGNS: [f64; 16] =
     [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0];
@@ -649,8 +649,9 @@ fn line_room(room: f64) -> f64 {
 const fn side_of(k: usize) -> usize {
     k % 2
 }
-/// Level of the late reverb against the input, for the longest decays; shorter ones start lower,
-/// as if the tail had already decayed for [`TAIL_FADE_SECONDS`] when it is heard.
+/// Level of the late reverb against the input, for the longest decays; the Householder network's
+/// tail starts lower for shorter ones, as if it had already decayed for [`TAIL_FADE_SECONDS`] when
+/// it is heard.
 const TAIL_GAIN: f64 = 1.236;
 /// How long the shortest decays' tail counts as having decayed already when it is heard.
 const TAIL_FADE_SECONDS: f64 = 0.0118;
@@ -1611,14 +1612,14 @@ impl Reverb {
         t.measured.tune(room, scale, sr, settled, gain, LOSS_TRIP_SECONDS);
         let (entry, per_shape) = measured::ENTRY_MS;
         t.entry = ((entry + per_shape * (shape - 0.5) * room) * ms).max(0.0);
-        t.feed = TAIL_GAIN
-            * predelay_gain
-            * db_to_gain(
-                density - 60.0 * TAIL_FADE_SECONDS / setting - TAIL_SHORT_DB / (setting * setting) - fade * TAIL_LAG_MS,
-            )
-            * room.max(1.0).powf(LARGE_ROOM_POWER);
+        let short = 60.0 * TAIL_FADE_SECONDS / setting + TAIL_SHORT_DB / (setting * setting) + fade * TAIL_LAG_MS;
+        t.feed = TAIL_GAIN * predelay_gain * db_to_gain(density) * room.max(1.0).powf(LARGE_ROOM_POWER);
         // The measured network's lines scale with the room's own size factor, small rooms too.
-        t.measured_feed = t.feed * MEASURED_GAIN;
+        // Every path through it fades with its whole time, so it needs no cut for short decays;
+        // it keeps Shape's share of the fade over the 20 ms, about Shape 0.5.
+        t.measured_feed =
+            t.feed * MEASURED_GAIN * db_to_gain(-TAP_FADE_PER_SHAPE * (shape - 0.5) * TAIL_LAG_MS / setting);
+        t.feed *= db_to_gain(-short);
         t.feed *= (line_room / room).sqrt().min(SMALL_ROOM_GAIN_LIMIT);
         let corner = (REFLECTION_TOP - REFLECTION_SPAN * setting.powf(-REFLECTION_POWER)).clamp(20.0, 0.45 * sr);
         for filter in &mut self.reflection_filters {

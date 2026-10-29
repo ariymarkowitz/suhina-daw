@@ -159,12 +159,16 @@ pub(crate) struct Lengths {
     pub lines: [f64; LOOP],
     /// Each loop line's allpass (frames).
     pub allpasses: [f64; LOOP],
-    /// Each loop line's gain per trip.
+    /// Each loop line's gain per trip through its delay.
     pub gains: [f64; LOOP],
+    /// Each loop line's allpass gain per pass through the allpass's delay.
+    pub losses: [f64; LOOP],
     /// Each loop line's share of a damping trip.
     pub trips: [f64; LOOP],
     /// The plain delays (frames).
     pub delays: [f64; PLAIN],
+    /// Each plain delay's gain per pass.
+    pub delay_gains: [f64; PLAIN],
 }
 
 impl Default for Lengths {
@@ -173,8 +177,10 @@ impl Default for Lengths {
             lines: [2.0; LOOP],
             allpasses: [2.0; LOOP],
             gains: [0.0; LOOP],
+            losses: [0.0; LOOP],
             trips: [0.0; LOOP],
             delays: [1.0; PLAIN],
+            delay_gains: [0.0; PLAIN],
         }
     }
 }
@@ -190,8 +196,10 @@ impl Lengths {
         mix(&mut self.lines, &from.lines, &to.lines, t);
         mix(&mut self.allpasses, &from.allpasses, &to.allpasses, t);
         mix(&mut self.gains, &from.gains, &to.gains, t);
+        mix(&mut self.losses, &from.losses, &to.losses, t);
         mix(&mut self.trips, &from.trips, &to.trips, t);
         mix(&mut self.delays, &from.delays, &to.delays, t);
+        mix(&mut self.delay_gains, &from.delay_gains, &to.delay_gains, t);
     }
 
     /// The lengths for size factor `room`, Scale `scale` (0..1) at `sample_rate`; `gain` gives a
@@ -214,11 +222,16 @@ impl Lengths {
             self.lines[k] = whole(line, 2.0);
             self.allpasses[k] = whole(allpass, 2.0);
             let seconds = (line + allpass) / sample_rate;
-            self.gains[k] = gain(seconds);
+            // The allpass loses its own time on each pass, so the echoes it holds back decay
+            // as fast as the rest (as Live's tail does at every Diffusion).
+            self.gains[k] = gain(line / sample_rate);
+            self.losses[k] = gain(allpass / sample_rate);
             self.trips[k] = seconds / trip_seconds;
         }
-        for (d, base) in self.delays.iter_mut().zip(DELAYS) {
+        // The plain delays decay too, so every path fades with its whole time from the input.
+        for ((d, g), base) in self.delays.iter_mut().zip(&mut self.delay_gains).zip(DELAYS) {
             *d = whole(base * frames, 1.0);
+            *g = gain(*d / sample_rate);
         }
     }
 
@@ -287,7 +300,7 @@ impl Network {
             let length = n.lines[k];
             let read = f64::from(line.delay.read_hermite(length + swing(k, length)));
             let y = if DIFFUSED[k] {
-                f64::from(line.diffuser.process(read as f32, n.allpasses[k], diffusion))
+                f64::from(line.diffuser.process_lossy(read as f32, n.allpasses[k], diffusion, n.losses[k] as f32))
             } else {
                 read
             };
@@ -298,7 +311,7 @@ impl Network {
             }
         }
         let delayed: [f64; PLAIN] =
-            std::array::from_fn(|q| f64::from(self.delays[q].read_hermite(n.delays[q].max(2.0))));
+            std::array::from_fn(|q| f64::from(self.delays[q].read_hermite(n.delays[q].max(2.0))) * n.delay_gains[q]);
         for (q, delay) in self.delays.iter_mut().enumerate() {
             let mut x = pattern(&DELAY_FROM_PATTERNS[q]);
             if q == 3 {

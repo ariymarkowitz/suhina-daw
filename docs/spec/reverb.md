@@ -136,7 +136,8 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   has the numbers). The ten direct taps are summed in six groups and the groups into four
   patterns (unit vectors over the groups), read `17.39 + 34.83 × (shape − 0.5) × size factor` ms
   after the first direct tap from the same damped copy of the predelay line, at the same levels
-  and fades as above, times 0.545. Seven loop lines, mixed after every trip by one 7 × 7
+  and fades as above, times 0.486, with Shape's share of the fade over 20 ms more (about Shape
+  0.5) and none of the cuts for short decays of Decision 5 (Decision 20). Seven loop lines, mixed after every trip by one 7 × 7
   orthogonal matrix: six are a delay and a Schroeder allpass (Diffusion as its gain), 52 to 194 ms
   long at Scale 40 % in the reference room, of which the allpass is 0.03 to 2.9 ms per 10 % of
   Scale; the seventh is a plain 1641-frame (37.2 ms) delay that feeds the third line. Each line's
@@ -145,7 +146,9 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   30.3, 72.4 and 48.3 ms) that feed the lines without taking anything back. Six lines are heard,
   three on the right and three on the left, each at its own level (G, which the fit left unheard,
   on the right, so the two sides stay level once the loop has spread its energy, as Live's do). Every length scales with the size
-  factor, small rooms too; each line's gain per trip, damping and chorus are as below.
+  factor, small rooms too; damping and chorus are as below. Every path fades with its whole time
+  from the input: each line's gain covers its delay, its allpass loses its own delay's gain on
+  every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`), and each plain delay its own.
 - **Network, Density Sparse, Mid and High.** 8, 12 or 16 lines (Density Sparse, Mid, High), 18 to 77 ms long in the
   reference room, 1.3 times that at Sparse. Each line's output passes a Schroeder allpass with the
   Diffusion as its gain (0.2 of it at Sparse) and a delay of its own,
@@ -456,6 +459,19 @@ Each entry: what was chosen, what it costs, why.
     sides now within 0.3 dB of Live's balance, its waveform less like Live's on the right) and how Smooth Fast changes the network (Live's Fast renders run its delays a
     little shorter, up to 11 frames by 0.25 s, so they do not match its Smooth None renders sample
     for sample). Cost: 7 lines and 4 plain delays against 8 lines, and a 7 × 7 mix.
+20. **In the measured network every path fades with its whole time** (Density Low). Live's tail
+    at Decay 0.2 s falls at 336 dB/s from its first arrivals down (a T60 of 0.18 s, 0.9 of the
+    setting); Suhina's fell half as fast (0.33 s) and its first arrivals were 8 to 12 dB weak, 10 dB
+    in all. Two paths decayed less than their time: an allpass holds echoes back for several of
+    its delays while the line gain counted it once (at Diffusion 0.6 the T60 at 0.2 s was 0.256 s
+    against 0.199 s at 0.1 %), and the plain delays in front (up to 121 ms through the chained
+    pair) fed the loop undecayed, which came out 12 dB loud after 150 ms. With both fading, the
+    cuts of Decision 5 (fitted to the Householder network) were what made the first arrivals weak:
+    without them every window of the reverb-decay cases is within 1.7 dB of Live's from 60 ms on, at
+    every Decay. The level is refitted (0.545 to 0.486) and keeps Shape's share of the 20 ms fade
+    (Shape 0 to 1 then within 0.7 dB of Live's, against 1 dB without). Against Live: Decay 0.2 s
+    +0.5 dB and T60 0.20 s (was −9.9 dB, 0.31 s), 0.83 s +0.1 dB (−1.1), the default −0.1 dB
+    (−0.5), 3.46 s −0.6 dB and 3.01 s against 3.01, 60 s −0.1 dB (+0.9).
 
 ## Known differences
 
@@ -520,9 +536,10 @@ What is further off, and why it is left:
   windows from 0.15 to 0.3 s are within 0.5 dB (66 before), and 12 of 79 from 0.06 to 0.15 s
   (22). A gain cannot fix the shape; other orders of the taps into the lines fit it better but
   made the echoes' texture worse (Decision 2).
-- **Short decays (0.2 s):** the tail is within 2 dB of Live's up to 250 ms and 1 to 3 dB quiet
-  from 300 to 600 ms (where Live's is already 50 to 150 dB down), and 1.4 dB loud with the input band 0.5
-  wide.
+- **Short decays (0.2 s):** at Density Low the tail is within 1.7 dB of Live's in every window
+  from 60 to 500 ms and decays in the same time (Decision 20); the other Densities still use the
+  short-decay cuts of Decision 5. With the input band 0.5 wide
+  Low's was 1.4 dB loud before Decision 20 (not checked since).
 - **Smooth None against Fast at Decay 3.46 s:** Live's renders of the same settings with only
   Smooth changed differ: with None (`reverb-size`) the tail decays in 3.12 s and is up to 2 dB
   louder by 2.4 s than with Fast (`reverb-decay`, 3.01 s). This device follows Fast, the preset's
@@ -576,7 +593,8 @@ suhina-device-reverb cost -- --ignored --nocapture` to measure it.
 ## Tests
 
 `devices/reverb/src/tests.rs`: the device contract (`device_api::conformance`); the mixing matrix
-orthogonal and full for every Density; the decay time at 1 and 3 s within 10 % at 44.1 and 96 kHz
+orthogonal and full for every Density; the decay time at 1 and 3 s within 10 % at 44.1 and 96 kHz;
+Density Low's decay time at 0.2 s within 12 % at Diffusion 0.1, 60 and 96 %
 alike; the same level at both rates; Stereo's correlation at 0, 100 and 120; Reflect and Diffuse
 independent; the dry signal undelayed and the mix equal-power; the first reflection three frames
 after the predelay; the reflections' fade with Shape and Decay; Spin's reach, swing, restart
