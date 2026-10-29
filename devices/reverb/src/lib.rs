@@ -52,7 +52,7 @@ const LEFT: usize = 0;
 const RIGHT: usize = 1;
 /// A reflection heard as it is read.
 const DIRECT: bool = false;
-/// A reflection heard through the reflections' low-pass ([`reflection_lowpass`]).
+/// A reflection heard through the reflections' low-pass ([`Reverb::reflection_filters`]).
 const FILTERED: bool = true;
 
 /// One early reflection: its time after the predelay in the reference room (ms), its side, its
