@@ -35,6 +35,15 @@ pub fn pointer_over(ui: &Ui, rect: Rect) -> Option<Pos2> {
 /// Normalized device parameter range traversed by a vertical drag.
 pub(crate) const PARAMETER_DRAG_PIXELS: f64 = 400.;
 
+/// `value` to `decimals` places, without the minus sign of a negative that rounds to zero.
+pub(crate) fn fixed(value: f64, decimals: usize) -> String {
+    let text = format!("{value:.decimals$}");
+    match text.strip_prefix('-') {
+        Some(rest) if !rest.bytes().any(|b| matches!(b, b'1'..=b'9')) => rest.to_string(),
+        _ => text,
+    }
+}
+
 /// A command for the session to run, made by a view: the same ids the CLI and MCP use.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Action {

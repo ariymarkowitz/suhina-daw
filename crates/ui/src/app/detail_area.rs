@@ -371,12 +371,11 @@ impl App {
         let mut shown = self.session().map_or(detail_view::Detail::Nothing, |s| {
             detail_view::build_with(s.project(), track, clip, &mut |t, p| reports.remove(&(t, p.to_vec())), nam_lists)
         });
-        // Automated parameters show what plays, while it plays (#706).
-        if let Some(session) = self.session()
-            && let Some(monitor) = session.player().map(suhina_session::Player::monitor)
-            && monitor.running()
-        {
-            shown.follow_automation(session.project(), monitor.beat());
+        // Automated parameters show what plays at the playhead, running or stopped (#706, #811);
+        // without a player, at the start.
+        if let Some(session) = self.session() {
+            let beat = session.player().map_or(0.0, |p| p.monitor().beat());
+            shown.follow_automation(session.project(), beat);
         }
         self.expanded_panel = detail_view::expanded_device(ui.ctx(), &shown);
         if let Some(session) = self.session() {

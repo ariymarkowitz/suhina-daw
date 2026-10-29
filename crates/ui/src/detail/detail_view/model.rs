@@ -436,6 +436,8 @@ impl Detail {
                 };
                 for lane in device.automation.iter().filter(|l| l.enabled && !l.points.is_empty()) {
                     let spec = info.and_then(|info| info.params.iter().find(|p| p.id == lane.param));
+                    // On/off and choice parameters hold each point's value until the next, as the
+                    // engine plays them and the lane draws them.
                     // Evenly along the parameter's control, as the engine plays it and the lane
                     // draws it.
                     use crate::arrangement::automation_lanes::Scale;
@@ -454,7 +456,8 @@ impl Detail {
                     };
                     let Some(scale) = scale else { continue };
                     let Some(value) = lane.value_at(beat, scale.stepped(), &scale) else { continue };
-                    let value = spec.map_or(value, |spec| spec.clamp(value));
+                    // A whole-number parameter shows what it plays, the fraction cut off toward zero.
+                    let value = spec.map_or(value, |spec| spec.played(value));
                     for (id, v) in &mut device_box.values {
                         if *id == lane.param {
                             *v = value;

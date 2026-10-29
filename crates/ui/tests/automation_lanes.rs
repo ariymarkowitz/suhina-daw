@@ -10,7 +10,8 @@
 use egui::{Key, Modifiers, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use suhina_engine::model::{AutomationPoint, Device, DeviceKind, DeviceParam, Extensions, Project};
+use suhina_engine::model::automation::{self, Curve};
+use suhina_engine::model::{AutomationLane, AutomationPoint, Device, DeviceKind, DeviceParam, Extensions, Project};
 use suhina_session::Session;
 use suhina_ui::demo::demo_project;
 use suhina_ui::{App, kit::theme};
@@ -295,11 +296,64 @@ fn dragging_a_segment_up_bends_its_curve() {
     let middle = Pos2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
     drag(&mut harness, middle, vec2(0.0, -20.0));
     let (points, _) = pan(&harness);
-    assert!(points[0].curve > 0.1, "{points:?}");
-    assert_eq!(points[1].curve, 0.0);
+    assert!(points[0].curve.shape(0.5) > 0.55, "{points:?}");
+    assert!(points[1].curve.is_straight());
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
-    assert_eq!(pan(&harness).0[0].curve, 0.0);
+    assert!(pan(&harness).0[0].curve.is_straight());
+}
+
+/// The demo project with a rising pan segment on Drums whose curve is a split's half outside the
+/// unit square, and the Drums lanes shown; with where the segment's line is half-way along.
+fn with_a_split_half() -> (Harness<'static, App>, Curve, Pos2) {
+    let outside =
+        Curve { x1: 1.195_800_352_596_018_6, y1: 0.0, x2: 0.246_692_986_530_421_18, y2: 0.828_981_542_001_562_4 };
+    let mut project = demo_project();
+    let drums = project.tracks.iter().find(|t| t.name == "Drums").and_then(|t| t.channel);
+    let channel = project.channels.iter_mut().find(|c| Some(c.id) == drums).expect("the Drums channel");
+    let mut pan = AutomationLane::new("pan");
+    pan.insert(AutomationPoint { beat: 0.0, value: -1.0, curve: outside });
+    pan.insert(AutomationPoint::new(16.0, 1.0));
+    channel.automation.push(pan);
+    let mut harness = arrangement(project);
+    harness.get_by_label("Show automation of Drums").click();
+    harness.run();
+    let rect = harness.get_by_label("Pan automation on Drums").rect();
+    let a = harness.get_by_label("Pan point 1 on Drums").rect().center();
+    let b = harness.get_by_label("Pan point 2 on Drums").rect().center();
+    let x = (a.x + b.x) / 2.0;
+    let y = envelope_y_at(&harness, rect, x).expect("the envelope is drawn");
+    (harness, outside, Pos2::new(x, y))
+}
+
+/// A drag of a split half's line shorter than one step still holds its control points in the
+/// unit square, each coordinate on its own, and moves nothing else, as measured.
+#[test]
+fn a_drag_under_a_step_holds_a_split_half_in_the_square() {
+    let (mut harness, outside, middle) = with_a_split_half();
+    assert_eq!(pan(&harness).0[0].curve, outside);
+    // Sideways only: the drag starts but moves no step.
+    drag(&mut harness, middle, vec2(12.0, 0.0));
+    let held = pan(&harness).0[0].curve;
+    let want = outside.boxed();
+    assert!(held.to_array().iter().zip(want.to_array()).all(|(a, b)| (a - b).abs() < 1e-9), "{held:?}");
+    assert_eq!(held.x1, 1.0);
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!(pan(&harness).0[0].curve, outside, "undo brings the split half back");
+}
+
+/// A longer drag holds the curve first, then moves it along the paths from the held curve.
+#[test]
+fn a_drag_of_a_split_half_moves_from_the_held_curve() {
+    let (mut harness, outside, middle) = with_a_split_half();
+    drag(&mut harness, middle, vec2(0.0, -20.0));
+    let got = pan(&harness).0[0].curve;
+    let paths = automation::CurveDrag::new(&outside);
+    let steps = (-40..=-1)
+        .find(|&n| paths.dragged(n).to_array().iter().zip(got.to_array()).all(|(a, b)| (a - b).abs() < 1e-12));
+    assert!(steps.is_some(), "{got:?} is not the held curve dragged up");
+    assert!(got.to_array().iter().all(|v| (0.0..=1.0).contains(v)));
 }
 
 /// The height of the envelope line painted last frame at `x`, from the longest line inside `lane`.
@@ -362,7 +416,7 @@ fn a_bent_segment_keeps_its_new_shape_when_the_mouse_is_let_go() {
     harness.run();
     let after = envelope_y_at(&harness, rect, middle.x).expect("the envelope is drawn");
     assert!((after - dragging).abs() < 0.5, "after: {after}, while dragging: {dragging}");
-    assert!(pan(&harness).0[0].curve > 0.1);
+    assert!(pan(&harness).0[0].curve.shape(0.5) > 0.55);
 }
 
 /// The demo project with the FM synth, which has over a hundred parameters, on the Drums
@@ -856,7 +910,7 @@ fn render_the_lanes() {
     if let Some(channel) = project.channels.iter_mut().find(|c| Some(c.id) == channel) {
         let mut volume = suhina_engine::model::AutomationLane::new("volume");
         for (beat, value, curve) in [(0.0, 0.3, 0.0), (16.0, 1.0, 0.6), (48.0, 0.5, -0.5), (64.0, 0.9, 0.0)] {
-            volume.insert(AutomationPoint { beat, value, curve });
+            volume.insert(AutomationPoint { beat, value, curve: suhina_engine::model::automation::Curve::bend(curve) });
         }
         let mut pan = suhina_engine::model::AutomationLane::new("pan");
         pan.insert(AutomationPoint::new(8.0, -0.6));
@@ -954,4 +1008,28 @@ fn alt_drags_a_point_off_the_grid() {
     let (points, _) = volume(&harness);
     assert_eq!(points.len(), 1);
     assert!((points[0].beat - 16.5).abs() < 0.2, "{points:?}");
+}
+
+/// A click on a whole-number lane's slope adds a point on it, holding the value between two
+/// numbers, so the envelope keeps its shape (the engine plays it with the fraction cut off).
+#[test]
+fn a_click_on_a_whole_number_slope_adds_a_point_between_numbers() {
+    let mut harness = with_automation_of(&["op1.rate1"]);
+    let rate = |harness: &Harness<'static, App>| {
+        let session = harness.state().session().expect("a session");
+        let project = session.project();
+        let channel = project.tracks.iter().find(|t| t.name == "Drums").and_then(|t| t.channel);
+        let channel = project.channels.iter().find(|c| Some(c.id) == channel).expect("the Drums channel");
+        let device = channel.devices.iter().find(|d| d.name == "FM Synth").expect("the FM synth");
+        device.automation.iter().find(|l| l.param == "op1.rate1").map(|l| l.points.clone()).unwrap_or_default()
+    };
+    let lane = harness.get_by_label("FM Synth: Op 1 Rate 1 automation on Drums").rect();
+    let a = harness.get_by_label("FM Synth: Op 1 Rate 1 point 1 on Drums").rect().center();
+    let b = harness.get_by_label("FM Synth: Op 1 Rate 1 point 2 on Drums").rect().center();
+    let x = (a.x + b.x) / 2.0;
+    let y = envelope_y_at(&harness, lane, x).expect("the envelope is drawn");
+    click_at(&mut harness, Pos2::new(x, y));
+    let points = rate(&harness);
+    assert_eq!(points.len(), 3, "{points:?}");
+    assert_eq!((points[1].beat, points[1].value), (4.0, 0.5), "{points:?}");
 }

@@ -224,7 +224,7 @@ pub struct ArrangementViewState {
     /// too, but play starts where it was clicked, as the insert marker shows.
     pub picked_whole: bool,
     /// A clip moves by its name bar and selects time from its body (the default); off
-    /// (Mirror), its lower half moves it and its upper half selects time.
+    /// (Lower half), its lower half moves it and its upper half selects time.
     pub name_bar_moves: bool,
     /// The grid's lines show through the clips' bodies, faintly (Settings › Arrangement ›
     /// TimelineGrid in clips; on by default).

@@ -30,6 +30,9 @@ mod ara;
     clippy::all,
     clippy::pedantic
 )]
+// The ARA headers pack structs to 1 byte on x86 and to 8 on ARM: each CPU has bindings of its own.
+#[cfg_attr(target_arch = "aarch64", path = "ara_sys/arm.rs")]
+#[cfg_attr(not(target_arch = "aarch64"), path = "ara_sys/x86.rs")]
 mod ara_sys;
 mod audio;
 mod clap;

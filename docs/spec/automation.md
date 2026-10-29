@@ -1,9 +1,9 @@
 ---
 description: Automation envelopes - lanes of points over the arrangement for a track's volume, pan and mute and every built-in, .sd and plug-in parameter, segments that move evenly along the parameter's control, the one-handle curve, the volume fader's law, jumps and their smoothing, how the engine plays them, a manual change turning a lane off, and the automation.* commands
-read_when: automation, envelope, curve family, Bezier, volume fader, fader law, volume taper, volume smoothing, Taper, VolumeTaper, curve_through, automation lane, automation lanes view, show automation, automation.movePoints, automation.deletePoints, select points, breakpoint, automation point, curve, automation.addPoint, automation.movePoint, automation.deletePoint, automation.clear, automation.setEnabled, automation.list, device.setAutomation, automation off, re-enable automation, volume automation, pan automation, mute automation, device parameter automation, AutomationLane, AutomationPoint, MixLanes, DeviceLanes, Envelope
+read_when: automation, envelope, curve family, Bezier, volume fader, fader law, volume taper, volume smoothing, Taper, VolumeTaper, Curve, CurveDrag, curve split, curve drag, automation lane, automation lanes view, show automation, automation.movePoints, automation.deletePoints, select points, breakpoint, automation point, curve, automation.addPoint, automation.movePoint, automation.deletePoint, automation.clear, automation.setEnabled, automation.list, device.setAutomation, automation off, re-enable automation, volume automation, pan automation, mute automation, device parameter automation, AutomationLane, AutomationPoint, MixLanes, DeviceLanes, Envelope
 type: spec
 status: current
-last_verified: 2026-10-25
+last_verified: 2026-10-29
 covers:
   - crates/model/src/automation.rs
   - crates/engine/src/automation.rs
@@ -58,23 +58,86 @@ and is deleted with its device. One lane per parameter.
   or Utility's gain law, [utility.md](utility.md#the-gain-knob)), a data-only device's along its
   control (logarithmic for a log slider or knob), pan and plug-in parameters in their value. What
   a lane draws straight is what plays: half-way from 50 Hz to 500 Hz on a logarithmic knob is
-  158 Hz. A whole-number parameter moves along the line between its points and the device rounds.
-- The movement follows the first point's **curve**, -1 to 1: 0 is a straight line. A curve is a
-  cubic Bezier from (0, 0) to (1, 1) in (share of the segment's time, share of the way in
-  position) with **one handle**: its first inner control point (x1, y1) and the second its
-  mirror, (1 - y1, 1 - x1). The handle runs along two lines that meet at (1/4, 1/4), where the
-  segment is straight: for a curve c above 0 it is ((1 - c)/4, (1 + 3c)/4), on to (0, 1) at 1,
-  which moves fast first and settles; below 0 it is ((1 - 3c)/4, (1 + c)/4), on to (1, 0) at -1,
-  which waits and moves late (`automation::shape`). The same curve has the same shape going up
-  and down. This is the family Live's lanes store and play (their mirrored handles were seen in
-  every saved set); how far a value of c bends is Suhina's own scale.
+  158 Hz.
+- **A whole-number parameter** (`ParamKind::Integer`) moves along the line like any other, and
+  takes the lane's value with its **fraction cut off toward zero** (`ParamInfo::played`): 36.98
+  plays 36, 0.94 plays 0 and -2.97 plays -2. It is not rounded or floored: a lane from 40 to 41
+  plays 40 until its last point, one from 41 to 40 plays 40 from its first step, and one from 3
+  to -3 spends twice as long on 0 as on each other number. A point may hold a value between two
+  numbers (a split on a slope leaves one; a file can hold one): it sits where it falls between
+  them, unrounded (`ParamInfo::to_normalized`), and plays cut toward zero, so 40.5 plays 40.
+  This follows how Live 12.4.6 plays integer lanes, read through its API with the playhead
+  stepped across them (`measurements/automation/kinds/`, #914); whether a device's sound follows
+  the value the same way was not heard. A value typed for a point (`automation.addPoint` with a
+  `value`) is kept as `device.setParam` keeps it, a whole number. The lane draws the line the
+  lane moves along; the header, the point's tooltip and the panel while it plays show the number
+  played.
+- The movement follows the first point's **curve** (`automation::Curve`): a cubic Bezier from
+  (0, 0) to (1, 1) in (share of the segment's time, share of the way in position) through two
+  inner control points (x1, y1) and (x2, y2). Bending and dragging keep each anywhere from 0 to 1;
+  a split can put them outside ([below](#splitting-a-segment)). With both on the diagonal the
+  segment is straight (the default). The same curve has the same shape going up and
+  down. Bending a straight segment gives the **mirrored family**, one handle `bend` from -1 to 1
+  (`Curve::bend`): the second control point is the first's mirror, (1 - y1, 1 - x1), and the
+  first runs along y1 = 1 - 3 x1 to (0, 1) at 1 (fast first, then settles) or along
+  x1 = 1 - 3 y1 to (1, 0) at -1 (waits, then moves late); the two lines meet at (1/4, 1/4),
+  straight. Splitting and dragging give pairs outside the family. This follows how Live 12.4.6
+  stores and plays its lanes (#906, #913).
+- **Limits.** Each coordinate is kept from -0.5 to 1.5 (`CONTROL_MIN`, `CONTROL_MAX`). With x1
+  and x2 from 0 to 1 the time share never falls, so the curve is a function of time, and with y1
+  and y2 there the value stays between the two points; a split's half is a piece of such a curve,
+  so it keeps both, whatever its points. A curve inside the limits whose time share does fall,
+  which only a hand-edited file or command can give, plays at the first moment its time share
+  reaches each share of the segment's time, its value held between the two points.
 - **Two points at one beat make a jump**: the value reaches the first, then leaves from the second.
   A new point at a beat that has points goes after them.
 - On/off and choice parameters, and the mute, are **steps**: each point's value holds until the
-  next point; curves do not apply. Whole-number parameters move along the line and the device
-  rounds.
+  next point; curves do not apply. Whole-number parameters move along the line, as above.
 - A lane is **enabled** or not. One that is off does not play: the parameter keeps the value set on
   it (the channel's volume, the device's `params`).
+
+## Splitting a segment
+
+A point placed on a bent segment keeps the sound exactly (`Curve::split`, `automation.addPoint`
+without a value): at share x of the segment's time the curve's parameter t is where its time
+share is x; the new point's value is the parameter's value at the curve's position there, and
+each half gets the de Casteljau subdivision at t, scaled to its own box. The halves are no longer
+mirrored. A half that does not move is straight.
+
+The halves are **not clamped** to the unit square, as Live 12.4.6 stores them (split-overshoot in
+`live-12/automation.md`): from a curve whose points run back in time or in value they lie partly
+outside it. (1, 0, 0, 1) split at 0.75 of its time gives a first half with x1 = 1.1958, at 0.25 a
+second half with x2 = -0.1958; (0, 1, 1, 0) gives y1 = 1.2931 at 0.75 and y2 = -0.2931 at 0.25.
+Splitting a curve of the square, however often, keeps the first control point's coordinates from
+0 to 4/3 and the second's from -1/3 to 1 (a cubic whose time share never falls has no others), so
+the limits above leave room for rounding; a coordinate past them, which only a sliver of a cut or a
+curve whose time runs back can give, is held at the limit. A point added at another point's beat takes that
+point's curve, since it starts the segment.
+
+## Dragging a curve
+
+Dragging a segment's line reshapes its curve (`automation::CurveDrag`), as measured from Live
+12.4.6's editor. Each control point has a **path**: from the corner (0, 1) to a point (p, p) on
+the diagonal, then on to (1, 0); its place on the path F is 0 at (0, 1), 1 at (p, p) and 2 at
+(1, 0). A drag moves F in whole steps of 1/64 and never changes p.
+
+- **A drag first holds the curve in the unit square**: each coordinate of a control point outside
+  it (from a split) is moved to 0 or 1 on its own, so x1 = 1.1958 becomes 1 and (0, 1.2931) the
+  corner (0, 1). The drag then goes on as below from the held curve. A drag shorter than one step
+  still holds it, and changes the sound by that alone (split-overshoot-drag, Live 12.4.6).
+- A straight curve, one with both points on the diagonal and one with both in the corners (0, 1)
+  or (1, 0) start on the family's paths, p = 1/4 and 3/4; a single point in a corner takes its
+  family path (not measured). A single point on the diagonal keeps its own p.
+- **Together** (both points on one side of the diagonal, or both on it): each step moves both F
+  the same way, so the curve moves earlier or later. **Apart** (opposite sides, or one on it):
+  the point with the larger F moves with the drag and the other against it, so an S bends further
+  or flattens through a straight line into the reverse S. The mode is chosen when the drag
+  starts and kept to its end; the next drag chooses again.
+- A point that would pass the end of its path stops there while the other goes on; a step
+  neither can take is not taken, so a drag can stop a step short of a corner.
+- In the lane, 1.5 points of vertical mouse travel are one step, and the line follows the
+  mouse: up bends it up, which moves a rising segment's curve earlier and a falling one's later.
+  How far the mouse moves per step was not measured; this is Suhina's own choice.
 
 ## The volume fader
 
@@ -98,6 +161,13 @@ Setting a parameter that follows an enabled lane by hand (`track.setVolume`, `tr
 transport runs, and the answer says `"automation": "off"`. The value set by hand holds until
 `automation.setEnabled {enabled: true}` turns the lane on again; the lane's points are kept. Undo
 brings the lane back on with the old value.
+
+## What the controls show
+
+A control whose parameter follows an enabled lane (a track header's volume and pan, a mixer
+strip's, the returns' and Main's, a device's knob) shows the lane's value at the playhead,
+whether the transport runs, is paused or is stopped, and follows the playhead when it is moved
+while stopped (#706, #811). A lane turned off shows the value set by hand.
 
 ## How the engine plays them
 
@@ -145,19 +215,22 @@ mixer) and `param`. Values are in the unit of the parameter's set command.
 
 | Command | What it does |
 |---|---|
-| `automation.addPoint {track, device?, param, beat, value, curve?}` | adds a point, making the lane (enabled) if there is none; answers the point's index in beat order |
+| `automation.addPoint {track, device?, param, beat, value?, curve?}` | adds a point, making the lane (enabled) if there is none; answers the point's index in beat order. Without `value` the point goes on the envelope and a bent segment is split so it plays as before ([above](#splitting-a-segment)); a lane without points needs a value |
 | `automation.movePoint {track, device?, param, point, beat?, value?, curve?}` | changes a point; answers its new index |
 | `automation.deletePoint {track, device?, param, point}` | removes a point; the lane goes with its last point |
 | `automation.movePoints {track, device?, param, points, beats?, value?, curve?}` | moves several points of one lane together in one undo step: `beats` later (earlier below 0), `value` up or down in the set command's unit (dB for the volume), each value kept in the parameter's range (a silent volume point stays silent, a louder one stops at +6 dB), `curve` given to each; answers the points' new indices in the order given |
 | `automation.deletePoints {track, device?, param, points}` | removes several points in one undo step; the lane goes with its last point |
 | `automation.clear {track, device?, param?}` | removes a lane, or every lane of the mixer or the device |
 | `automation.setEnabled {track, device?, param, enabled}` | turns a lane off or on again |
-| `automation.list {track}` | the track's lanes: `mixer` and `devices` (index, name, lanes), each with `param`, `enabled` and `points` (`beat`, `value`, `curve`) |
+| `automation.list {track}` | the track's lanes: `mixer` and `devices` (index, name, lanes), each with `param`, `enabled` and `points` (`beat`, `value`, `curve` as `[x1, y1, x2, y2]`) |
 | `device.setAutomation {track, device, param, points}` | replaces a device lane with straight segments (`points` a flat list of beat and value; `[]` removes it), for built-in devices, `.sd` devices and plug-ins |
+
+A `curve` is `[x1, y1, x2, y2]`, each from -0.5 to 1.5 (from 0 to 1 but for a split's halves,
+which `automation.list` shows as they are), or one bend from -1 to 1 for the mirrored family.
 
 Refused, changing nothing: an unknown track, device or parameter; a beat below 0 or past the
 arrangement's limit; a value out of range for the mixer (a volume above +6 dB, a pan outside -1 to
-1, a mute other than 0 or 1); a curve outside -1 to 1; a point index the lane does not have; a lane
+1, a mute other than 0 or 1); a curve that is not four numbers from -0.5 to 1.5 or a bend from -1 to 1; a point index the lane does not have; a lane
 of more than 65,536 points; a `movePoint` with nothing to change.
 
 ## In the Arrangement view
@@ -213,27 +286,26 @@ the value set on the mixer or the device. Editing (every edit is one undo step):
 | Gesture | Command |
 |---|---|
 | Click the lane | `automation.addPoint` at the beat under the pointer (on the nearest line the arrangement's grid draws at this zoom, [arrangement editing](arrangement-editing.md#the-grid); Alt, Option on macOS: free) and the value at its height |
-| Click on or near the line (within 6 points), or a lane's faint line | `automation.addPoint` on the envelope: its value at that beat, so the envelope keeps its shape (a level or straight segment stays exactly so). The segment before the new point keeps its curve; the one after gets the curve that passes through the old segment's middle. On a bent segment the envelope stays close but not exact: a curve cut short draws more steeply, by up to a sixth of the lane near the new point at the strongest bends |
+| Click on or near the line (within 6 points), or a lane's faint line | `automation.addPoint` without a value: on the envelope, a bent segment split exactly so it plays and draws as before ([Splitting a segment](#splitting-a-segment)); on the faint line, with the parameter's value |
 | Drag a point | `automation.movePoint`, its beat on the grid (Alt, Option on macOS: free) and its value following the pointer; points dragged past others keep beat order, and a point dragged onto another's beat stays on the side it came from, so the jump runs as drawn while dragging |
 | Click a point | selects it; Shift or Ctrl adds it to the selection or takes it out. Selecting a clip ends a selection of points |
 | Drag on the lane away from the line | draws a box that selects the points in it |
 | Drag a selected point | `automation.movePoints`: the whole selection moves by the same beats (none before beat 0) and the same change of value |
 | Delete (or Backspace) | `automation.deletePoints` for the selection, before any selected clip |
 | Double-click a point, or its menu's Delete point | `automation.deletePoint` (the menu deletes the whole selection when the point is part of one) |
-| Drag the line between two points up or down | `automation.movePoint` with the first point's curve: up bends the line up, from -1 to 1 |
+| Drag the line between two points up or down | `automation.movePoint` with the first point's new curve, along the paths of [Dragging a curve](#dragging-a-curve): up bends the line up |
 
 ## In the project file
 
 `automation` on a channel and on a device: `[{ param, points: [{ beat, value, curve? }],
-enabled? }]`. Values are stored as before (a linear gain for the volume), so the file is
-unchanged; what changed (#906) is how they play. A project saved earlier plays its volume
-lanes, and its device lanes on logarithmic knobs, evenly along the control instead of in the
-stored value, and its curves on the one-handle family instead of a power curve with the same
-sign (a bent segment bends the same way, by a slightly different amount); its points are where
-they were. `curve` is written only when it is not 0 and `enabled` only when it is false, so a
-file without automation, or with straight lanes that play, keeps its shape
-([suhina-format.md](suhina-format.md)). A curve outside -1 to 1 is refused, as is a lane of more
-than 65,536 points; points are read in beat order.
+enabled? }]`. Values are stored in the parameter's unit (a linear gain for the volume). `curve` is
+`[x1, y1, x2, y2]` from version 4, written only when the segment is not straight; files before
+version 4 wrote one bend from -1 to 1, which reads as the mirrored curve it played (#906), so they
+sound as before. `enabled` is written only when it is false
+([suhina-format.md](suhina-format.md)). A coordinate may lie outside 0 to 1, as a split leaves
+it ([Splitting a segment](#splitting-a-segment)); one outside -0.5 to 1.5 or not a number (or a
+bend outside -1 to 1) is refused, as is a lane of more than 65,536 points; points are read in beat
+order.
 
 ## Not done yet
 

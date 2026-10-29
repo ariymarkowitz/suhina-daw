@@ -181,7 +181,7 @@ pub(super) fn clip_box<'a>(
     // starts.
     let on_bar = |y: f32| clip_name_bar(visible).is_some_and(|bar| y < bar.bottom());
     // Where a plain drag selects time: the body under the name bar (the default, the name bar
-    // moving the clip), or the upper half (Mirror, the lower half moving it); with Ctrl held
+    // moving the clip), or the upper half (Lower half, the lower half moving it); with Ctrl held
     // instead when that setting is on.
     let bar_moves = state.name_bar_moves && clip_name_bar(visible).is_some();
     let selects_at = |y: f32| {
