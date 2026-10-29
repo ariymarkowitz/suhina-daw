@@ -98,16 +98,27 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   constant of 45 ms (Slow) or 15 ms (Fast), but never so fast that the longest line or reflection
   changes by more than half a frame a frame; or not at all (None), which makes Size changes glitch
   as in Live.
-- **Early reflections.** Live's own tap pattern for each Density (10 direct taps and 60 filtered
-  ones over 129 ms at Low; 4, 10 and 10 direct taps at Sparse, Mid and High, each table read up
-  to 67 ms), at whole frames of 44.1 kHz in the reference room, each on one side with its sign and
-  level. The first tap is 3 frames (at 44.1 kHz) after the predelay, with a gain of 0.0942. The
+- **Early reflections.** Live's own tap pattern for each Density (10 direct taps and 61 filtered
+  ones over 129 ms at Low; 4, 10 and 10 direct taps at Sparse, Mid and High, every table to about
+  130 ms), each time a whole number of frames of 44.1 kHz plus its tap's fraction of a frame in
+  the reference room, each on one side with its sign and level. The first tap is 3 frames (at 44.1 kHz) after the predelay, with a gain of 0.0942. The
   filtered taps pass, per side, a cookbook low-pass of Q 0.508 at `12 kHz − 818 Hz × decay^−0.886`
   (8.5 kHz at 0.2 s, 11.3 kHz at 1.2 s). Every tap fades by `(0.0328 + 0.0668 × shape) / decay`
   dB per ms of its delay (decay in seconds), and the whole wet signal, tail included, is
-  0.0565 dB quieter per ms of predelay. Spin stretches every tap's delay, predelay included, by
-  `1 + 0.0097 × amount × sin(2π × rate × t + φ)`: the swing a fraction of each delay, each tap at
-  its own golden-angle phase φ, and the network's input taps with their reflections.
+  `0.0113 / decay` dB quieter per ms of predelay (0.0565 at 0.2 s, 0.0094 at 1.2 s, −2.8 dB
+  at 250 ms for Decay 1 s: Live's drop at 250 ms is 5.6, 2.3, 0.8 and 0.2 dB at Decay 0.5, 1.2,
+  3.46 and 14.4 s, the same for the reflections and the tail). Spin swings each direct tap's whole
+  delay `T` (predelay included) by `0.00995 × amount × reach(predelay) × T × sin(2π × m × rate ×
+  t + φ)`, where `reach` is 1 up to 5 ms of predelay and `2 / (predelay − 3.02)` above it
+  (predelay in ms: 0.29 at 10 ms, 0.0081 at 250 ms), so a long predelay swings every tap by about
+  the same 2 ms × 0.00995 × amount. Each of the ten direct taps has its own LFO, its rate `m` times
+  Spin Rate (0.978 to 1.042) and its phase φ when playback starts, as tracked in Live (Decision 10). A
+  filtered tap is a direct one a whole number of frames later (twenty offsets in pairs two frames
+  apart, 395 and 397 frames of 44.1 kHz to 3190 and 3192 frames, 8.96 to 72.38 ms, in the
+  reference room; each pair always heard on one side) and swings as that one did when it was
+  read. So each direct tap is read once, the filtered taps at each offset are played as one mix
+  of the direct taps (each at its filtered tap's level), delayed by the offset, and the network's
+  input taps swing with their reflections.
 - **Network input.** The direct taps again, read after the Shape delay of `32 + (18.5 + 34.83 ×
   (shape − 0.5)) × size factor` ms from a copy of the predelay line whose input has passed the
   loop's damping (below) once, at 0.21 of a trip, and a first-order low-pass at 15 kHz. Each
@@ -310,15 +321,46 @@ Each entry: what was chosen, what it costs, why.
    no simple filter (3 to 8 dB/octave, flattening at the bottom); at 1 kHz, width 5.85 the shelf is
    within 0.6 dB rms of its measured response (1.3 dB at worst, at 57 Hz), and at 5 kHz it is
    0.6 dB above Live's −3 dB point and 1.3 dB above its −6 dB point.
-10. **Spin stretches every reflection** by 0.97 % of its delay per unit of Amount, as tracked tap
-   by tap in Live's renders (34 % peak to peak at the default 17.5, the same at 0.3 and 0.6 Hz),
-   **each at its own phase, and the tail's input with it.** In Live's impulse with Spin, against
-   the one without, the clearest taps are stretched by 1.04 to 1.21 at the same moment, and left
-   and right differently (1.18 and 1.08 at 20 ms), so the taps do not swing in step. And Live's
-   tail with Spin is uncorrelated with its tail without (r −0.04 after the noise; ours was 0.99
-   while only the reflections swung): Spin reaches the network's input. Swinging the input taps
-   too brought the tail of the Spin cases from +6.2 to +0.5 dB at Amount 17.5 in 150 to 300 ms,
-   and from +15.1 to +9.4 dB at 55. Cost: about 0.2 % of a core with Spin on. Chorus swings every line's delay
+10. **Spin swings each direct reflection's whole delay on its own LFO, by a share that falls with
+   the predelay; a filtered reflection swings with the direct one it follows, and the tail's
+   input with them.** Tracked in Live's renders of a click every 0.4 s (and 0.2 s), reflections
+   only, at Predelay 0.5 to 250 ms, Amount 17.5 and 55, Rate 0.07, 0.3 and 1.3 Hz, Size 10.54,
+   100 and 500: each tap's arrival follows a sine whose peak swing is
+   `0.00995 × amount × reach × T`, with `T` the tap's delay from the input, predelay included, and
+   `reach` 1 up to 5 ms of predelay and `2 / (predelay − 3.02)` above (ms). Over the ten direct
+   taps the fit leaves 1 % at every predelay from 10 to 250 ms, and `reach` comes out the same at
+   both Amounts, all three Rates and all three Sizes (within 1 to 2 %). So at the default 2.5 ms the
+   swing is about 1 % of the whole delay per unit of Amount, and at 250 ms every tap swings by
+   about the same 0.36 ms at Amount 17.5 (the first tap and the one at 41 ms alike). Live's
+   swing does not stop at the predelay: stretching the delay after it alone, as before, left the
+   first tap still and over-swung the late ones at a long predelay.
+   Each of the ten direct times (the same in every Density) has its own LFO: a rate 0.978 to
+   1.042 times Spin Rate (the same ratios at 0.3 and 1.3 Hz, 0.6 % faster overall at 1.3) and a
+   phase that is the same whenever playback starts, from bar 1 or bar 2 (0.17 to 1.71 rad), so the LFOs start again with the transport, as ours do. A
+   filtered tap is a direct one 8.96, 30.27, 52.97, 67.62 … ms later (the offsets every table
+   repeats) and moves exactly as it does: at 0.5 ms the left one at 30.27 ms, a copy of the
+   first, swings 0.09 ms where its own delay would give 5 ms. The offsets come in pairs 0.045 ms
+   apart and each pair is heard on one side only (8.96, 37.17, 46.96, 52.97 and 56.53 ms on the
+   right; 21.77, 30.27, 54.24, 67.62 and 72.34 ms on the left), which assigns every filtered tap
+   of every Density to one direct tap. Live's renders of each Density with Spin
+   (`reverb-spin-filtered`) confirm the cases the times alone left open: the right taps at
+   63.95 ms (Mid) and 56.58 ms (High) follow the ones at 7.37 and 0 ms (the missing partner of
+   56.53), and of the two taps at 64.44 ms the right follows the left one at 11.43 ms and the left
+   the right one at 34.17 ms; the left one's level moving is its level still, so it is one copy,
+   not two. Every offset is a whole number of frames of 44.1 kHz (395, 397, 960, 962 … 3192), so
+   a filtered tap is its direct tap delayed again: it swings as the direct tap did when that one
+   was read, the offset earlier, not as it does now. Live's renders show this: scoring both tracks
+   against `reverb-spin-filtered` at Amount 17.5, 273 of the 275 filtered taps whose tracks part by
+   more than 0.15 ms are louder along the one sampled at the direct tap's time, 3 to 20 times;
+   Sparse's late copies sit on it within 0.06 ms and 0.4 to 0.5 ms off the other. Ours did the
+   other until the filtered taps were played as delayed mixes; the same scoring of our renders of
+   the same train now picks the direct tap's time for every tap, by the same margins. Swinging each tap by its own
+   delay overstated the tone's FM 2.6 times at the default predelay (1.24 semitones peak to peak
+   against 0.48) and gave the reflections +9 dB at Amount 55 in 150 to 300 ms with Diffuse at its
+   minimum; both are now within the measures' noise (Known differences). Live's tail with Spin is
+   uncorrelated with its tail without (r −0.04 after the noise), so the network's input taps swing
+   with their reflections. Cost: about 0.4 % of a core with Spin on (ten sines a frame, 0.2 %
+   more than one LFO for all). Chorus swings every line's delay
    either way by 1.8 ms per unit of Amount, each line with its own phase; that figure comes from
    the FM of a tone through the tail, which overstated Spin's swing, and is kept until Chorus is
    tracked line by line.
@@ -332,15 +374,31 @@ Each entry: what was chosen, what it costs, why.
     so the tail is fed louder by the square root of the stretch, capped at 1.6 times: beyond that
     a Size glide from the smallest room rang.
 12. **The early reflections are Live's own tap pattern, read from its renders.** Every tap of Live's
-   reflections is a whole-frame delay of the input, either as it is or through one low-pass whose
-   corner follows Decay; their times scale with the cube root of Size, and with the fade taken out
+   reflections is a delay of the input rounded to a whole frame, either as it is or through one
+   low-pass whose corner follows Decay; their times scale with the cube root of Size, and with the fade taken out
    the direct taps all have a level of exactly ±1. So the pattern was read tap by tap from the
    impulse responses (deconvolved from the input filters) and is used as measured, which puts
    every tap of the reflection-only cases within 0.5 ms and 0.5 dB of Live's. This reverses the
    earlier choice of an own pattern that only kept Live's laws: the per-tap checks of the
    comparison cannot pass without the real times, and the pattern is a measured behaviour of the
-   device, read from its output alone. Only the part before Live's tail sets in (67 ms) could be
-   read for Sparse, Mid and High. The network's line lengths and diffusers stay this device's own:
+   device, read from its output alone. Two corrections came from reflections-only renders with
+   Diffuse at its minimum and Spin off (`reverb-tap-frac`, `reverb-spin-filtered`):
+   - **Each tap's time carries a fraction of a frame**, which Live rounds away: with the predelay
+     moved by tenths of a frame around 5 ms, every tap steps to the next frame at its own fraction
+     (the ten direct taps at 0.05, 0.05, 0.35, 0.65, 0.27, 0.35, 0.15, 0.65, 0.35 and 0.95 of a
+     frame past a whole one, the same in every Density; a filtered tap at its direct one's). The
+     tables were read at 2.5 ms (0.25 of a frame), which put four direct taps and their copies one
+     frame late at most other predelays. The tables now hold the fractions, and every one of the
+     229 taps that steps clearly steps where Live's does.
+   - **Sparse, Mid and High go on past 67 ms**, where Live's tail hid them before: their reflections
+     continue to 130 ms as Low's do, about a tenth of the reflections' energy. They follow the same
+     structure (a direct tap plus one of the offsets, with its partner two frames later), so the late
+     taps were fitted as such, 23, 73 and 96 of them above a gain of 0.04, together with the
+     faint taps' gains (117 changed, most by 0.5 to 2.6 dB). Live against ours over the reflections'
+     first 140 ms went from −4.9 to −27 dB of the energy at Sparse (−26 at Mid and High, −30 at Low,
+     at every fraction of a frame).
+
+   The network's line lengths and diffusers stay this device's own:
    Live's network was only partly identified (Known differences).
 13. **The network's input passes the damping once, at 0.21 of a trip** (one more set of the
    loop's filters on the mono input, no measurable cost). Live's tail is damped from its first
@@ -357,11 +415,15 @@ Each entry: what was chosen, what it costs, why.
 15. **Freeze, Flat and Cut** follow Live's renders: a frozen tail drains 0.25 dB per second with
    Flat on and 0.4 with Flat off, and Cut keeps new input out entirely. The soft limit with Cut
    off is Suhina's, so a frozen tail fed for minutes cannot overflow.
-16. **Cost: about 3.2 % of a core at the defaults,** over the 1 % budget, as the device notes allow
-    for reverbs: up to 82 taps (70 at Low; cubic while Spin moves them) and 8 modulated lines
-    with an allpass and three to four filters each run every frame. Spin off saves a fifth
-    (2.2 %, measured on 2026-10-28); Density Sparse costs 1.6 %, High 4.1 %. Cutting further would mean fewer taps or
-    linear interpolation (Decision 4).
+16. **Cost: about 3 % of a core at the defaults,** over the 1 % budget, as the device notes allow
+    for reverbs: the ten direct taps (cubic while Spin moves them), the filtered taps (up to 168,
+    at High) as one mix per offset into up to twenty delay lines read at whole frames once the
+    room settles (Decision 10), and 8 to 16 modulated lines with an allpass and three to four
+    filters each run every frame. Reading each of the 178 taps of High on its own, cubic while
+    Spin moved them, cost 6.9 % (5.4 % with Spin off); the mixes take it to 4.7 % (4.2 %), and Mid
+    from 5.6 % to 4.0 % (4.1 to 3.5 %), with Sparse 2.3 % and Low 2.8 % (30 s of noise at 48 kHz,
+    the best of three, 2026-10-30). Cutting further would mean fewer lines or linear interpolation
+    (Decision 4).
 
 17. **Density Sparse is 8 lines 1.3 times as long, with a fifth of the Diffusion,** not 4 lines.
     Live's Sparse has sparser echoes than Low and yet a smoother spectrum, which takes more loop
@@ -478,20 +540,38 @@ What is further off, and why it is left:
 - **Low Cut at high settings:** with the band's lower edge above about 500 Hz the lowest octaves
   are 15 to 25 dB louder than Live's: the shelf stops at −14 dB while Live's Lo Cut goes on
   falling. Its law is not understood (Decisions 9).
-- **Spin at large amounts:** the stretched reflections end later than Live's: +9 dB at Amount
-  55 in 150 to 300 ms with Diffuse at its minimum (+0.5 dB at 17.5); the LFO's phase at the
-  impulse, and each tap's, are not known.
+- **Spin (Decision 10).** Tracked tap by tap the reflections match: the swing of each of the
+  clearest taps is within 0.02 ms of Live's at every predelay from 0.5 to 250 ms and at Amount
+  17.5 and 55, its phase within about 0.1 rad. A 330 Hz tone's pitch swing, reflections only (semitones peak to peak,
+  Predelay 0.5, 2.5, 10, 25, 50, 100, 250 ms): 0.37, 0.41, 0.27, 0.06, 0.04, 0.03, 0.02 against
+  Live's 0.44, 0.47, 0.29, 0.06, 0.04, 0.03, 0.02 at Amount 17.5, and 1.61, 1.77, 0.74, 0.38,
+  0.21, 0.15, 0.11 against 1.81, 1.75, 0.61, 0.40, 0.26, 0.26, 0.15 at 55 (1.24 and 3.03 at every
+  predelay before). That measure (the extremes of one side's frequency) is noisy: with the
+  tail it read 0.74, 0.70, 0.30 against Live's 0.99, 1.10, 0.80 at 0.5, 2.5 and 10 ms, but the
+  rms deviation over both sides, in cents, is 12.6, 13.7, 5.8, 1.6, 1.1 against 14.9, 15.8, 5.4,
+  1.4, 1.0 at 0.5 to 50 ms (reflections alone 11.4, 11.9, 4.2, 1.5, 1.0 against 12.9, 12.9, 4.3,
+  1.5, 1.0; the tail alone 12.8, 12.9, 7.1, 1.3 against 12.7, 14.0, 4.4, 1.4 to 25 ms). And
+  Live's tail input swings by the same law as the reflections: the tail's first echoes
+  (Diffusion 0.1 %, Reflect off, `reverb-spin-tail`) swing as their direct taps do, on the same
+  LFOs, 1.24 ms against the law's 1.25 for the first tap's echo at 25 ms, and within 0.1 ms of
+  ours wherever they can be tracked; swinging the input by its delay into the network as well
+  does not fit them. Left: the tail alone at 10 ms swings more than Live's (7.1 against 4.4
+  cents), and at Spin Rate 1.3 Hz Live's LFOs run 0.6 % faster than at 0.3 Hz. Every filtered tap
+  moves with its direct one as Live's do (Decision 10); a few faint filtered taps of High are
+  about 1 dB quieter than Live's, a matter of the measured gains, not of Spin. Away from 44.1 kHz
+  and the reference room the offsets round to whole frames on their own, so a filtered tap can
+  land one frame from where its whole delay would round (Live at other rates and Sizes was not
+  read tap by tap).
 - **Size 500:** about 2 dB too little from 60 to 240 ms (the tail sets in later than Live's).
 - **The later runs** (Lo Cut law, network frequencies, Freeze, Smooth, Spin grid) were used for the
   laws above but not rendered through this device.
 
 ## Cost
 
-One instance at its defaults: 3.2 % of one core at 48 kHz (60 s rendered in 1.9 s, release build,
-Apple M-series, 2026-10-29; 2.8 % on 2026-10-28); 2.2 % with Spin off (before them),
-1.6 % at Density Sparse (1.2 % with 4 lines) and 4.1 % at High, measured the same way with noise
-in; see Decision 16. (The earlier 3.3 % was measured on a busier machine.) Run `cargo test --release -p suhina-device-reverb cost
--- --ignored --nocapture` to measure it.
+One instance at its defaults: 2.8 to 3.2 % of one core at 48 kHz (60 s rendered in 1.7 to 1.9 s,
+release build, Apple M-series, 2026-10-30); 2.4 % with Spin off, 2.3 % at Density Sparse, 4.0 %
+at Mid and 4.7 % at High, measured with noise in; see Decision 16. Run `cargo test --release -p
+suhina-device-reverb cost -- --ignored --nocapture` to measure it.
 
 ## Tests
 
@@ -499,7 +579,9 @@ in; see Decision 16. (The earlier 3.3 % was measured on a busier machine.) Run `
 orthogonal and full for every Density; the decay time at 1 and 3 s within 10 % at 44.1 and 96 kHz
 alike; the same level at both rates; Stereo's correlation at 0, 100 and 120; Reflect and Diffuse
 independent; the dry signal undelayed and the mix equal-power; the first reflection three frames
-after the predelay; the reflections' fade with Shape and Decay; Freeze holding the tail and Cut keeping new input out; silence decaying to exact zeros;
+after the predelay; the reflections' fade with Shape and Decay; Spin's reach, swing, restart
+and filtered taps following one direct tap each; Sparse and Low each playing their own
+reflections; Freeze holding the tail and Cut keeping new input out; silence decaying to exact zeros;
 every control moved from one end to the other without a click.
 
 `devices/reverb/src/golden_tests.rs`: golden renders of nine scenarios (the defaults, no

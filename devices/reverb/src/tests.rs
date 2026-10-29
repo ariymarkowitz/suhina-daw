@@ -174,9 +174,186 @@ fn the_first_reflection_arrives_after_the_predelay() {
 }
 
 #[test]
+fn predelay_lowers_the_wet_signal_in_inverse_proportion_to_the_decay() {
+    // Live's drop from 2.5 ms to 250 ms of predelay, in the first 0.4 s after the first
+    // reflection (reflections and tail together): 5.6, 2.3 and 0.8 dB at Decay 0.5, 1.2 and
+    // 3.46 s.
+    let sr = 44_100.0;
+    for (decay, drop) in [(0.5, 5.6), (1.2, 2.3), (3.46, 0.8)] {
+        let wet = |predelay: f64| {
+            let mut r = reverb(sr, &[(param::PREDELAY, predelay), (param::DECAY, decay)]);
+            let ir = impulse_response(&mut r, sr, predelay + 0.5);
+            energy(&ir, sr, predelay, predelay + 0.4)
+        };
+        let measured = 10.0 * (wet(0.0025) / wet(0.25)).log10();
+        assert!((measured - drop).abs() < 0.5, "Decay {decay}: {measured:.2} dB against {drop}");
+    }
+}
+
+/// When one reflection arrives after each click of a train (one every 0.2 s for 9.6 s), in
+/// seconds after its click: the loudest frame within `half` seconds of `around` on `side`,
+/// refined by a parabola. Reflections only, with Spin at `amount` and 0.3 Hz.
+fn arrivals(sr: f64, predelay: f64, amount: f64, side: usize, around: f64, half: f64) -> Vec<f64> {
+    let mut r = reverb(sr, &[(param::PREDELAY, predelay), (param::DIFFUSE, MIN_LEVEL_DB), (param::DECAY, 0.2)]);
+    r.set_param(param::SPIN, 1.0);
+    r.set_param(param::SPIN_AMOUNT, amount);
+    r.set_param(param::SPIN_RATE, 0.3);
+    let period = (0.2 * sr) as usize;
+    let mut buffer = vec![0.0f32; period * 48 * 2];
+    for click in 0..48 {
+        buffer[click * period * 2] = 0.5;
+        buffer[click * period * 2 + 1] = 0.5;
+    }
+    for block in buffer.chunks_mut(512) {
+        r.process(&ProcessContext::default(), block);
+    }
+    let frames = buffer.as_chunks::<2>().0;
+    let (from, to) = (((around - half) * sr) as usize, ((around + half) * sr) as usize);
+    (0..48)
+        .map(|click| {
+            let level = |n: usize| frames.get(click * period + n).map_or(0.0, |f| f64::from(f[side].abs()));
+            let peak = (from..to).max_by(|&a, &b| level(a).total_cmp(&level(b))).unwrap_or(from);
+            let (a, b, c) = (level(peak - 1), level(peak), level(peak + 1));
+            let bend = a - 2.0 * b + c;
+            (peak as f64 + if bend == 0.0 { 0.0 } else { 0.5 * (a - c) / bend }) / sr
+        })
+        .collect()
+}
+
+/// Half the spread of `times`, in ms.
+fn swing_ms(times: &[f64]) -> f64 {
+    let (lo, hi) = times.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &t| (lo.min(t), hi.max(t)));
+    (hi - lo) * 500.0
+}
+
+#[test]
+fn spin_reaches_less_far_as_the_predelay_grows() {
+    // Live's swing of each reflection's whole delay per unit of Amount, tracked tap by tap (in
+    // % of the delay): the same up to 5 ms of predelay, then falling as 2 ms over the predelay
+    // less 3 ms, whatever Amount, Rate and Size.
+    for (predelay_ms, share) in [
+        (0.5, 0.994),
+        (2.5, 0.994),
+        (5.0, 0.994),
+        (6.5, 0.567),
+        (8.0, 0.398),
+        (10.0, 0.285),
+        (25.0, 0.0907),
+        (50.0, 0.0425),
+        (100.0, 0.0206),
+        (250.0, 0.0081),
+    ] {
+        let ours = SPIN_FRACTION * spin_reach(predelay_ms) * 100.0;
+        assert!((ours / share - 1.0).abs() < 0.03, "{predelay_ms} ms: {ours:.4} % against {share}");
+    }
+}
+
+#[test]
+fn spin_swings_each_reflection_by_its_whole_delay() {
+    // Live's left reflection at 11.43 ms (Amount 17.5) swings 2.08 ms either way at 0.5 ms of
+    // predelay and 0.40 ms at 100 ms; the first, right at the predelay, 0.09 and 0.36 ms.
+    let sr = 44_100.0;
+    for (predelay, side, tap, live) in
+        [(0.0005, 0, 11.429, 2.08), (0.1, 0, 11.429, 0.40), (0.0005, 1, 0.0, 0.09), (0.1, 1, 0.0, 0.36)]
+    {
+        let at = predelay + TAP_OFFSET_SECONDS + tap / 1_000.0;
+        let ours = swing_ms(&arrivals(sr, predelay, 17.5, side, at, 0.003));
+        let expected = 17.5 * SPIN_FRACTION * spin_reach(predelay * 1_000.0) * at * 1_000.0;
+        assert!(
+            (ours / expected - 1.0).abs() < 0.1 || (ours - expected).abs() < 0.03,
+            "{predelay} s, {tap} ms: {ours:.3} ms against {expected:.3}"
+        );
+        assert!((ours - live).abs() < 0.1 + 0.05 * live, "{predelay} s, {tap} ms: {ours:.3} ms against Live's {live}");
+    }
+}
+
+#[test]
+fn filtered_reflections_swing_with_the_direct_one_they_follow() {
+    // The left filtered reflection at 30.27 ms is the first (right) one 30.27 ms later: Live's
+    // hardly moves at 0.5 ms of predelay, where one swinging by its own delay would move 1.5 ms
+    // either way at Amount 5.
+    let sr = 44_100.0;
+    let at = 0.0005 + TAP_OFFSET_SECONDS + 0.030_272;
+    let ours = swing_ms(&arrivals(sr, 0.0005, 5.0, 0, at, 0.0003));
+    assert!(ours < 0.05, "{ours:.3} ms");
+}
+
+#[test]
+fn every_filtered_reflection_follows_exactly_one_direct_one() {
+    // As Live's renders with Spin show, at every Density: the faint right taps at 63.95 ms (Mid)
+    // and 56.58 ms (High) follow the ones at 7.37 and 0 ms, and of the two taps at 64.44 ms the
+    // left follows the right one at 34.17 ms and the right the left one at 11.43 ms.
+    for taps in TAP_TABLES {
+        for tap in taps.iter().filter(|tap| tap.filtered) {
+            let matches = FILTERED_OFFSETS
+                .iter()
+                .filter(|&&(_, side)| side == tap.side)
+                .flat_map(|&(frames, _)| {
+                    let offset = frames as f64 * 1_000.0 / REFERENCE_RATE;
+                    taps.iter().filter(move |d| !d.filtered && (tap.ms - d.ms - offset).abs() < 0.0015)
+                })
+                .count();
+            assert_eq!(matches, 1, "{tap:?}");
+        }
+    }
+    // Times to within a frame (each table time carries its fraction of a frame).
+    let source = |taps: &[Tap], ms: f64, side: usize| {
+        let k = taps.iter().position(|t| t.filtered && t.side == side && (t.ms - ms).abs() < 0.02);
+        match k.map(|k| routes(taps)[k]) {
+            Some(Route::Follows { source, .. }) => taps[source].ms,
+            _ => f64::NAN,
+        }
+    };
+    for (taps, ms, side, expected) in [
+        (&TAPS_MID[..], 63.946, RIGHT, 7.370),
+        (&TAPS_HIGH[..], 56.576, RIGHT, 0.0),
+        (&TAPS_HIGH[..], 64.444, LEFT, 34.172),
+        (&TAPS_HIGH[..], 64.444, RIGHT, 11.429),
+    ] {
+        let found = source(taps, ms, side);
+        assert!((found - expected).abs() < 0.02, "{ms} ms: {found} against {expected}");
+    }
+}
+
+#[test]
+fn sparse_and_low_play_their_own_reflections() {
+    // Both run eight lines, so switching between them changes only the reflections.
+    let mut r = reverb(44_100.0, &[(param::DENSITY, 0.0)]);
+    let mut block = vec![0.0f32; 64];
+    r.process(&ProcessContext::default(), &mut block);
+    assert_eq!(r.taps.len(), TAPS_SPARSE.len());
+    r.set_param(param::DENSITY, 1.0);
+    r.process(&ProcessContext::default(), &mut block);
+    assert_eq!(r.taps.len(), TAPS_LOW.len());
+}
+
+#[test]
+fn spin_starts_again_when_playback_starts() {
+    // Live's LFOs have the same phases whenever playback starts, from bar 1 or bar 2 alike.
+    let mut r = reverb(44_100.0, &[(param::SPIN, 1.0)]);
+    let stopped = ProcessContext::default();
+    let playing = ProcessContext { playing: true, ..stopped };
+    let mut block = vec![0.0f32; 512 * 2];
+    for _ in 0..100 {
+        r.process(&stopped, &mut block);
+    }
+    assert_ne!(r.spin_phases, spin_start());
+    r.process(&playing, &mut block);
+    let step = 0.3 * 512.0 / 44_100.0;
+    for ((ours, start), (_, rate, _)) in r.spin_phases.iter().zip(spin_start()).zip(SPIN_VOICES) {
+        assert!((ours - (start + step * rate)).abs() < 1e-9, "{ours} against {start}");
+    }
+    // Playing on does not start it again.
+    let before = r.spin_phases;
+    r.process(&playing, &mut block);
+    assert_ne!(r.spin_phases, before);
+    assert!(r.spin_phases.iter().zip(before).all(|(p, b)| p > &b));
+}
+
+#[test]
 fn the_reflections_fade_with_shape_and_decay_as_measured() {
-    // The left reflection at 41.13 ms against the one at 11.43 ms, both on whole frames at
-    // 44.1 kHz in the reference room, so they keep the same shape through the input filters.
+    // The left reflection at 41.13 ms against the one at 11.43 ms, both read on whole frames at
+    // the default predelay, so they keep the same shape through the input filters.
     let sr = 44_100.0;
     for (shape, decay) in [(0.0, 1.2), (0.5, 1.2), (1.0, 0.5)] {
         let settings =

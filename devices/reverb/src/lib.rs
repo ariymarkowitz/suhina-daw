@@ -71,249 +71,444 @@ const fn tap(ms: f64, side: usize, gain: f64, filtered: bool) -> Tap {
 }
 
 // The early reflections of each Density, as measured at 44.1 kHz (docs/spec/reverb.md
-// › Decisions): times are whole frames at 44.1 kHz in the reference room.
-const TAPS_SPARSE: [Tap; 9] = [
-    tap(0.000, RIGHT, 1.5008, DIRECT),
-    tap(26.553, LEFT, -1.4980, DIRECT),
-    tap(37.166, RIGHT, 0.6930, FILTERED),
-    tap(37.211, RIGHT, 0.1117, FILTERED),
-    tap(41.134, LEFT, 1.4991, DIRECT),
-    tap(52.971, RIGHT, 1.2012, FILTERED),
-    tap(53.016, RIGHT, 0.1981, FILTERED),
-    tap(55.646, RIGHT, 1.4936, DIRECT),
-    tap(63.719, RIGHT, 0.0705, FILTERED),
+// › Decisions): times in the reference room, each a whole number of frames at 44.1 kHz plus the
+// fraction by which Live rounds it to a frame (read from where it steps as the predelay moves by
+// tenths of a frame). A filtered reflection keeps the fraction of the direct one it follows.
+const TAPS_SPARSE: [Tap; 32] = [
+    tap(0.0011, RIGHT, 1.5008, DIRECT),
+    tap(26.5367, LEFT, -1.4980, DIRECT),
+    tap(37.1666, RIGHT, 0.6930, FILTERED),
+    tap(37.2120, RIGHT, 0.1117, FILTERED),
+    tap(41.1259, LEFT, 1.4991, DIRECT),
+    tap(52.9716, RIGHT, 1.2012, FILTERED),
+    tap(53.0170, RIGHT, 0.1981, FILTERED),
+    tap(55.6451, RIGHT, 1.4936, DIRECT),
+    tap(63.7022, RIGHT, 0.0812, FILTERED),
+    tap(67.6201, LEFT, -1.0370, FILTERED),
+    tap(67.6655, LEFT, -0.1962, FILTERED),
+    tap(72.3367, LEFT, 0.4495, FILTERED),
+    tap(72.3821, LEFT, 0.0863, FILTERED),
+    tap(78.2914, RIGHT, 1.5633, FILTERED),
+    tap(78.3368, RIGHT, 0.2956, FILTERED),
+    tap(79.5072, RIGHT, -0.7225, FILTERED),
+    tap(79.5526, RIGHT, -0.1358, FILTERED),
+    tap(92.8106, RIGHT, 0.5169, FILTERED),
+    tap(92.8560, RIGHT, 0.0977, FILTERED),
+    tap(94.0964, RIGHT, -0.1441, FILTERED),
+    tap(94.1557, LEFT, -0.0974, FILTERED),
+    tap(98.8723, LEFT, 1.6314, FILTERED),
+    tap(98.9177, LEFT, 0.3114, FILTERED),
+    tap(108.6156, RIGHT, -1.0976, FILTERED),
+    tap(108.6610, RIGHT, -0.2090, FILTERED),
+    tap(108.7449, LEFT, 0.8568, FILTERED),
+    tap(108.7903, LEFT, 0.1599, FILTERED),
+    tap(113.4615, LEFT, -0.0943, FILTERED),
+    tap(123.2641, LEFT, -1.1785, FILTERED),
+    tap(123.3095, LEFT, -0.2247, FILTERED),
+    tap(127.9807, LEFT, -0.5721, FILTERED),
+    tap(128.0261, LEFT, -0.1100, FILTERED),
 ];
-const TAPS_LOW: [Tap; 70] = [
-    tap(0.000, RIGHT, 1.0006, DIRECT),
-    tap(7.370, RIGHT, -1.0015, DIRECT),
-    tap(8.957, RIGHT, 1.0133, FILTERED),
-    tap(11.429, LEFT, 0.9997, DIRECT),
-    tap(16.327, RIGHT, -1.0113, FILTERED),
-    tap(17.914, LEFT, -1.0005, DIRECT),
-    tap(20.385, RIGHT, 0.6052, FILTERED),
-    tap(26.553, LEFT, -0.9953, DIRECT),
-    tap(26.871, RIGHT, 0.0851, FILTERED),
-    tap(28.435, LEFT, 0.9985, DIRECT),
-    tap(30.272, LEFT, -0.6020, FILTERED),
-    tap(34.172, RIGHT, -0.9989, DIRECT),
-    tap(35.510, RIGHT, 0.0910, FILTERED),
-    tap(37.166, RIGHT, 0.1253, FILTERED),
-    tap(37.392, RIGHT, -0.3660, FILTERED),
-    tap(37.642, LEFT, 0.6036, FILTERED),
-    tap(41.134, LEFT, 0.9976, DIRECT),
-    tap(41.701, LEFT, 0.7245, FILTERED),
-    tap(43.129, RIGHT, -0.2250, FILTERED),
-    tap(44.535, RIGHT, -0.1168, FILTERED),
-    tap(48.186, LEFT, -0.3636, FILTERED),
-    tap(48.299, RIGHT, -0.9966, DIRECT),
-    tap(48.594, RIGHT, 0.5363, FILTERED),
-    tap(50.091, RIGHT, 0.6059, FILTERED),
-    tap(52.971, RIGHT, 0.2329, FILTERED),
-    tap(55.079, RIGHT, 0.8618, FILTERED),
-    tap(55.646, RIGHT, 0.9951, DIRECT),
-    tap(56.825, LEFT, -0.3581, FILTERED),
-    tap(57.256, RIGHT, 0.5709, FILTERED),
-    tap(58.707, LEFT, -0.1423, FILTERED),
-    tap(60.340, RIGHT, -0.2436, FILTERED),
-    tap(63.719, RIGHT, 0.8558, FILTERED),
-    tap(64.399, RIGHT, 0.4778, FILTERED),
-    tap(64.444, LEFT, -0.9218, FILTERED),
-    tap(64.603, RIGHT, -0.5960, FILTERED),
-    tap(65.601, RIGHT, 0.8453, FILTERED),
-    tap(67.619, LEFT, -0.6661, FILTERED),
-    tap(70.884, RIGHT, -0.1951, FILTERED),
-    tap(71.338, RIGHT, -0.0884, FILTERED),
-    tap(71.406, LEFT, 0.7380, FILTERED),
-    tap(72.336, LEFT, -0.1142, FILTERED),
-    tap(74.989, LEFT, 0.6729, FILTERED),
-    tap(78.299, RIGHT, 0.5238, FILTERED),
-    tap(78.571, LEFT, -0.1164, FILTERED),
-    tap(79.048, LEFT, 0.4080, FILTERED),
-    tap(79.524, RIGHT, -0.1918, FILTERED),
-    tap(79.705, LEFT, 0.1119, FILTERED),
-    tap(81.406, RIGHT, -0.5369, FILTERED),
-    tap(83.764, LEFT, 0.5699, FILTERED),
-    tap(85.465, RIGHT, -0.3676, FILTERED),
-    tap(85.533, LEFT, 0.6592, FILTERED),
-    tap(85.918, LEFT, 0.1043, FILTERED),
-    tap(87.143, RIGHT, 0.5185, FILTERED),
-    tap(90.249, LEFT, -0.7494, FILTERED),
-    tap(92.812, RIGHT, 0.3672, FILTERED),
-    tap(94.104, RIGHT, 0.4855, FILTERED),
-    tap(94.172, LEFT, 0.6641, FILTERED),
-    tap(96.054, LEFT, -0.5707, FILTERED),
-    tap(98.889, LEFT, -0.7425, FILTERED),
-    tap(100.771, LEFT, 0.6469, FILTERED),
-    tap(101.270, RIGHT, -1.0155, FILTERED),
-    tap(101.791, LEFT, 0.5313, FILTERED),
-    tap(106.508, LEFT, 0.6654, FILTERED),
-    tap(108.617, RIGHT, 1.0143, FILTERED),
-    tap(108.753, LEFT, 0.4033, FILTERED),
-    tap(113.469, LEFT, 0.5671, FILTERED),
-    tap(115.918, LEFT, 0.4828, FILTERED),
-    tap(120.635, LEFT, 0.3813, FILTERED),
-    tap(123.265, LEFT, -0.4962, FILTERED),
-    tap(127.982, LEFT, -0.3889, FILTERED),
+const TAPS_LOW: [Tap; 71] = [
+    tap(0.0011, RIGHT, 1.0006, DIRECT),
+    tap(7.3707, RIGHT, -1.0015, DIRECT),
+    tap(8.9580, RIGHT, 1.0133, FILTERED),
+    tap(11.4138, LEFT, 0.9997, DIRECT),
+    tap(16.3276, RIGHT, -1.0113, FILTERED),
+    tap(17.9059, LEFT, -1.0005, DIRECT),
+    tap(20.3707, RIGHT, 0.6052, FILTERED),
+    tap(26.5367, LEFT, -0.9953, DIRECT),
+    tap(26.8628, RIGHT, 0.0851, FILTERED),
+    tap(28.4206, LEFT, 0.9985, DIRECT),
+    tap(30.2732, LEFT, -0.6020, FILTERED),
+    tap(34.1757, RIGHT, -0.9989, DIRECT),
+    tap(35.4936, RIGHT, 0.0836, FILTERED),
+    tap(37.1666, RIGHT, 0.1205, FILTERED),
+    tap(37.3775, RIGHT, -0.3660, FILTERED),
+    tap(37.6428, LEFT, 0.6036, FILTERED),
+    tap(41.1259, LEFT, 0.9976, DIRECT),
+    tap(41.6859, LEFT, 0.7245, FILTERED),
+    tap(43.1326, RIGHT, -0.2250, FILTERED),
+    tap(44.5362, RIGHT, -0.1168, FILTERED),
+    tap(48.1780, LEFT, -0.3636, FILTERED),
+    tap(48.2846, RIGHT, -0.9966, DIRECT),
+    tap(48.5793, RIGHT, 0.5363, FILTERED),
+    tap(50.0828, RIGHT, 0.6059, FILTERED),
+    tap(52.9716, RIGHT, 0.2329, FILTERED),
+    tap(55.0714, RIGHT, 0.8618, FILTERED),
+    tap(55.6451, RIGHT, 0.9951, DIRECT),
+    tap(56.8088, LEFT, -0.3581, FILTERED),
+    tap(57.2415, RIGHT, 0.5709, FILTERED),
+    tap(58.6927, LEFT, -0.1423, FILTERED),
+    tap(60.3412, RIGHT, -0.2308, FILTERED),
+    tap(63.7022, RIGHT, 0.8558, FILTERED),
+    tap(64.3843, RIGHT, 0.4778, FILTERED),
+    tap(64.4478, LEFT, -0.9218, FILTERED),
+    tap(64.6020, RIGHT, -0.5960, FILTERED),
+    tap(65.5861, RIGHT, 0.8453, FILTERED),
+    tap(67.6201, LEFT, -0.6661, FILTERED),
+    tap(70.8764, RIGHT, -0.1846, FILTERED),
+    tap(71.3412, RIGHT, -0.0805, FILTERED),
+    tap(71.3980, LEFT, 0.7380, FILTERED),
+    tap(72.3367, LEFT, -0.1142, FILTERED),
+    tap(74.9897, LEFT, 0.6729, FILTERED),
+    tap(78.2914, RIGHT, 0.5238, FILTERED),
+    tap(78.5567, LEFT, -0.1164, FILTERED),
+    tap(79.0328, LEFT, 0.4080, FILTERED),
+    tap(79.5072, RIGHT, -0.1849, FILTERED),
+    tap(79.7063, LEFT, 0.1119, FILTERED),
+    tap(81.3911, RIGHT, -0.5148, FILTERED),
+    tap(81.4365, RIGHT, -0.0453, FILTERED),
+    tap(83.7494, LEFT, 0.5699, FILTERED),
+    tap(85.4501, RIGHT, -0.3523, FILTERED),
+    tap(85.5249, LEFT, 0.6592, FILTERED),
+    tap(85.9172, LEFT, 0.1134, FILTERED),
+    tap(87.1462, RIGHT, 0.5185, FILTERED),
+    tap(90.2415, LEFT, -0.7494, FILTERED),
+    tap(92.8106, RIGHT, 0.3672, FILTERED),
+    tap(94.0964, RIGHT, 0.4855, FILTERED),
+    tap(94.1557, LEFT, 0.6641, FILTERED),
+    tap(96.0396, LEFT, -0.5707, FILTERED),
+    tap(98.8723, LEFT, -0.7425, FILTERED),
+    tap(100.7562, LEFT, 0.6469, FILTERED),
+    tap(101.2551, RIGHT, -1.0155, FILTERED),
+    tap(101.7947, LEFT, 0.5313, FILTERED),
+    tap(106.5113, LEFT, 0.6654, FILTERED),
+    tap(108.6156, RIGHT, 1.0143, FILTERED),
+    tap(108.7449, LEFT, 0.4033, FILTERED),
+    tap(113.4615, LEFT, 0.5671, FILTERED),
+    tap(115.9036, LEFT, 0.4828, FILTERED),
+    tap(120.6202, LEFT, 0.3813, FILTERED),
+    tap(123.2641, LEFT, -0.4962, FILTERED),
+    tap(127.9807, LEFT, -0.3889, FILTERED),
 ];
-const TAPS_MID: [Tap; 68] = [
-    tap(0.000, RIGHT, 0.9999, DIRECT),
-    tap(7.370, RIGHT, 0.9984, DIRECT),
-    tap(8.957, RIGHT, -0.3243, FILTERED),
-    tap(9.002, RIGHT, -0.0930, FILTERED),
-    tap(11.429, LEFT, 0.9975, DIRECT),
-    tap(16.327, RIGHT, -0.0959, FILTERED),
-    tap(17.914, RIGHT, -1.0004, DIRECT),
-    tap(20.385, RIGHT, -0.2883, FILTERED),
-    tap(20.431, RIGHT, -0.0751, FILTERED),
-    tap(21.769, LEFT, 0.2313, FILTERED),
-    tap(21.814, LEFT, 0.0552, FILTERED),
-    tap(26.553, LEFT, -0.9997, DIRECT),
-    tap(26.871, RIGHT, 0.3325, FILTERED),
-    tap(26.916, RIGHT, 0.0901, FILTERED),
-    tap(28.435, LEFT, 0.9947, DIRECT),
-    tap(29.138, LEFT, -0.5521, FILTERED),
-    tap(29.184, LEFT, -0.1745, FILTERED),
-    tap(30.272, LEFT, 0.5428, FILTERED),
-    tap(30.317, LEFT, 0.1487, FILTERED),
-    tap(34.172, RIGHT, -0.9990, DIRECT),
-    tap(35.510, RIGHT, 0.7019, FILTERED),
-    tap(35.556, RIGHT, 0.2115, FILTERED),
-    tap(37.166, RIGHT, 0.4920, FILTERED),
-    tap(37.211, RIGHT, 0.1396, FILTERED),
-    tap(37.392, RIGHT, -0.2298, FILTERED),
-    tap(37.438, RIGHT, -0.0672, FILTERED),
-    tap(37.642, LEFT, 0.3740, FILTERED),
-    tap(37.687, LEFT, 0.1050, FILTERED),
-    tap(39.683, LEFT, -0.2365, FILTERED),
-    tap(39.728, LEFT, -0.0703, FILTERED),
-    tap(41.134, LEFT, 0.9948, DIRECT),
-    tap(41.701, LEFT, -0.4166, FILTERED),
-    tap(41.746, LEFT, -0.1356, FILTERED),
-    tap(43.129, RIGHT, 0.0909, FILTERED),
-    tap(44.535, RIGHT, -0.0578, FILTERED),
-    tap(48.186, LEFT, -0.5616, FILTERED),
-    tap(48.231, LEFT, -0.1676, FILTERED),
-    tap(48.299, RIGHT, 0.9974, DIRECT),
-    tap(48.322, LEFT, 0.0534, FILTERED),
-    tap(48.594, RIGHT, 0.1661, FILTERED),
-    tap(50.091, RIGHT, 0.3534, FILTERED),
-    tap(50.136, RIGHT, 0.0890, FILTERED),
-    tap(50.204, LEFT, 0.7100, FILTERED),
-    tap(50.249, LEFT, 0.2019, FILTERED),
-    tap(52.971, RIGHT, -0.4531, FILTERED),
-    tap(53.016, RIGHT, -0.1261, FILTERED),
-    tap(55.079, RIGHT, -0.5074, FILTERED),
-    tap(55.125, RIGHT, -0.1552, FILTERED),
-    tap(55.646, RIGHT, 0.9977, DIRECT),
-    tap(55.941, LEFT, 0.5233, FILTERED),
-    tap(55.986, LEFT, 0.1455, FILTERED),
-    tap(56.531, RIGHT, 0.0881, FILTERED),
-    tap(56.825, LEFT, -0.3520, FILTERED),
-    tap(56.871, LEFT, -0.1065, FILTERED),
-    tap(57.256, RIGHT, 0.4620, FILTERED),
-    tap(57.302, RIGHT, 0.1168, FILTERED),
-    tap(58.707, LEFT, -0.2352, FILTERED),
-    tap(58.753, LEFT, -0.0722, FILTERED),
-    tap(60.340, RIGHT, -0.1047, FILTERED),
-    tap(62.902, LEFT, 0.3710, FILTERED),
-    tap(62.948, LEFT, 0.0919, FILTERED),
-    tap(63.719, RIGHT, 0.1637, FILTERED),
-    tap(63.900, RIGHT, -0.3854, FILTERED),
-    tap(63.946, RIGHT, -0.1070, FILTERED),
-    tap(64.399, RIGHT, -0.5616, FILTERED),
-    tap(64.444, LEFT, -0.3751, FILTERED),
-    tap(64.444, RIGHT, -0.1646, FILTERED),
-    tap(64.490, LEFT, -0.1110, FILTERED),
+const TAPS_MID: [Tap; 141] = [
+    tap(0.0011, RIGHT, 0.9999, DIRECT),
+    tap(7.3707, RIGHT, 0.9984, DIRECT),
+    tap(8.9580, RIGHT, -0.3406, FILTERED),
+    tap(9.0034, RIGHT, -0.0977, FILTERED),
+    tap(11.4138, LEFT, 0.9975, DIRECT),
+    tap(16.3276, RIGHT, -0.1072, FILTERED),
+    tap(17.9059, RIGHT, -1.0004, DIRECT),
+    tap(20.3707, RIGHT, -0.3169, FILTERED),
+    tap(20.4161, RIGHT, -0.0825, FILTERED),
+    tap(21.7698, LEFT, 0.2524, FILTERED),
+    tap(21.8152, LEFT, 0.0602, FILTERED),
+    tap(26.5367, LEFT, -0.9997, DIRECT),
+    tap(26.8628, RIGHT, 0.3325, FILTERED),
+    tap(26.9082, RIGHT, 0.0901, FILTERED),
+    tap(28.4206, LEFT, 0.9947, DIRECT),
+    tap(29.1394, LEFT, -0.5521, FILTERED),
+    tap(29.1848, LEFT, -0.1745, FILTERED),
+    tap(30.2732, LEFT, 0.5743, FILTERED),
+    tap(30.3186, LEFT, 0.1573, FILTERED),
+    tap(34.1757, RIGHT, -0.9990, DIRECT),
+    tap(35.4936, RIGHT, 0.7019, FILTERED),
+    tap(35.5390, RIGHT, 0.2115, FILTERED),
+    tap(37.1666, RIGHT, 0.5107, FILTERED),
+    tap(37.2120, RIGHT, 0.1449, FILTERED),
+    tap(37.3775, RIGHT, -0.2382, FILTERED),
+    tap(37.4229, RIGHT, -0.0697, FILTERED),
+    tap(37.6428, LEFT, 0.3908, FILTERED),
+    tap(37.6882, LEFT, 0.1097, FILTERED),
+    tap(39.6746, LEFT, -0.2365, FILTERED),
+    tap(39.7200, LEFT, -0.0703, FILTERED),
+    tap(41.1259, LEFT, 0.9948, DIRECT),
+    tap(41.6859, LEFT, -0.3987, FILTERED),
+    tap(41.7313, LEFT, -0.1298, FILTERED),
+    tap(43.1326, RIGHT, 0.1066, FILTERED),
+    tap(44.5362, RIGHT, -0.0631, FILTERED),
+    tap(48.1780, LEFT, -0.5616, FILTERED),
+    tap(48.2234, LEFT, -0.1676, FILTERED),
+    tap(48.2846, RIGHT, 0.9974, DIRECT),
+    tap(48.3054, LEFT, 0.0661, FILTERED),
+    tap(48.5793, RIGHT, 0.2133, FILTERED),
+    tap(50.0828, RIGHT, 0.3925, FILTERED),
+    tap(50.1282, RIGHT, 0.0989, FILTERED),
+    tap(50.1893, LEFT, 0.7381, FILTERED),
+    tap(50.2347, LEFT, 0.2099, FILTERED),
+    tap(52.9716, RIGHT, -0.4531, FILTERED),
+    tap(53.0170, RIGHT, -0.1261, FILTERED),
+    tap(55.0714, RIGHT, -0.5074, FILTERED),
+    tap(55.1168, RIGHT, -0.1552, FILTERED),
+    tap(55.6451, RIGHT, 0.9977, DIRECT),
+    tap(55.9444, LEFT, 0.5482, FILTERED),
+    tap(55.9898, LEFT, 0.1524, FILTERED),
+    tap(56.5317, RIGHT, 0.1187, FILTERED),
+    tap(56.8088, LEFT, -0.3520, FILTERED),
+    tap(56.8542, LEFT, -0.1065, FILTERED),
+    tap(57.2415, RIGHT, 0.4944, FILTERED),
+    tap(57.2869, RIGHT, 0.1250, FILTERED),
+    tap(58.6927, LEFT, -0.2352, FILTERED),
+    tap(58.7381, LEFT, -0.0722, FILTERED),
+    tap(60.3412, RIGHT, -0.1112, FILTERED),
+    tap(62.8946, LEFT, 0.3962, FILTERED),
+    tap(62.9400, LEFT, 0.0981, FILTERED),
+    tap(63.7022, RIGHT, 0.2058, FILTERED),
+    tap(63.9013, RIGHT, -0.3854, FILTERED),
+    tap(63.9467, RIGHT, -0.1070, FILTERED),
+    tap(64.3843, RIGHT, -0.5616, FILTERED),
+    tap(64.4297, RIGHT, -0.1646, FILTERED),
+    tap(64.4478, LEFT, -0.3883, FILTERED),
+    tap(64.4932, LEFT, -0.1149, FILTERED),
+    tap(67.6201, LEFT, -0.0821, FILTERED),
+    tap(67.9444, RIGHT, 0.3581, FILTERED),
+    tap(67.9898, RIGHT, 0.1244, FILTERED),
+    tap(70.8764, RIGHT, 0.4534, FILTERED),
+    tap(70.9218, RIGHT, 0.1548, FILTERED),
+    tap(71.3412, RIGHT, 0.0604, FILTERED),
+    tap(71.3980, LEFT, 0.3937, FILTERED),
+    tap(71.4434, LEFT, 0.1351, FILTERED),
+    tap(72.3367, LEFT, -0.4124, FILTERED),
+    tap(72.3821, LEFT, -0.1416, FILTERED),
+    tap(74.4365, RIGHT, -0.1176, FILTERED),
+    tap(74.9897, LEFT, 0.7106, FILTERED),
+    tap(75.0351, LEFT, 0.2435, FILTERED),
+    tap(77.4138, LEFT, -0.3345, FILTERED),
+    tap(77.4592, LEFT, -0.1127, FILTERED),
+    tap(78.2914, RIGHT, 0.3558, FILTERED),
+    tap(78.3368, RIGHT, 0.1226, FILTERED),
+    tap(78.5567, LEFT, 0.2807, FILTERED),
+    tap(78.6021, LEFT, 0.0965, FILTERED),
+    tap(79.0328, LEFT, 0.2079, FILTERED),
+    tap(79.0782, LEFT, 0.0718, FILTERED),
+    tap(79.5072, RIGHT, -0.3492, FILTERED),
+    tap(79.5526, RIGHT, -0.1195, FILTERED),
+    tap(79.7063, LEFT, 0.1164, FILTERED),
+    tap(83.0673, RIGHT, 0.0799, FILTERED),
+    tap(83.7494, LEFT, 0.5850, FILTERED),
+    tap(83.7948, LEFT, 0.2020, FILTERED),
+    tap(84.9512, RIGHT, -0.6379, FILTERED),
+    tap(84.9966, RIGHT, -0.2192, FILTERED),
+    tap(85.4501, RIGHT, -0.0907, FILTERED),
+    tap(85.5249, LEFT, 0.0779, FILTERED),
+    tap(85.9172, LEFT, -0.2990, FILTERED),
+    tap(85.9626, LEFT, -0.1029, FILTERED),
+    tap(87.1462, RIGHT, 0.1114, FILTERED),
+    tap(90.2415, LEFT, 0.4140, FILTERED),
+    tap(90.2869, LEFT, 0.1431, FILTERED),
+    tap(90.7063, RIGHT, 0.3803, FILTERED),
+    tap(90.7517, RIGHT, 0.1313, FILTERED),
+    tap(92.8106, RIGHT, 0.8147, FILTERED),
+    tap(92.8560, RIGHT, 0.2809, FILTERED),
+    tap(94.0964, RIGHT, 0.3944, FILTERED),
+    tap(94.1418, RIGHT, 0.1399, FILTERED),
+    tap(94.1557, LEFT, 0.3849, FILTERED),
+    tap(94.2011, LEFT, 0.1295, FILTERED),
+    tap(96.0396, LEFT, 0.2794, FILTERED),
+    tap(96.0850, LEFT, 0.0963, FILTERED),
+    tap(97.6565, RIGHT, 0.2957, FILTERED),
+    tap(97.7019, RIGHT, 0.0995, FILTERED),
+    tap(98.8723, LEFT, -0.4452, FILTERED),
+    tap(98.9177, LEFT, -0.1534, FILTERED),
+    tap(100.7562, LEFT, 0.0486, FILTERED),
+    tap(101.2551, RIGHT, -0.4889, FILTERED),
+    tap(101.3005, RIGHT, -0.1700, FILTERED),
+    tap(101.7947, LEFT, -0.7145, FILTERED),
+    tap(101.8401, LEFT, -0.2464, FILTERED),
+    tap(104.8152, RIGHT, -0.4333, FILTERED),
+    tap(104.8606, RIGHT, -0.1486, FILTERED),
+    tap(106.5113, LEFT, -0.1223, FILTERED),
+    tap(108.6156, RIGHT, 0.2520, FILTERED),
+    tap(108.6610, RIGHT, 0.0862, FILTERED),
+    tap(108.7449, LEFT, 0.2963, FILTERED),
+    tap(108.7903, LEFT, 0.1133, FILTERED),
+    tap(112.1757, RIGHT, -0.3706, FILTERED),
+    tap(112.2211, RIGHT, -0.1291, FILTERED),
+    tap(113.4615, LEFT, 0.4535, FILTERED),
+    tap(113.5069, LEFT, 0.1567, FILTERED),
+    tap(115.9036, LEFT, -0.4425, FILTERED),
+    tap(115.9490, LEFT, -0.1507, FILTERED),
+    tap(120.6202, LEFT, 0.3906, FILTERED),
+    tap(120.6656, LEFT, 0.1344, FILTERED),
+    tap(123.2641, LEFT, -0.2013, FILTERED),
+    tap(123.3095, LEFT, -0.0695, FILTERED),
+    tap(127.9807, LEFT, 0.0725, FILTERED),
 ];
-const TAPS_HIGH: [Tap; 82] = [
-    tap(0.000, RIGHT, 1.0004, DIRECT),
-    tap(7.370, RIGHT, 0.9988, DIRECT),
-    tap(8.957, RIGHT, -0.5414, FILTERED),
-    tap(9.002, RIGHT, -0.1130, FILTERED),
-    tap(11.429, LEFT, 1.0015, DIRECT),
-    tap(16.327, RIGHT, -0.1198, FILTERED),
-    tap(17.914, LEFT, -0.9986, DIRECT),
-    tap(20.385, RIGHT, -0.0536, FILTERED),
-    tap(21.769, LEFT, 0.5502, FILTERED),
-    tap(21.814, LEFT, 0.1266, FILTERED),
-    tap(26.553, LEFT, -0.9944, DIRECT),
-    tap(26.871, RIGHT, 0.6640, FILTERED),
-    tap(26.916, RIGHT, 0.1495, FILTERED),
-    tap(28.435, LEFT, 0.9996, DIRECT),
-    tap(29.138, LEFT, -0.1803, FILTERED),
-    tap(33.197, LEFT, -0.3384, FILTERED),
-    tap(33.243, LEFT, -0.0642, FILTERED),
-    tap(34.172, RIGHT, -0.9995, DIRECT),
-    tap(35.510, RIGHT, -0.5205, FILTERED),
-    tap(35.556, RIGHT, -0.0994, FILTERED),
-    tap(37.166, RIGHT, -0.3920, FILTERED),
-    tap(37.211, RIGHT, -0.0858, FILTERED),
-    tap(37.392, RIGHT, -0.0612, FILTERED),
-    tap(37.642, LEFT, -0.5796, FILTERED),
-    tap(37.687, LEFT, -0.1241, FILTERED),
-    tap(39.683, LEFT, 0.3041, FILTERED),
-    tap(39.728, LEFT, 0.0711, FILTERED),
-    tap(41.134, LEFT, 1.0016, DIRECT),
-    tap(41.701, LEFT, -0.2980, FILTERED),
-    tap(41.746, LEFT, -0.0792, FILTERED),
-    tap(43.129, RIGHT, -0.0932, FILTERED),
-    tap(44.535, RIGHT, 0.1600, FILTERED),
-    tap(44.580, RIGHT, 0.0441, FILTERED),
-    tap(48.186, LEFT, 0.4243, FILTERED),
-    tap(48.231, LEFT, 0.0891, FILTERED),
-    tap(48.299, RIGHT, 0.9996, DIRECT),
-    tap(48.322, LEFT, -0.5038, FILTERED),
-    tap(48.367, LEFT, -0.1114, FILTERED),
-    tap(48.594, RIGHT, -0.2113, FILTERED),
-    tap(48.639, RIGHT, -0.0503, FILTERED),
-    tap(50.091, RIGHT, 0.1738, FILTERED),
-    tap(50.204, LEFT, 0.2577, FILTERED),
-    tap(50.249, LEFT, 0.0575, FILTERED),
-    tap(52.971, RIGHT, 0.2971, FILTERED),
-    tap(53.016, RIGHT, 0.0592, FILTERED),
-    tap(54.240, LEFT, -0.3783, FILTERED),
-    tap(54.286, LEFT, -0.0722, FILTERED),
-    tap(54.331, RIGHT, -0.3856, FILTERED),
-    tap(54.376, RIGHT, -0.0799, FILTERED),
-    tap(55.079, RIGHT, -0.3337, FILTERED),
-    tap(55.125, RIGHT, -0.0902, FILTERED),
-    tap(55.646, RIGHT, 0.9986, DIRECT),
-    tap(55.941, LEFT, -0.2493, FILTERED),
-    tap(55.986, LEFT, -0.0456, FILTERED),
-    tap(56.531, RIGHT, -0.4672, FILTERED),
-    tap(56.576, RIGHT, -0.1130, FILTERED),
-    tap(56.825, LEFT, 0.4531, FILTERED),
-    tap(56.871, LEFT, 0.0984, FILTERED),
-    tap(57.256, RIGHT, 0.2385, FILTERED),
-    tap(57.302, RIGHT, 0.0468, FILTERED),
-    tap(58.390, RIGHT, 0.3103, FILTERED),
-    tap(58.435, RIGHT, 0.0613, FILTERED),
-    tap(58.707, LEFT, -0.0976, FILTERED),
-    tap(60.340, RIGHT, -0.1917, FILTERED),
-    tap(60.385, RIGHT, -0.0504, FILTERED),
-    tap(61.610, LEFT, -0.4693, FILTERED),
-    tap(61.655, LEFT, -0.1009, FILTERED),
-    tap(62.902, LEFT, -0.1595, FILTERED),
-    tap(63.719, RIGHT, -0.0854, FILTERED),
-    tap(63.900, RIGHT, -0.2018, FILTERED),
-    tap(64.399, RIGHT, 0.6327, FILTERED),
-    tap(64.444, LEFT, 0.4632, FILTERED),
-    tap(64.444, RIGHT, 0.1422, FILTERED),
-    tap(64.490, LEFT, 0.1039, FILTERED),
-    tap(64.603, RIGHT, 0.3208, FILTERED),
-    tap(64.649, RIGHT, 0.0637, FILTERED),
-    tap(64.875, RIGHT, -0.2754, FILTERED),
-    tap(64.921, RIGHT, -0.0610, FILTERED),
-    tap(65.601, RIGHT, 0.4961, FILTERED),
-    tap(65.646, RIGHT, 0.1092, FILTERED),
-    tap(65.669, LEFT, -0.2511, FILTERED),
-    tap(65.714, LEFT, -0.0461, FILTERED),
+const TAPS_HIGH: [Tap; 178] = [
+    tap(0.0011, RIGHT, 1.0004, DIRECT),
+    tap(7.3707, RIGHT, 0.9988, DIRECT),
+    tap(8.9580, RIGHT, -0.5414, FILTERED),
+    tap(9.0034, RIGHT, -0.1130, FILTERED),
+    tap(11.4138, LEFT, 1.0015, DIRECT),
+    tap(16.3276, RIGHT, -0.1320, FILTERED),
+    tap(17.9059, LEFT, -0.9986, DIRECT),
+    tap(20.3707, RIGHT, -0.0587, FILTERED),
+    tap(21.7698, LEFT, 0.5502, FILTERED),
+    tap(21.8152, LEFT, 0.1266, FILTERED),
+    tap(26.5367, LEFT, -0.9944, DIRECT),
+    tap(26.8628, RIGHT, 0.6640, FILTERED),
+    tap(26.9082, RIGHT, 0.1495, FILTERED),
+    tap(28.4206, LEFT, 0.9996, DIRECT),
+    tap(29.1394, LEFT, -0.1926, FILTERED),
+    tap(33.1825, LEFT, -0.3564, FILTERED),
+    tap(33.2279, LEFT, -0.0676, FILTERED),
+    tap(34.1757, RIGHT, -0.9995, DIRECT),
+    tap(35.4936, RIGHT, -0.5518, FILTERED),
+    tap(35.5390, RIGHT, -0.1054, FILTERED),
+    tap(37.1666, RIGHT, -0.3920, FILTERED),
+    tap(37.2120, RIGHT, -0.0858, FILTERED),
+    tap(37.3775, RIGHT, -0.0776, FILTERED),
+    tap(37.6428, LEFT, -0.6022, FILTERED),
+    tap(37.6882, LEFT, -0.1289, FILTERED),
+    tap(39.6746, LEFT, 0.2935, FILTERED),
+    tap(39.7200, LEFT, 0.0686, FILTERED),
+    tap(41.1259, LEFT, 1.0016, DIRECT),
+    tap(41.6859, LEFT, -0.2806, FILTERED),
+    tap(41.7313, LEFT, -0.0746, FILTERED),
+    tap(43.1326, RIGHT, -0.1072, FILTERED),
+    tap(44.5362, RIGHT, 0.1515, FILTERED),
+    tap(44.5816, RIGHT, 0.0418, FILTERED),
+    tap(48.1780, LEFT, 0.4243, FILTERED),
+    tap(48.2234, LEFT, 0.0891, FILTERED),
+    tap(48.2846, RIGHT, 0.9996, DIRECT),
+    tap(48.3054, LEFT, -0.5038, FILTERED),
+    tap(48.3508, LEFT, -0.1114, FILTERED),
+    tap(48.5793, RIGHT, -0.1971, FILTERED),
+    tap(48.6247, RIGHT, -0.0469, FILTERED),
+    tap(50.0828, RIGHT, 0.2066, FILTERED),
+    tap(50.1893, LEFT, 0.2703, FILTERED),
+    tap(50.2347, LEFT, 0.0603, FILTERED),
+    tap(52.9716, RIGHT, 0.2971, FILTERED),
+    tap(53.0170, RIGHT, 0.0592, FILTERED),
+    tap(54.2415, LEFT, -0.3951, FILTERED),
+    tap(54.2868, LEFT, -0.0754, FILTERED),
+    tap(54.3322, RIGHT, -0.4101, FILTERED),
+    tap(54.3775, RIGHT, -0.0850, FILTERED),
+    tap(55.0714, RIGHT, -0.3133, FILTERED),
+    tap(55.1168, RIGHT, -0.0847, FILTERED),
+    tap(55.6451, RIGHT, 0.9986, DIRECT),
+    tap(55.9444, LEFT, -0.2752, FILTERED),
+    tap(55.9898, LEFT, -0.0503, FILTERED),
+    tap(56.5317, RIGHT, -0.4672, FILTERED),
+    tap(56.5771, RIGHT, -0.1130, FILTERED),
+    tap(56.8088, LEFT, 0.4531, FILTERED),
+    tap(56.8542, LEFT, 0.0984, FILTERED),
+    tap(57.2415, RIGHT, 0.2579, FILTERED),
+    tap(57.2869, RIGHT, 0.0506, FILTERED),
+    tap(58.3753, RIGHT, 0.3353, FILTERED),
+    tap(58.4206, RIGHT, 0.0662, FILTERED),
+    tap(58.6927, LEFT, -0.1114, FILTERED),
+    tap(60.3412, RIGHT, -0.1852, FILTERED),
+    tap(60.3866, RIGHT, -0.0487, FILTERED),
+    tap(61.6111, LEFT, -0.4870, FILTERED),
+    tap(61.6564, LEFT, -0.1047, FILTERED),
+    tap(62.8946, LEFT, -0.1875, FILTERED),
+    tap(63.7022, RIGHT, -0.0933, FILTERED),
+    tap(63.9013, RIGHT, -0.2343, FILTERED),
+    tap(64.3843, RIGHT, 0.6327, FILTERED),
+    tap(64.4297, RIGHT, 0.1422, FILTERED),
+    tap(64.4478, LEFT, 0.4632, FILTERED),
+    tap(64.4932, LEFT, 0.1039, FILTERED),
+    tap(64.6020, RIGHT, 0.3493, FILTERED),
+    tap(64.6474, RIGHT, 0.0694, FILTERED),
+    tap(64.8674, RIGHT, -0.2754, FILTERED),
+    tap(64.9127, RIGHT, -0.0610, FILTERED),
+    tap(65.5861, RIGHT, 0.4961, FILTERED),
+    tap(65.6315, RIGHT, 0.1092, FILTERED),
+    tap(65.6542, LEFT, -0.2769, FILTERED),
+    tap(65.6995, LEFT, -0.0508, FILTERED),
+    tap(67.9444, RIGHT, 0.2871, FILTERED),
+    tap(67.9898, RIGHT, 0.0764, FILTERED),
+    tap(70.8764, RIGHT, 0.2908, FILTERED),
+    tap(70.9218, RIGHT, 0.0761, FILTERED),
+    tap(71.3412, RIGHT, 0.3763, FILTERED),
+    tap(71.3866, RIGHT, 0.0986, FILTERED),
+    tap(71.3980, LEFT, 0.3208, FILTERED),
+    tap(71.4434, LEFT, 0.0844, FILTERED),
+    tap(72.1463, LEFT, -0.1244, FILTERED),
+    tap(72.3367, LEFT, 0.2501, FILTERED),
+    tap(72.3821, LEFT, 0.0664, FILTERED),
+    tap(73.4982, RIGHT, -0.3412, FILTERED),
+    tap(73.5435, RIGHT, -0.0898, FILTERED),
+    tap(74.4365, RIGHT, -0.1452, FILTERED),
+    tap(74.4819, RIGHT, -0.0405, FILTERED),
+    tap(74.9897, LEFT, -0.2268, FILTERED),
+    tap(75.0351, LEFT, -0.0599, FILTERED),
+    tap(75.3821, RIGHT, 0.5496, FILTERED),
+    tap(75.4274, RIGHT, 0.1442, FILTERED),
+    tap(77.4138, LEFT, -0.5528, FILTERED),
+    tap(77.4592, LEFT, -0.1470, FILTERED),
+    tap(78.2914, RIGHT, 0.3824, FILTERED),
+    tap(78.3368, RIGHT, 0.1015, FILTERED),
+    tap(78.5567, LEFT, -0.2883, FILTERED),
+    tap(78.6021, LEFT, -0.0752, FILTERED),
+    tap(79.0328, LEFT, 0.5694, FILTERED),
+    tap(79.0782, LEFT, 0.1506, FILTERED),
+    tap(79.5072, RIGHT, 0.3736, FILTERED),
+    tap(79.5526, RIGHT, 0.0995, FILTERED),
+    tap(79.7063, LEFT, -0.5745, FILTERED),
+    tap(79.7517, LEFT, -0.1509, FILTERED),
+    tap(80.7771, LEFT, 0.3132, FILTERED),
+    tap(80.8224, LEFT, 0.0832, FILTERED),
+    tap(81.1372, RIGHT, -0.0825, FILTERED),
+    tap(81.3911, RIGHT, 0.2987, FILTERED),
+    tap(81.4365, RIGHT, 0.0785, FILTERED),
+    tap(82.6610, LEFT, 0.3816, FILTERED),
+    tap(82.7063, LEFT, 0.1034, FILTERED),
+    tap(83.7494, LEFT, -0.1817, FILTERED),
+    tap(83.7948, LEFT, -0.0503, FILTERED),
+    tap(84.9512, RIGHT, -0.4406, FILTERED),
+    tap(84.9966, RIGHT, -0.1174, FILTERED),
+    tap(85.4501, RIGHT, 0.4401, FILTERED),
+    tap(85.4955, RIGHT, 0.1154, FILTERED),
+    tap(85.9172, LEFT, -0.1973, FILTERED),
+    tap(85.9626, LEFT, -0.0533, FILTERED),
+    tap(87.1462, RIGHT, -0.2662, FILTERED),
+    tap(87.1916, RIGHT, -0.0708, FILTERED),
+    tap(88.0874, RIGHT, 0.2976, FILTERED),
+    tap(88.1327, RIGHT, 0.0791, FILTERED),
+    tap(88.4161, LEFT, -0.2689, FILTERED),
+    tap(88.4614, LEFT, -0.0718, FILTERED),
+    tap(90.2415, LEFT, -0.5131, FILTERED),
+    tap(90.2869, LEFT, -0.1356, FILTERED),
+    tap(90.7063, RIGHT, -0.4906, FILTERED),
+    tap(90.7517, RIGHT, -0.1286, FILTERED),
+    tap(92.8106, RIGHT, -0.4514, FILTERED),
+    tap(92.8560, RIGHT, -0.1201, FILTERED),
+    tap(94.0964, RIGHT, 0.2566, FILTERED),
+    tap(94.1418, RIGHT, 0.0651, FILTERED),
+    tap(94.1557, LEFT, -0.3112, FILTERED),
+    tap(94.2011, LEFT, -0.0835, FILTERED),
+    tap(95.2461, RIGHT, -0.5926, FILTERED),
+    tap(95.2914, RIGHT, -0.1544, FILTERED),
+    tap(95.3663, LEFT, -0.6659, FILTERED),
+    tap(95.4116, LEFT, -0.1768, FILTERED),
+    tap(96.0396, LEFT, -0.1242, FILTERED),
+    tap(97.6565, RIGHT, 0.1359, FILTERED),
+    tap(98.8723, LEFT, -0.2426, FILTERED),
+    tap(98.9177, LEFT, -0.0631, FILTERED),
+    tap(100.7562, LEFT, -0.4236, FILTERED),
+    tap(100.8016, LEFT, -0.1119, FILTERED),
+    tap(101.2551, RIGHT, 0.5379, FILTERED),
+    tap(101.3005, RIGHT, 0.1418, FILTERED),
+    tap(101.7947, LEFT, 0.6534, FILTERED),
+    tap(101.8401, LEFT, 0.1723, FILTERED),
+    tap(102.5250, LEFT, 0.1720, FILTERED),
+    tap(102.5703, LEFT, 0.0449, FILTERED),
+    tap(102.6066, RIGHT, 0.2381, FILTERED),
+    tap(102.6519, RIGHT, 0.0647, FILTERED),
+    tap(104.8152, RIGHT, -0.1643, FILTERED),
+    tap(104.8606, RIGHT, -0.0447, FILTERED),
+    tap(108.7449, LEFT, -0.5457, FILTERED),
+    tap(108.7903, LEFT, -0.1357, FILTERED),
+    tap(109.8855, LEFT, 0.1234, FILTERED),
+    tap(112.1757, RIGHT, -0.6560, FILTERED),
+    tap(112.2211, RIGHT, -0.1729, FILTERED),
+    tap(113.4615, LEFT, 0.2213, FILTERED),
+    tap(113.5069, LEFT, 0.0585, FILTERED),
+    tap(115.9036, LEFT, 0.0994, FILTERED),
+    tap(120.6202, LEFT, 0.4507, FILTERED),
+    tap(120.6656, LEFT, 0.1144, FILTERED),
+    tap(123.2641, LEFT, -0.2001, FILTERED),
+    tap(123.3095, LEFT, -0.0567, FILTERED),
+    tap(127.9807, LEFT, 0.2487, FILTERED),
+    tap(128.0261, LEFT, 0.0656, FILTERED),
 ];
 
 /// The tap tables in Density order.
 const TAP_TABLES: [&[Tap]; 4] = [&TAPS_SPARSE, &TAPS_LOW, &TAPS_MID, &TAPS_HIGH];
 /// The most taps a table has.
-const MAX_TAPS: usize = 82;
+const MAX_TAPS: usize = 178;
 /// The reflections are read this long after the predelay (seconds), as measured.
 const TAP_OFFSET_SECONDS: f64 = 3.0 / 44_100.0;
 /// Level of the first reflection against the input, before the predelay's fade.
@@ -323,11 +518,63 @@ const TAP_GAIN: f64 = 0.0942;
 const TAP_FADE: f64 = 0.0328;
 /// How much faster the reflections fade per unit of Shape (dB per ms, times Decay in seconds).
 const TAP_FADE_PER_SHAPE: f64 = 0.0668;
-/// The whole wet signal is this many dB quieter per ms of predelay.
-const PREDELAY_FADE: f64 = 0.0565;
-/// Spin swings every reflection's delay, predelay included, by this fraction of it per unit of
-/// Spin Amount, each at its own phase.
-const SPIN_FRACTION: f64 = 0.0097;
+/// The whole wet signal is this many dB quieter per ms of predelay, times 1 / Decay in seconds
+/// (0.0565 dB per ms at 0.2 s, 0.0094 at 1.2 s).
+const PREDELAY_FADE: f64 = 0.0113;
+/// Spin swings every reflection's whole delay, predelay included, by this fraction of it per unit
+/// of Spin Amount, times [`spin_reach`] (docs/spec/reverb.md › Decisions).
+const SPIN_FRACTION: f64 = 0.009_95;
+/// Above the knee, [`spin_reach`] is this many ms over the predelay less
+/// [`SPIN_REACH_OFFSET_MS`]: a long predelay swings by about the same 2 ms times the fraction
+/// whatever the reflection's own delay.
+const SPIN_REACH_MS: f64 = 2.0;
+/// See [`SPIN_REACH_MS`].
+const SPIN_REACH_OFFSET_MS: f64 = 3.02;
+/// Spin's LFOs, one per direct reflection (the same ten times in every Density): the
+/// reflection's time in the reference room (ms), its rate against Spin Rate and its phase at the
+/// start (radians, of a sine that lengthens the delay), as tracked in Live's renders.
+const SPIN_VOICES: [(f64, f64, f64); 10] = [
+    (0.000, 0.983, 0.66),
+    (7.370, 1.042, 1.69),
+    (11.429, 0.992, 1.20),
+    (17.914, 0.978, 1.54),
+    (26.553, 1.016, 0.52),
+    (28.435, 1.000, 0.86),
+    (34.172, 1.025, 1.01),
+    (41.134, 1.008, 0.17),
+    (48.299, 1.009, 1.38),
+    (55.646, 0.985, 0.33),
+];
+/// The rate the tap tables' frames count at.
+const REFERENCE_RATE: f64 = 44_100.0;
+/// A filtered reflection is a direct one this many frames later (reference room and rate), always
+/// heard on this side, and swings as that one does. The offsets come in pairs two frames apart,
+/// and each pair keeps to one side, as Live's renders show. So the filtered reflections are
+/// played as one delayed mix of the direct ones per offset.
+const FILTERED_OFFSETS: [(usize, usize); 20] = [
+    (395, RIGHT),
+    (397, RIGHT),
+    (960, LEFT),
+    (962, LEFT),
+    (1335, LEFT),
+    (1337, LEFT),
+    (1639, RIGHT),
+    (1641, RIGHT),
+    (2071, RIGHT),
+    (2073, RIGHT),
+    (2336, RIGHT),
+    (2338, RIGHT),
+    (2392, LEFT),
+    (2394, LEFT),
+    (2493, RIGHT),
+    (2495, RIGHT),
+    (2982, LEFT),
+    (2984, LEFT),
+    (3190, LEFT),
+    (3192, LEFT),
+];
+/// Longest delay a filtered offset reaches, at the largest Size (seconds).
+const OFFSET_LINE_SECONDS: f64 = 0.13;
 /// Peak swing of a line's delay per unit of Chorus Amount.
 const CHORUS_SECONDS: f64 = 0.001_8;
 /// The reflections' low-pass: a cookbook low-pass with this Q ...
@@ -628,6 +875,8 @@ struct Tuning {
     tap_gains: [f64; MAX_TAPS],
     /// Each tap's share of the network's input (zero for filtered taps).
     feed_gains: [f64; MAX_TAPS],
+    /// Each of [`FILTERED_OFFSETS`] (frames).
+    offsets: [f64; FILTERED_OFFSETS.len()],
     /// Delay from the predelay to the network's taps (frames).
     shape_delay: f64,
     /// The lines' diffusers' lengths (frames).
@@ -653,6 +902,7 @@ impl Default for Tuning {
             tap_delays: [2.0; MAX_TAPS],
             tap_gains: [0.0; MAX_TAPS],
             feed_gains: [0.0; MAX_TAPS],
+            offsets: [2.0; FILTERED_OFFSETS.len()],
             shape_delay: 2.0,
             diffusers: [2.0; 16],
             lines: [2.0; 16],
@@ -676,6 +926,7 @@ impl Tuning {
         mix(&mut self.tap_delays, &from.tap_delays, &to.tap_delays, t);
         mix(&mut self.tap_gains, &from.tap_gains, &to.tap_gains, t);
         mix(&mut self.feed_gains, &from.feed_gains, &to.feed_gains, t);
+        mix(&mut self.offsets, &from.offsets, &to.offsets, t);
         mix(&mut self.diffusers, &from.diffusers, &to.diffusers, t);
         mix(&mut self.lines, &from.lines, &to.lines, t);
         mix(&mut self.gains, &from.gains, &to.gains, t);
@@ -853,7 +1104,7 @@ ramps! {
     low_cut,
     /// How much of High Cut is heard (0 off, 1 on).
     high_cut,
-    /// Spin's swing, as a fraction of each reflection's delay.
+    /// Spin's swing, as a fraction of each reflection's whole delay before [`spin_reach`].
     spin,
     /// Chorus's swing (frames).
     chorus,
@@ -932,6 +1183,13 @@ pub struct Reverb {
     reflection_filters: [Biquad; 2],
     /// The early reflections of the Density setting.
     taps: &'static [Tap],
+    /// The Density whose reflections [`taps`](Self::taps) are.
+    reflections: usize,
+    /// One line per [`FILTERED_OFFSETS`] entry, holding the mix of direct reflections that
+    /// reflections at that offset play.
+    offset_lines: [DelayLine; FILTERED_OFFSETS.len()],
+    /// Which of [`offset_lines`](Self::offset_lines) the Density setting's reflections play.
+    offsets_used: [bool; FILTERED_OFFSETS.len()],
     /// The predelay line, which the taps and the Shape delay read.
     input: DelayLine,
     /// The predelayed input after the loop's damping, once for [`INPUT_TRIPS`] of a trip, which
@@ -953,8 +1211,8 @@ pub struct Reverb {
     weights: [f64; 16],
     /// Cosine and sine of each line's phase offset.
     chorus_offsets: [(f64, f64); 16],
-    /// Cosine and sine of each reflection's Spin phase offset.
-    spin_offsets: [(f64, f64); MAX_TAPS],
+    /// How each reflection is read.
+    routes: [Route; MAX_TAPS],
     /// The size factor `(size / 100)^(1/3)` as it glides.
     room: f64,
     /// The tuning at the last control point.
@@ -965,10 +1223,12 @@ pub struct Reverb {
     now: Tuning,
     /// Whether `from` and `to` differ, so frames in between need `now`.
     moving: bool,
-    /// Spin's LFO position, in cycles (0..1).
-    spin_phase: f64,
+    /// Spin's LFO positions, in cycles (0..1), one per [`SPIN_VOICES`].
+    spin_phases: [f64; SPIN_VOICES.len()],
     /// Chorus's LFO position, in cycles (0..1).
     chorus_phase: f64,
+    /// Whether the transport ran in the last block: Spin's LFOs start again when it starts.
+    playing: bool,
     /// Frames since the last reset, for the control-rate grid.
     frame: u64,
     /// Whether a parameter changed since the last control update.
@@ -994,6 +1254,55 @@ fn phase_offsets<const N: usize>(first: usize) -> [(f64, f64); N] {
         let p = std::f64::consts::TAU * ((k + first) as f64 * 0.381_966_011_250_105).fract();
         (p.cos(), p.sin())
     })
+}
+
+/// How far Spin reaches with `predelay_ms` of predelay, as a share of [`SPIN_FRACTION`]: all of
+/// it up to the knee (5 ms), then [`SPIN_REACH_MS`] over the predelay less
+/// [`SPIN_REACH_OFFSET_MS`] (0.29 at 10 ms, 0.0083 at 250 ms).
+fn spin_reach(predelay_ms: f64) -> f64 {
+    SPIN_REACH_MS / (predelay_ms - SPIN_REACH_OFFSET_MS).max(SPIN_REACH_MS)
+}
+
+/// How a reflection is read.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Route {
+    /// From the predelay line at its own delay, swinging by it on this LFO of [`SPIN_VOICES`].
+    Own(usize),
+    /// As the direct reflection `source` (its place in the table), one of [`FILTERED_OFFSETS`]
+    /// later.
+    Follows { source: usize, offset: usize },
+}
+
+/// Each tap's [`Reverb::routes`] entry: a direct tap is read at its own delay, on the LFO of its
+/// time; a filtered one follows the direct tap it is one of [`FILTERED_OFFSETS`] on its side
+/// after, or is read at its own delay if it follows none.
+fn routes(taps: &[Tap]) -> [Route; MAX_TAPS] {
+    let voice = |ms: f64| {
+        SPIN_VOICES
+            .iter()
+            .enumerate()
+            .min_by(|a, b| (a.1.0 - ms).abs().total_cmp(&(b.1.0 - ms).abs()))
+            .map_or(0, |(k, _)| k)
+    };
+    let mut routes = [Route::Own(0); MAX_TAPS];
+    for (route, tap) in routes.iter_mut().zip(taps) {
+        let followed = FILTERED_OFFSETS.iter().enumerate().filter(|&(_, &(_, side))| side == tap.side).find_map(
+            |(offset, &(frames, _))| {
+                let ms = frames as f64 * 1_000.0 / REFERENCE_RATE;
+                taps.iter().position(|d| !d.filtered && (tap.ms - d.ms - ms).abs() < 0.0015).map(|d| (d, offset))
+            },
+        );
+        *route = match followed {
+            Some((source, offset)) if tap.filtered => Route::Follows { source, offset },
+            _ => Route::Own(voice(tap.ms)),
+        };
+    }
+    routes
+}
+
+/// Spin's LFO positions at the start, in cycles.
+fn spin_start() -> [f64; SPIN_VOICES.len()] {
+    SPIN_VOICES.map(|(_, _, phase)| phase / std::f64::consts::TAU)
 }
 
 /// The sign of each line's input with `active` lines running (zero for lines not running).
@@ -1039,6 +1348,9 @@ impl Reverb {
             top_cut: Biquad::default(),
             reflection_filters: Default::default(),
             taps: &TAPS_LOW,
+            reflections: LOW,
+            offset_lines: Default::default(),
+            offsets_used: [false; FILTERED_OFFSETS.len()],
             input: DelayLine::default(),
             feed_line: DelayLine::default(),
             input_damper: Damper::default(),
@@ -1049,13 +1361,14 @@ impl Reverb {
             active: 8,
             weights: input_weights(8),
             chorus_offsets: phase_offsets(7),
-            spin_offsets: phase_offsets(0),
+            routes: routes(&TAPS_LOW),
             room: 1.0,
             from: Tuning::default(),
             to: Tuning::default(),
             now: Tuning::default(),
             moving: false,
-            spin_phase: 0.0,
+            spin_phases: spin_start(),
+            playing: false,
             chorus_phase: 0.0,
             frame: 0,
             dirty: true,
@@ -1070,6 +1383,7 @@ impl Reverb {
         let sr = self.sample_rate;
         self.input = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
         self.feed_line = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
+        self.offset_lines = std::array::from_fn(|_| DelayLine::for_seconds(OFFSET_LINE_SECONDS, sr));
         self.lines = std::array::from_fn(|_| Line {
             delay: DelayLine::for_seconds(LINE_SECONDS, sr),
             diffuser: Allpass::for_seconds(DIFFUSER_SECONDS, sr),
@@ -1155,6 +1469,9 @@ impl Reverb {
         }
         self.input.clear();
         self.feed_line.clear();
+        for line in &mut self.offset_lines {
+            line.clear();
+        }
         self.input_damper.clear();
         self.feed_cut = FirstOrder::new(if FEED_CUT < 0.45 * self.sample_rate {
             FirstOrderCoefficients::lowpass(self.sample_rate, FEED_CUT)
@@ -1168,7 +1485,7 @@ impl Reverb {
         self.measured_running = self.value(param::DENSITY) as usize == LOW;
         self.set_active(self.density_lines());
         self.room = self.room_target();
-        self.spin_phase = 0.0;
+        self.spin_phases = spin_start();
         self.chorus_phase = 0.0;
         self.frame = 0;
         self.tune_input();
@@ -1179,10 +1496,27 @@ impl Reverb {
         self.dirty = false;
     }
 
-    /// Runs the first `lines` lines of the network.
+    /// Runs the first `lines` lines of the network, and the Density setting's reflections.
     fn set_active(&mut self, lines: usize) {
         self.active = lines.clamp(1, LINES.len());
-        self.taps = TAP_TABLES.get(self.value(param::DENSITY) as usize).copied().unwrap_or(&TAPS_LOW);
+        self.reflections = self.value(param::DENSITY) as usize;
+        self.taps = TAP_TABLES.get(self.reflections).copied().unwrap_or(&TAPS_LOW);
+        self.routes = routes(self.taps);
+        let mut used = [false; FILTERED_OFFSETS.len()];
+        for route in self.routes.iter().take(self.taps.len()) {
+            if let &Route::Follows { offset, .. } = route
+                && let Some(slot) = used.get_mut(offset)
+            {
+                *slot = true;
+            }
+        }
+        // Offset lines that start again begin silent.
+        for ((line, &now), was) in self.offset_lines.iter_mut().zip(&used).zip(self.offsets_used) {
+            if now && !was {
+                line.clear();
+            }
+        }
+        self.offsets_used = used;
         self.weights = input_weights(self.active);
     }
 
@@ -1228,7 +1562,7 @@ impl Reverb {
         let line_room = line_room(room);
         let stretch = DENSITY_STRETCH.get(density_index).copied().unwrap_or(1.0) * line_room / room;
         let lines = LINES.map(|line| line * stretch);
-        let predelay_gain = db_to_gain(-PREDELAY_FADE * predelay_ms);
+        let predelay_gain = db_to_gain(-PREDELAY_FADE * predelay_ms / setting);
         let taps = self.taps;
         // The network is fed by the direct reflections, each at its own level and fade.
         let norm = taps.iter().filter(|tap| !tap.filtered).map(|tap| tap.gain * tap.gain).sum::<f64>().sqrt().max(1e-9);
@@ -1245,6 +1579,10 @@ impl Reverb {
             if !tap.filtered {
                 *feed = level / norm;
             }
+        }
+        for (offset, (frames, _)) in t.offsets.iter_mut().zip(FILTERED_OFFSETS) {
+            let frames = frames as f64 * room * sr / REFERENCE_RATE;
+            *offset = if settled { frames.round() } else { frames }.max(2.0);
         }
         let (a, b, c) = SHAPE_DELAY_MS;
         t.shape_delay = ((a + (b + c * (shape - 0.5)) * room) * ms).max(0.0);
@@ -1420,10 +1758,16 @@ impl Device for Reverb {
     }
 
     /// Runs interleaved stereo `buffer` through the reverb in place.
-    fn process(&mut self, _context: &ProcessContext, buffer: &mut [f32]) {
+    fn process(&mut self, context: &ProcessContext, buffer: &mut [f32]) {
         let sr = self.sample_rate;
+        // Live's Spin LFOs start from the same phases whenever playback starts.
+        if context.playing && !self.playing {
+            self.spin_phases = spin_start();
+        }
+        self.playing = context.playing;
         let wanted = self.density_lines();
-        if wanted != self.active {
+        // Sparse and Low run as many lines, but not the same reflections.
+        if wanted != self.active || self.reflections != self.value(param::DENSITY) as usize {
             // Lines that start again begin silent.
             for line in self.lines.iter_mut().skip(self.active).take(wanted.saturating_sub(self.active)) {
                 line.clear();
@@ -1506,12 +1850,19 @@ impl Device for Reverb {
             x = top + (self.high_cut.process(x) - top) * high_cut;
             let t = if self.moving { &self.now } else { &self.to };
 
-            // Early reflections and the network's input, read from the predelay line. Spin
-            // stretches each reflection's delay, predelay included, by the same fraction at its own
-            // phase, and the network's input with it; without it, and with nothing moving, the taps
-            // fall on whole frames.
-            let (spin_sin, spin_cos) =
-                if spin_swing > 0.0 { (std::f64::consts::TAU * self.spin_phase).sin_cos() } else { (0.0, 0.0) };
+            // Early reflections and the network's input, read from the predelay line. Spin swings
+            // each direct reflection's whole delay on its own LFO, by a share of it that falls as
+            // the predelay grows, and the network's input with it; a filtered one is the direct
+            // one it follows, a whole number of frames later, so it is played from a mix of the
+            // direct ones per offset. Without Spin, and with nothing moving, the taps fall on
+            // whole frames.
+            let mut spin = [0.0f64; SPIN_VOICES.len()];
+            if spin_swing > 0.0 {
+                let reach = spin_swing * spin_reach(predelay * 1_000.0 / sr);
+                for (s, phase) in spin.iter_mut().zip(&self.spin_phases) {
+                    *s = reach * (std::f64::consts::TAU * phase).sin();
+                }
+            }
             let whole = spin_swing == 0.0 && !self.moving && self.ramps.predelay.is_settled();
             let read_from = |line: &DelayLine, at: f64| {
                 f64::from(if whole { line.read(at.round() as usize) } else { line.read_hermite(at) })
@@ -1524,30 +1875,32 @@ impl Device for Reverb {
             let mut direct_index = 0;
             let mut next_line = 0;
             let mut spread = FIRST_TAP_LINES.clamp(1, active);
-            for ((((tap, &delay), &gain), &share), &(c, s)) in
-                self.taps.iter().zip(&t.tap_delays).zip(&t.tap_gains).zip(&t.feed_gains).zip(&self.spin_offsets)
+            let mut reads = [0.0f64; MAX_TAPS];
+            for (((((tap, &delay), &gain), &share), route), read) in self
+                .taps
+                .iter()
+                .zip(&t.tap_delays)
+                .zip(&t.tap_gains)
+                .zip(&t.feed_gains)
+                .zip(&self.routes)
+                .zip(&mut reads)
             {
-                let stretch = 1.0 + spin_swing * (spin_sin * c + spin_cos * s);
-                let v = read_from(&self.input, (predelay + delay) * stretch) * gain;
+                let &Route::Own(voice) = route else { continue };
+                let at = predelay + delay + spin.get(voice).copied().unwrap_or(0.0) * (predelay + delay);
+                *read = read_from(&self.input, at);
                 let sides = if tap.filtered { &mut filtered } else { &mut direct };
                 if let Some(side) = sides.get_mut(tap.side) {
-                    *side += v;
+                    *side += *read * gain;
                 }
                 if !tap.filtered && measured {
-                    let u = read_from(&self.feed_line, (predelay + delay) * stretch + t.entry)
-                        * share
-                        * feed
-                        * t.measured_feed;
+                    let u = read_from(&self.feed_line, at + t.entry) * share * feed * t.measured_feed;
                     if let Some(group) = measured::TAP_GROUPS.get(direct_index).and_then(|&g| groups.get_mut(g)) {
                         *group += u;
                     }
                     direct_index += 1;
                 } else if !tap.filtered {
-                    let u = read_from(&self.feed_line, (predelay + delay) * stretch + t.shape_delay)
-                        * share
-                        * feed
-                        * t.feed
-                        / (spread as f64).sqrt();
+                    let u =
+                        read_from(&self.feed_line, at + t.shape_delay) * share * feed * t.feed / (spread as f64).sqrt();
                     for j in 0..spread {
                         if let Some(input) = inputs.get_mut((next_line + j * active / spread) % active) {
                             *input += u;
@@ -1556,6 +1909,29 @@ impl Device for Reverb {
                     next_line = (next_line + 1) % active;
                     spread = 1;
                 }
+            }
+            let mut mixes = [0.0f64; FILTERED_OFFSETS.len()];
+            for (route, &gain) in self.routes.iter().zip(&t.tap_gains).take(self.taps.len()) {
+                if let &Route::Follows { source, offset } = route
+                    && let Some(mix) = mixes.get_mut(offset)
+                {
+                    *mix += reads.get(source).copied().unwrap_or(0.0) * gain;
+                }
+            }
+            for ((((line, mix), &offset), &(_, side)), _) in self
+                .offset_lines
+                .iter_mut()
+                .zip(mixes)
+                .zip(&t.offsets)
+                .zip(&FILTERED_OFFSETS)
+                .zip(&self.offsets_used)
+                .filter(|(_, used)| **used)
+            {
+                let y = if self.moving { line.read_hermite(offset) } else { line.read(offset.round() as usize) };
+                if let Some(out) = filtered.get_mut(side) {
+                    *out += f64::from(y);
+                }
+                line.push(mix as f32);
             }
             let [left_filter, right_filter] = &mut self.reflection_filters;
             let early = [direct[0] + left_filter.process(filtered[0]), direct[1] + right_filter.process(filtered[1])];
@@ -1629,7 +2005,9 @@ impl Device for Reverb {
                 *sample = (dry * dry_gain + wet * wet_gain) as f32;
             }
 
-            self.spin_phase = (self.spin_phase + spin_step).fract();
+            for (phase, (_, rate, _)) in self.spin_phases.iter_mut().zip(SPIN_VOICES) {
+                *phase = (*phase + spin_step * rate).fract();
+            }
             self.chorus_phase = (self.chorus_phase + chorus_step).fract();
             self.frame = self.frame.wrapping_add(1);
         }
