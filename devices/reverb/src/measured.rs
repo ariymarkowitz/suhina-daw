@@ -14,14 +14,14 @@
 //! ```
 //!
 //! At Low a line's family is its input. Its six lines are A, B, C, D, F and R: A, C and R heard
-//! on the right, B, D and F on the left, all at one level. Mid's and High's lines are read
-//! only at Size 100 (`reverb-network-density`), as below.
+//! on the right, B, D and F on the left, all at one level. Sparse's, Mid's and High's lines take
+//! their lengths by family from one table ([`SHARED_LINES`]), by Low's law.
 //!
 //! Times are frames at 44.1 kHz. A line of Low is a delay and an allpass, each a whole number of 8-frame
 //! blocks and one frame: the delay's blocks grow with the room's size factor, the allpass's with
 //! the size factor times Scale (%), each rounding down at its own edge ([`length_at`]). The input
-//! reaches the lines [`ENTRY_MS`] after each direct reflection, whatever the Size. Under Smooth Fast
-//! or Slow the lengths keep to no blocks and A and B are read between frames ([`FAST_DELAYS`]).
+//! reaches the lines [`entry`] after each direct reflection, whatever the Size. Under Smooth Fast
+//! or Slow the lengths keep to no blocks and A and B are read between frames ([`DELAYS`]).
 //! Every value was read from `reverb-network-exact` (Hi Cut off, Diffusion 0.1 %, Decay 60 s,
 //! Stereo 120, Scale 5 to 100 %): with the input's fixed filter divided out each arrival is one
 //! sample, and a simulation of this structure with these values matches Live's renders to −41 dB
@@ -46,44 +46,42 @@ const RATE: f64 = 44_100.0;
 
 /// Live builds every length of the network from blocks of 8 frames (at 44.1 kHz).
 const BLOCK: f64 = 8.0;
-/// Each line's delay before its allpass in the reference room (blocks) for A, B, C, D and F, and
-/// G, the delay R runs after A's: a delay is `BLOCK * floor(blocks * room + DELAY_EDGE) + 1`
-/// frames, G's `BLOCK * floor(blocks * room + G_EDGE)` with no frame more.
-const DELAYS: [f64; LOOP] = [286.875, 339.649, 423.336, 459.936, 846.683, 934.943];
-/// Where a delay rounds up to its next block (blocks).
+/// Each line's delay before its allpass in the reference room (blocks), A, B, C, D, F and R, under
+/// every Smooth. With Smooth None it is `BLOCK * floor(blocks * room + DELAY_EDGE) + 1` frames: C's
+/// takes in its family's offset and R's A's delay and G's, each as one rounded length (the lengths
+/// read at Size 1.53 to 100, and at Size 0.222 C's 82 blocks and R's 160, where rounding the parts
+/// on their own gives 83 and 159). Smooth Fast is below. Each is the middle of what both laws'
+/// reads allow; R's also with its 1854 blocks at Size 350 (`reverb-network-size-level`).
+const DELAYS: [f64; LOOP] = [287.0993, 340.0779, 628.7004, 459.9281, 846.6372, 1220.5524];
+/// Where a delay rounds up to its next block (blocks): every read fits 0.813 to 0.901.
 const DELAY_EDGE: f64 = 0.85;
-/// Where G rounds up to its next block (blocks).
-const G_EDGE: f64 = -0.411;
-/// Each line's allpass, A, B, C, D, F and R, in blocks per % of Scale in the reference room: it
-/// is `BLOCK * floor(blocks * Scale * room + ALLPASS_EDGE) + 1` frames.
-const ALLPASSES: [f64; LOOP] = [0.63406, 1.22440, 0.87055, 3.97925, 2.18381, 0.80374];
+/// Each line's allpass, A, B, C, D, F and R, in blocks per % of Scale in the reference room, under
+/// every Smooth: with None `BLOCK * floor(blocks * Scale * room + ALLPASS_EDGE) + 1` frames, the
+/// middle of what both laws' reads allow.
+const ALLPASSES: [f64; LOOP] = [0.63476, 1.22412, 0.87055, 3.97956, 2.18481, 0.80455];
 /// Where an allpass rounds up to its next block (blocks).
 const ALLPASS_EDGE: f64 = 0.9;
 
 /// Under Smooth Fast (and Slow, which renders as Fast) no length keeps to blocks
-/// (`reverb-network-fast`, `reverb-network-fast-train`): each line's delay is `8 × y × room + 1`
-/// frames, with y these (blocks), and its allpass `floor(8 × c × Scale × room +
-/// FAST_ALLPASS_EDGE) + 1`. A's and B's delays keep their fraction of a frame and are read
-/// between frames, linearly; C's, D's and F's round down to whole frames, and R's (A's delay and
-/// G's together) rounds down past [`FAST_R_EDGE`]. Read at Size 1.53, 10.54 and 100 (Scale 40 %)
-/// and Scale 5 and 100 % at Size 1.53: A and B to 0.005 frame, the rest to the frame.
-const FAST_DELAYS: [f64; LOOP] = [287.0993, 340.0779, 628.6862, 459.9587, 846.774, 1220.6339];
-/// Where R's delay rounds up to its next frame under Smooth Fast (frames).
-const FAST_R_EDGE: f64 = 0.494;
-/// Each line's allpass under Smooth Fast, as [`ALLPASSES`]: C's and R's are 0.1 and 0.2 % below
-/// and above those, the middle of what their allpasses at Size 1.53 and Scale 100 % (172 and 160
-/// frames) and the other reads allow.
-const FAST_ALLPASSES: [f64; LOOP] = [0.63406, 1.22440, 0.8693, 3.97925, 2.18381, 0.8053];
-/// Where an allpass rounds up to its next frame under Smooth Fast (frames).
-const FAST_ALLPASS_EDGE: f64 = 0.15;
-/// Where each family's copy starts under Smooth Fast (blocks, reference room), rounded down to a
-/// whole frame: 0 to 6 frames before Smooth None's (396, 3191, 1640, 1336, 2983 and 2337 to the
-/// peak at Size 100).
-const FAST_FAMILY_OFFSETS: [f64; LOOP] = [49.4299, 398.832, 204.9654, 166.9265, 372.8029, 292.0821];
-/// Under Smooth Fast the input reaches the lines this many frames sooner than [`ENTRY_MS`] gives,
-/// and each line's loop is that much longer than its first pass (every path through two lines
-/// arrives 5 frames after their first passes), at every Size (`reverb-network-fast-train`).
-pub(crate) const FAST_EARLIER: f64 = 5.0;
+/// (`reverb-network-fast`, `reverb-network-fast-train`): each length is its continuous value
+/// rounded down to a whole frame, and a frame. Line `k`'s allpass is `floor(8 × c × Scale × room)
+/// + 1` frames, with c [`ALLPASSES`], and its delay `floor(8 × y × room) + 1`, with y [`DELAYS`],
+/// but for A's and B's, `8 × y × room + 1`, which keep their fraction of a frame and are read
+/// between frames, linearly. The loops were read at Diffusion 0.1 % at Size 0.222 to 500 (A and B
+/// to 0.005 frame, the rest to the frame); the allpasses at Diffusion 48 and 60 %
+/// (`reverb-impulse` reverb-decay, reverb-decay-none and reverb-texture), where a frame moved
+/// between a line's delay and its allpass leaves Live's tail uncorrelated by 0.3 s: F's is 700
+/// frames at Size 100, R's 8, 64 and 160 at Size 1.53 and Scale 5, 40 and 100 %, and B's and R's
+/// 670 and 441 at Size 500.
+/// Where each family's copy starts under Smooth Fast (blocks, reference room), as
+/// [`FAMILY_LENGTHS`], rounded down to a whole frame: 0 to 6 frames before Smooth None's (396,
+/// 3191, 1640, 1336, 2983 and 2337 to the peak at Size 100, `reverb-network-fast-train`), each
+/// the middle of what every read allows. A's and D's peak 676 and 2285 frames after their direct
+/// reflections at Size 500 (`reverb-impulse` reverb-structure size-500-er). The four Low lacks
+/// were read from Mid's and High's reflections alone at Size 0.222 and 500
+/// (`reverb-network-density-size`), where Sparse, Mid and High hear Low's six here too.
+const FAST_FAMILY_LENGTHS: [f64; FAMILY_COUNT] =
+    [49.3955, 398.832, 204.9654, 166.9645, 372.8029, 292.0821, 120.0675, 258.9583, 299.0174, 311.7368];
 
 /// `x` rounded down past `edge` to a whole frame, or, while things move, the straight line through
 /// the middle of the steps.
@@ -93,13 +91,9 @@ fn frames(x: f64, edge: f64, settled: bool) -> f64 {
 
 /// Line `k`'s delay and allpass under Smooth Fast, as [`length_at`].
 fn fast_length_at(k: usize, room: f64, percent: f64, settled: bool) -> (f64, f64) {
-    let x = BLOCK * FAST_DELAYS[k] * room;
-    let line = match k {
-        0 | 1 => x + 1.0,
-        5 => frames(x, FAST_R_EDGE, settled),
-        _ => frames(x, 0.0, settled) + 1.0,
-    };
-    (line, frames(BLOCK * FAST_ALLPASSES[k] * percent * room, FAST_ALLPASS_EDGE, settled) + 1.0)
+    let x = BLOCK * DELAYS[k] * room;
+    let line = if k < 2 { x + 1.0 } else { frames(x, 0.0, settled) + 1.0 };
+    (line, frames(BLOCK * ALLPASSES[k] * percent * room, 0.0, settled) + 1.0)
 }
 
 /// `BLOCK` times `x` rounded down past `edge`, or, while things move, the straight line through
@@ -109,86 +103,55 @@ fn blocks(x: f64, edge: f64, settled: bool) -> f64 {
 }
 
 /// Line `k`'s delay and allpass (frames at 44.1 kHz) for size factor `room` and Scale `percent`,
-/// in whole blocks when `settled`. C first runs its family's offset as a plain delay, and R is
-/// A's delay, then G's, then its own allpass (`reverb-network-small`, `reverb-network-sections`).
+/// in whole blocks when `settled`. C's delay takes in its family's offset, and R's A's delay and
+/// G's, each as one length ([`DELAYS`], `reverb-network-small`, `reverb-network-sections`).
 fn length_at(k: usize, room: f64, percent: f64, settled: bool) -> (f64, f64) {
-    let delay = |row: usize| blocks(DELAYS[row] * room, DELAY_EDGE, settled) + 1.0;
+    let line = blocks(DELAYS[k] * room, DELAY_EDGE, settled) + 1.0;
     let allpass = blocks(ALLPASSES[k] * percent * room, ALLPASS_EDGE, settled) + 1.0;
-    let line = match k {
-        2 => front(2, room, settled) + delay(2),
-        5 => delay(0) + blocks(DELAYS[5] * room, G_EDGE, settled),
-        _ => delay(k),
-    };
     (line, allpass)
 }
 
 /// Where family `k`'s filtered reflections peak after their direct ones (frames at 44.1 kHz) for
-/// size factor `room`, in whole blocks and a frame when `settled`.
-pub(crate) fn peak(k: usize, room: f64, settled: bool) -> f64 {
-    front(k, room, settled) + 1.0
+/// size factor `room`, under Smooth Fast (or Slow) when `fast`: [`front`] and a frame.
+pub(crate) fn peak(k: usize, room: f64, settled: bool, fast: bool) -> f64 {
+    front(k, room, settled, fast) + 1.0
 }
 
-/// How many blocks short of its reference-room length a filtered reflection's offset scales
-/// from, for [`copy_front`].
-const COPY_SHORT: f64 = 0.45;
-
-/// Where a filtered reflection `frames` after its direct one in the reference room is heard for
-/// size factor `room`: `BLOCK * ceil((frames / BLOCK - COPY_SHORT) * room)`, whole blocks when
-/// `settled`. Every family's copies in Live's reflections alone (`reverb-network-density`,
-/// `reverb-network-density-filters`, Mid and High at Size 1.53, 10.54 and 100) sit there, the
-/// shortfall between 0.41 and 0.5 for all ten.
-pub(crate) fn copy_front(frames: f64, room: f64, settled: bool) -> f64 {
-    blocks((frames / BLOCK - COPY_SHORT) * room, 1.0, settled)
+/// Where family `k`'s copy starts (frames at 44.1 kHz) for size factor `room`, at every Density:
+/// with Smooth None `BLOCK * floor(blocks * room + FAMILY_EDGE)` from [`FAMILY_LENGTHS`], under
+/// Fast `floor(BLOCK * blocks * room)` whole frames from [`FAST_FAMILY_LENGTHS`]. While things
+/// move, the straight line through the middle of the steps.
+fn front(k: usize, room: f64, settled: bool, fast: bool) -> f64 {
+    if fast {
+        frames(BLOCK * FAST_FAMILY_LENGTHS[k] * room, 0.0, settled)
+    } else {
+        blocks(FAMILY_LENGTHS[k] * room, FAMILY_EDGE, settled)
+    }
 }
 
-/// Where family `k`'s copy starts under Smooth Fast, as [`front`].
-fn fast_front(k: usize, room: f64, settled: bool) -> f64 {
-    frames(BLOCK * FAST_FAMILY_OFFSETS[k] * room, 0.0, settled)
-}
-
-/// Where Low's family `k`'s copy starts (frames at 44.1 kHz) for size factor `room`: whole
-/// blocks when `settled`; it peaks one frame later.
-fn front(k: usize, room: f64, settled: bool) -> f64 {
-    front_of(FAMILY_OFFSETS[k], room, settled)
-}
-
-/// Where a copy `offset` blocks from its direct reflections in the reference room starts in a room
-/// of size factor `room`, as [`front`].
-fn front_of(offset: f64, room: f64, settled: bool) -> f64 {
-    let x = offset * room;
-    BLOCK * if settled { x.round() } else { x }
-}
-
-/// A line of Sparse, Mid or High, delay and allpass (frames at 44.1 kHz), from its `row` of
-/// [`SPARSE_LENGTHS`], [`MID_LENGTHS`] or [`HIGH_LENGTHS`], for size factor `room` and Scale
-/// `percent`; the allpass is `extra` frames more than its blocks.
-fn read_length_at(row: &[f64; 7], extra: f64, room: f64, percent: f64, settled: bool) -> (f64, f64) {
-    let delay = row[0];
-    let n = read_blocks(row, percent);
-    (blocks(delay * room, 0.5, settled) + 2.0, blocks((n - delay).max(0.0) * room, 0.5, settled) + extra)
-}
-
-/// The blocks of `row` at Scale `percent`: as read at [`READ_SCALES`], linearly between them
-/// (and on past the last two).
-fn read_blocks(row: &[f64; 7], percent: f64) -> f64 {
-    let at = |i: usize| (READ_SCALES[i], row[i]);
-    let i = READ_SCALES.iter().rposition(|&s| s <= percent).unwrap_or(0).min(READ_SCALES.len() - 2);
-    let ((s0, n0), (s1, n1)) = (at(i), at(i + 1));
-    n0 + (n1 - n0) * (percent - s0) / (s1 - s0)
-}
-
-/// A line of Mid or High (frames at 44.1 kHz): its delay, then two allpasses in series, each a
-/// whole number of blocks and one frame, from its `row` of [`MID_LENGTHS`] or [`HIGH_LENGTHS`]
-/// and the shorter allpass's blocks at Scale 40 % (`shorter`), for size factor `room` and Scale
-/// `percent`. The shorter keeps its share of the Scale part at every Scale, which is not
-/// measured: only Scale 40 % was read above Diffusion 0.1 %.
-fn paired_length_at(row: &[f64; 7], shorter: f64, room: f64, percent: f64, settled: bool) -> (f64, f64, f64) {
-    let delay = row[0];
-    let part = (read_blocks(row, percent) - delay).max(0.0);
-    let first = shorter / (row[3] - delay) * part;
-    let round = |x: f64| blocks(x * room, 0.5, settled);
-    // The longer takes what the shorter leaves, so the line is as long as it was read.
-    (round(delay) + 1.0, round(first) + 1.0, round(part) - round(first) + 1.0)
+/// A line of Sparse, Mid or High (frames at 44.1 kHz): the delay of family `delay` and the
+/// allpasses of family `family` in [`SHARED_LINES`] (the shorter, then the longer when `second`), for
+/// size factor `room` and Scale `percent`. Each part is Low's ([`length_at`], [`fast_length_at`]): its
+/// blocks times `room` (an allpass's also times Scale) rounded down past [`DELAY_EDGE`] or
+/// [`ALLPASS_EDGE`] to whole blocks, or under Smooth Fast to whole frames, where the delay of a line
+/// of family A or B keeps its fraction; and a frame.
+#[allow(clippy::too_many_arguments)]
+fn shared_length_at(
+    delay: usize,
+    family: usize,
+    second: bool,
+    room: f64,
+    percent: f64,
+    settled: bool,
+    fast: bool,
+) -> (f64, f64, f64) {
+    let [blocks_delay, _, _] = SHARED_LINES[delay];
+    let [_, shorter, longer] = SHARED_LINES[family];
+    let part = |x: f64, edge: f64| if fast { frames(BLOCK * x, 0.0, settled) } else { blocks(x, edge, settled) };
+    let line = if fast && family < 2 { BLOCK * blocks_delay * room } else { part(blocks_delay * room, DELAY_EDGE) };
+    let first = part(shorter * percent * room, ALLPASS_EDGE) + 1.0;
+    let second = if second { part(longer * percent * room, ALLPASS_EDGE) + 1.0 } else { 0.0 };
+    (line + 1.0, first, second)
 }
 
 /// A line's lengths with no second allpass.
@@ -208,10 +171,24 @@ const FAMILIES: [[f64; GROUPS]; LOOP] = [
     [-0.692, 0.419, -0.684, -0.506, -0.590, -0.546],
     [0.241, 0.5005, 0.198, 1.050, -0.555, -0.533],
 ];
-/// Where each family's filtered reflection starts after the direct one (blocks, reference room):
-/// 401, 3193, 1641, 1337, 2985 and 2337 frames to its peak at Size 100. Its copy into the mix is
-/// heard there too, through the same low-pass.
-const FAMILY_OFFSETS: [f64; LOOP] = [50.4258, 399.2770, 205.1187, 167.3337, 373.2037, 292.2697];
+/// The families of filtered reflections every Density draws on: Low's six (A, B, C, D, F and R's)
+/// and the four only Mid and High have.
+pub(crate) const FAMILY_COUNT: usize = 10;
+/// Where each family's filtered reflection starts after the direct one under Smooth None (blocks,
+/// reference room), rounded down past [`FAMILY_EDGE`]: 401, 3193, 1641, 1337, 2985, 2337, 961,
+/// 2073, 2393 and 2497 frames to its peak at Size 100. Its copy into the mix is heard there too,
+/// through the same low-pass. Each is the middle of what the reads at Size 0.222 to 500 allow, at
+/// every Density (`reverb-network-small`, `reverb-network-density`, `reverb-network-density-size`):
+/// at Size 500 the 401, 3193, 961 and 2393 families peak 681, 5457, 1649 and 4097 frames after
+/// their direct reflections, a block before where rounding to the nearest block would put them.
+/// The 401 and 3193 families' also fit Low's reflections at Size 250 to 450
+/// (`reverb-network-size-level`): the 401 family 537 and 601 frames at 250 and 350, the 3193
+/// family 4337 and 4609 at 250 and 300, each a block from where the other reads alone put them.
+const FAMILY_LENGTHS: [f64; FAMILY_COUNT] =
+    [49.5665, 398.9223, 205.0785, 167.0725, 372.9605, 292.1465, 120.18, 259.126, 299.2948, 311.8546];
+/// Where a family rounds up to its next block under Smooth None (blocks): every read fits 0.5 to
+/// 0.9.
+const FAMILY_EDGE: f64 = 0.7;
 /// How much of its family each line takes, times its output level: the first pass of each line
 /// against one direct reflection.
 const FAMILY_GAINS: [f64; LOOP] = [1.7860, 1.7959, 1.8109, 1.8022, 1.8092, 1.8012];
@@ -230,15 +207,36 @@ pub(crate) const MIX: [[f64; LOOP]; LOOP] = [
 /// interpolation (0.99 of the frame and 0.01 of the next): a slight loss of the highs on every
 /// pass (0.18 dB at the top) and none of the lows. The other lines are whole. No line loses
 /// anything else on a pass: the whole tail falls with the decay's loss per second, at every Size
-/// (docs/spec/reverb.md › Design notes). Under Smooth Fast A's and B's fractions are larger ([`FAST_DELAYS`]), and they
+/// (docs/spec/reverb.md › Design notes). Under Smooth Fast A's and B's fractions are larger ([`DELAYS`]), and they
 /// are all of Fast's loss of the highs.
 const FRACTION: [f64; LOOP] = [0.01, 0.01, 0.0, 0.0, 0.0, 0.0];
 /// The side each line is heard on (0 left, 1 right), all at one level before Stereo's rotation.
 pub(crate) const SIDES: [usize; LOOP] = [1, 0, 1, 0, 0, 1];
-/// The input's delay to the lines after each direct reflection, at Shape 0.5 (ms), and how much
-/// more per unit of Shape below and above 0.5 (ms, times the size factor): −1, 775 and 1543
-/// frames at Shape 0, 0.5 and 1 at Size 100, so 776 frames for the half below and 768 above.
-pub(crate) const ENTRY_MS: (f64, f64, f64) = (17.574, 35.193, 34.830);
+/// How much later the input reaches the lines per unit of Shape (frames at 44.1 kHz; 35 ms),
+/// whatever the Size and the Density ([`entry`]).
+const SHAPE_ENTRY: f64 = 1543.5;
+
+/// The input's delay to the lines after each direct reflection (frames at 44.1 kHz) at `shape`:
+/// [`SHAPE_ENTRY`] times Shape less a frame, rounded up to whole blocks with Smooth None and down
+/// to a whole frame under Fast or Slow, or, while things move, the straight line through the
+/// middle of the steps. With None −1, 391, 775, 1159 and 1543 frames at Shape 0, 0.25, 0.5, 0.75
+/// and 1 (`reverb-network-exact`, `reverb-network-id`, `reverb-size` shape-*-tail), under Fast −1,
+/// 384, 770, 1156 and 1542 (`reverb-structure` shape-*, read from the tail after 160 ms), which
+/// together leave 1543 to 1544 frames a unit. So at Shape 0.5 Fast's input comes 5 frames sooner
+/// than None's, and at Shape 0 and 1 it does not. The entry is 775 frames at Shape 0.5 at every
+/// Size (`reverb-network-small`); that Shape's share does not grow with Size either is inferred,
+/// as none of the entry is left for Size to scale.
+pub(crate) fn entry(shape: f64, settled: bool, fast: bool) -> f64 {
+    let x = SHAPE_ENTRY * shape;
+    let whole = if fast {
+        frames(x, 0.0, settled)
+    } else if settled {
+        BLOCK * (x / BLOCK).ceil()
+    } else {
+        x + 0.5 * BLOCK
+    };
+    whole - 1.0
+}
 /// Longest delay a line needs (seconds, with room for Size 500): High's longest line.
 pub(crate) const LINE_SECONDS: f64 = 0.65;
 /// Longest allpass a line needs (seconds, with room for Size 500): Mid's and High's longest
@@ -247,62 +245,37 @@ pub(crate) const ALLPASS_SECONDS: f64 = 0.45;
 /// Longest family offset (seconds, with room for Size 500).
 const FRONT_SECONDS: f64 = 0.2;
 
-/// Density Mid's and High's lines, in [`Design`] order: the delay (blocks, its length `8 n + 1`
-/// frames), then the delay and both allpasses together (blocks, `8 n + 3` frames) at each Scale
-/// of [`READ_SCALES`], read at Size 100 (`reverb-network-density`, first passes and the second
-/// passes through each pair of lines, at Diffusion 0.1 %). The allpasses are the part that grows
-/// with Scale; at other Sizes every part takes the size factor, as Low's do, which is not
-/// measured. The steps between Scales are not one rounding of a straight line (some 20 % steps
-/// are a block short), so the blocks are kept as read and joined linearly. Where the delay ends
-/// and the allpasses start shows only above Diffusion 0.1 % (`reverb-network-density-decay`,
-/// Diffusion 60 %, Scale 40 %): see [`MID_SHORTER`].
-const MID_LENGTHS: [[f64; 7]; 8] = [
-    [443.0, 468.0, 540.0, 637.0, 733.0, 829.0, 926.0],
-    [356.0, 398.0, 521.0, 684.0, 847.0, 1010.0, 1174.0],
-    [622.0, 656.0, 757.0, 892.0, 1026.0, 1160.0, 1295.0],
-    [1027.0, 1054.0, 1131.0, 1235.0, 1339.0, 1442.0, 1546.0],
-    [502.0, 527.0, 603.0, 703.0, 802.0, 902.0, 1002.0],
-    [437.0, 474.0, 584.0, 731.0, 877.0, 1024.0, 1171.0],
-    [561.0, 607.0, 743.0, 925.0, 1107.0, 1288.0, 1469.0],
-    [1185.0, 1253.0, 1454.0, 1723.0, 1993.0, 2261.0, 2530.0],
+/// Each family's line in Sparse, Mid and High: its delay (blocks), and its two allpasses' blocks
+/// per Scale %, the shorter first ([`shared_length_at`]). Read from every line's first pass at Size
+/// 0.222, 100 and 500 with Smooth None and Fast, and at Scale 0 to 100 % at Size 100
+/// (`reverb-network-density-size`, `reverb-network-density`), each in the middle of what all of
+/// them allow: Mid's lines are High's, and Sparse's Mid's with one allpass. Where the shorter allpass
+/// ends shows only above Diffusion 0.1 % (`reverb-network-density-decay`, Diffusion 60 %, Scale 40 %):
+/// a Mid or High line runs two allpasses in series, each with the Diffusion as its gain, so each
+/// line's first pass comes as g² at its delay, −g(1 − g²) one allpass later and again the other
+/// allpass later, and (1 − g²)² where Diffusion 0.1 % has it (0.41 of that level; one allpass would
+/// give 0.64), and matches Live's render to −39 dB over 0.07 to 0.3 s and −36 dB to 1 s. D's and
+/// the 2073 family's split between their two allpasses was read again at Size 10.54, Scale 40 and
+/// 100 %, Diffusion 30 and 60 % (`reverb-network-density-split`), where a block moved between them.
+/// The 3193, 2337, 961 and 2497 families' lines also fit Mid's and High's tails at Size 300 and
+/// 400 (`reverb-network-size-level`), where each is a block shorter at 400 than the other reads
+/// alone allow; each is the middle of what every read, None, Fast and Diffusion 60 %, allows.
+const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
+    [1184.4905, 0.6886, 12.7517],
+    [442.6705, 1.1039, 3.7124],
+    [436.2265, 1.3804, 5.9511],
+    [1026.769, 1.7356, 3.4461],
+    [356.0745, 2.4623, 5.7064],
+    [560.7478, 0.7406, 8.3358],
+    [621.4635, 2.9617, 3.7544],
+    [1983.288, 0.7584, 2.6925],
+    [379.8665, 0.8037, 5.6726],
+    [501.2132, 1.1817, 3.8076],
 ];
-/// Each Mid line's shorter allpass at Scale 40 % (blocks; the other takes the rest of the Scale
-/// part). A Mid or High line runs two allpasses in series, each with the Diffusion as its gain:
-/// at Diffusion 60 % each line's first pass comes as g² at its delay, −g(1 − g²) one allpass
-/// later and again the other allpass later, and (1 − g²)² where Diffusion 0.1 % has it (0.41 of
-/// that level; one allpass would give 0.64). Fitted line by line to Live's render
-/// (`reverb-network-density-decay mid-decay-default-diffusion-60-damping-off`): with these the
-/// network matches it to −39 dB over 0.07 to 0.3 s and −36 dB to 1 s, as close as Diffusion
-/// 0.1 % does; with one allpass a line it did not match at all (+2 dB).
-const MID_SHORTER: [f64; 8] = [45.0, 99.0, 119.0, 70.0, 48.0, 56.0, 30.0, 28.0];
-/// High's lines, as [`MID_LENGTHS`]: Mid's and two more, the second and the last.
-const HIGH_LENGTHS: [[f64; 7]; 10] = [
-    [443.0, 468.0, 540.0, 637.0, 733.0, 829.0, 926.0],
-    [380.0, 413.0, 510.0, 640.0, 770.0, 899.0, 1029.0],
-    [356.0, 398.0, 521.0, 684.0, 847.0, 1010.0, 1174.0],
-    [622.0, 656.0, 757.0, 892.0, 1026.0, 1160.0, 1295.0],
-    [1027.0, 1054.0, 1131.0, 1235.0, 1339.0, 1442.0, 1546.0],
-    [502.0, 527.0, 603.0, 703.0, 802.0, 902.0, 1002.0],
-    [437.0, 474.0, 584.0, 731.0, 877.0, 1024.0, 1171.0],
-    [561.0, 607.0, 743.0, 925.0, 1107.0, 1288.0, 1469.0],
-    [1185.0, 1253.0, 1454.0, 1723.0, 1993.0, 2261.0, 2530.0],
-    [1984.0, 2002.0, 2054.0, 2123.0, 2192.0, 2261.0, 2330.0],
-];
-/// High's shorter allpasses, as [`MID_SHORTER`]: Mid's and the two more lines' (to −41 dB over
-/// 0.07 to 0.3 s and −34 to −38 dB to 1 s, `high-decay-default-diffusion-60-damping-off`).
-const HIGH_SHORTER: [f64; 10] = [45.0, 33.0, 99.0, 119.0, 70.0, 48.0, 56.0, 30.0, 28.0, 31.0];
-/// The Scales (%) of [`MID_LENGTHS`]' columns: 0 is the delay alone.
-const READ_SCALES: [f64; 7] = [0.0, 5.0, 20.0, 40.0, 60.0, 80.0, 100.0];
 
-/// Sparse's lines X, Y, Z and W, as [`MID_LENGTHS`] but `8 n + 2` frames in all: the delay is
-/// `8 n + 2` and the allpass `8 n` (`reverb-network-density`). Y and Z are not Mid's lines;
-/// X, Z and W have Mid's fixed delays within a block.
-const SPARSE_LENGTHS: [[f64; 7]; 4] = [
-    [357.0, 369.0, 406.0, 455.0, 504.0, 553.0, 603.0],
-    [443.0, 449.0, 465.0, 488.0, 510.0, 532.0, 554.0],
-    [561.0, 565.0, 576.0, 591.0, 606.0, 621.0, 635.0],
-    [1185.0, 1192.0, 1213.0, 1241.0, 1268.0, 1296.0, 1323.0],
-];
+/// The family each of Sparse's lines takes its delay from: its own, but the last's (family C), which
+/// has A's (`reverb-network-density-size`).
+const SPARSE_DELAYS: [usize; 4] = [4, 1, 5, 0];
 /// Sparse's four direct reflections each reach the lines on their own.
 const SPARSE_TAP_GROUPS: [usize; DIRECT_TAPS] = pad_groups([0, 1, 2, 3]);
 /// Each of Sparse's lines' input, as [`MID_INPUTS`] (each weight is against a direct reflection of
@@ -326,14 +299,16 @@ const SPARSE_COPIES: [[f64; 4]; 4] = [
 ];
 /// Where each of Sparse's families' copy starts: it peaks 2985, 3193, 2337 and 1641 frames after
 /// its direct reflections, in Low's blocks.
-const SPARSE_OFFSETS: [f64; 4] = [FAMILY_OFFSETS[4], FAMILY_OFFSETS[1], FAMILY_OFFSETS[5], FAMILY_OFFSETS[2]];
-/// Sparse's mixing, as [`MID_MIX`].
+const SPARSE_FAMILIES: [usize; 4] = [4, 1, 5, 2];
+/// Sparse's mixing, as [`MID_MIX`], run with [`SPARSE_LEVELS`].
 const SPARSE_MIX: [[f64; 4]; 4] = [
-    [-0.1673, -0.3341, 0.6631, -0.6486],
-    [0.8718, -0.0777, 0.4175, 0.2440],
-    [-0.3485, -0.6331, 0.2299, 0.6518],
-    [-0.3002, 0.6939, 0.5770, 0.3090],
+    [-0.166755, -0.334405, 0.663378, -0.648302],
+    [0.871775, -0.077310, 0.418061, 0.243425],
+    [-0.348542, -0.633013, 0.230244, 0.651767],
+    [-0.301196, 0.693896, 0.576318, 0.309270],
 ];
+/// Each of Sparse's lines' output level against the others', as [`MID_LEVELS`].
+const SPARSE_LEVELS: [f64; 4] = [1.0032, 0.9986, 1.0023, 0.9960];
 /// Sparse's sides: X and Y on the left, Z and W on the right.
 const SPARSE_SIDES: [usize; 4] = [0, 0, 1, 1];
 
@@ -380,31 +355,35 @@ const MID_COPIES: [[f64; 8]; 8] = [
     [-1.1055, -0.2352, -1.3724, 0.8558, 0.0137, 0.9751, -1.1933, 0.6094],
     [-0.8087, -0.2247, -0.7401, -1.6805, -0.5639, 0.9161, 1.1465, -0.0370],
 ];
-/// Where each of Mid's families' copy starts (blocks, reference room): it peaks 3193, 2985, 961,
-/// 1337, 2497, 1641, 2337 and 401 frames after its direct reflections at Size 100, those Low has
-/// in Low's blocks.
-const MID_OFFSETS: [f64; 8] = [
-    FAMILY_OFFSETS[1],
-    FAMILY_OFFSETS[4],
-    120.0,
-    FAMILY_OFFSETS[3],
-    312.0,
-    FAMILY_OFFSETS[2],
-    FAMILY_OFFSETS[5],
-    FAMILY_OFFSETS[0],
-];
-/// Mid's mixing, as [`MIX`]: made orthogonal from the fit, whose rows were orthogonal to 1 %.
+/// Mid's lines' families ([`FAMILY_LENGTHS`]): they peak 3193, 2985, 961, 1337, 2497, 1641, 2337
+/// and 401 frames after their direct reflections at Size 100.
+const MID_FAMILIES: [usize; 8] = [1, 4, 6, 3, 9, 2, 5, 0];
+/// Mid's mixing, as [`MIX`]. First read from the two-line paths, orthogonal to 1 %; then each
+/// network's mix fitted as a rotation of that (`M · exp(A)`, `A` antisymmetric, by Gauss-Newton
+/// on renders) to Live's whole tails at Size 0.222 and 500 (`reverb-network-density-size`, Diffusion
+/// 0.1 %, Decay 60 s), moving no entry more than 0.004 (Sparse's 0.001, High's 0.007). The tails
+/// at Size 0.222 had drifted to −14 to −18 dB of Live's by 3 s; now −36 to −39, and at Size 100,
+/// which was not fitted, −37 to −39 dB to 8 s at every Scale (`reverb-network-density`).
 #[allow(clippy::approx_constant, reason = "a fitted value that is near Euler's constant by chance")]
 const MID_MIX: [[f64; 8]; 8] = [
-    [0.3683, 0.1089, -0.5817, -0.5682, 0.0864, 0.0322, 0.3445, -0.2530],
-    [0.2738, -0.0658, 0.0484, -0.4655, 0.0708, 0.1216, -0.5105, 0.6491],
-    [0.3658, 0.3945, 0.4225, -0.0576, -0.4669, 0.5088, 0.0048, -0.2277],
-    [0.3560, -0.8371, -0.0694, 0.1303, -0.3314, 0.0861, -0.0680, -0.1699],
-    [0.3949, -0.1376, 0.5762, -0.0673, 0.3871, -0.2537, 0.5069, 0.1322],
-    [0.3996, 0.1362, -0.3218, 0.6134, 0.3823, 0.3886, 0.0205, 0.2107],
-    [0.2975, 0.2551, -0.1855, 0.2348, -0.5423, -0.5772, 0.1158, 0.3410],
-    [0.3532, 0.1574, 0.0777, 0.0653, 0.2640, -0.4116, -0.5876, -0.5058],
+    [0.368161, 0.108775, -0.581296, -0.568820, 0.086265, 0.031482, 0.343733, -0.254124],
+    [0.271656, -0.064204, 0.048059, -0.466431, 0.070065, 0.122714, -0.509307, 0.650271],
+    [0.365622, 0.394272, 0.422556, -0.057502, -0.466574, 0.509036, 0.004660, -0.228428],
+    [0.357116, -0.837262, -0.069221, 0.129876, -0.330419, 0.086300, -0.069221, -0.168481],
+    [0.395007, -0.137308, 0.576006, -0.067730, 0.387312, -0.252981, 0.506916, 0.133311],
+    [0.398688, 0.136657, -0.322884, 0.612085, 0.381779, 0.390011, 0.022096, 0.212413],
+    [0.296946, 0.254839, -0.185537, 0.234442, -0.543292, -0.575630, 0.117608, 0.342265],
+    [0.355373, 0.158482, 0.077321, 0.067185, 0.264291, -0.412222, -0.588521, -0.501964],
 ];
+/// Each of Mid's lines' output level against the others'. Live's lines are not all heard at one
+/// level, and [`MID_INPUTS`] and [`MID_COPIES`] were read with these in them, so the loop runs the
+/// mixing as `level_i · mix_ij / level_j` ([`loop_mix`]). The longest lines are the quietest
+/// (A's, and High's 2073 family's), but not in order of length. A free fit of each mix to every
+/// trip at Size 0.222 (None and Fast, `reverb-network-density-size`) comes out as this mixing between
+/// lines at these levels to 0.0002. Fitted at Size 0.222 only, they hold at Size 100 (Scale 5 to
+/// 100 %) and 500: against the mixing alone the tails come 0.2 to 0.5 dB closer to Live's at Sparse
+/// and Mid and 1 to 1.3 dB at High, and nowhere further.
+const MID_LEVELS: [f64; 8] = [0.9992, 1.0013, 1.0026, 0.9997, 1.0009, 1.0017, 1.0028, 0.9919];
 /// Mid's sides: four lines heard on the left, four on the right.
 const MID_SIDES: [usize; 8] = [0, 0, 0, 0, 1, 1, 1, 1];
 
@@ -436,33 +415,24 @@ const HIGH_COPIES: [[f64; 10]; 10] = [
     [-1.2389, -0.2657, -0.1187, -1.5175, 1.2067, -0.1482, 0.2082, 0.4253, 0.5705, 0.7646],
     [-0.0807, -0.9047, 0.7439, 0.6341, 0.7709, 1.2497, 0.1705, 0.6708, -1.3291, 0.5406],
 ];
-/// Where each of High's families' copy starts, as [`MID_OFFSETS`]: it peaks 3193, 2393, 2985,
-/// 961, 1337, 2497, 1641, 2337, 401 and 2073 frames after its direct reflections.
-const HIGH_OFFSETS: [f64; 10] = [
-    FAMILY_OFFSETS[1],
-    299.0,
-    FAMILY_OFFSETS[4],
-    120.0,
-    FAMILY_OFFSETS[3],
-    312.0,
-    FAMILY_OFFSETS[2],
-    FAMILY_OFFSETS[5],
-    FAMILY_OFFSETS[0],
-    259.0,
-];
-/// High's mixing, as [`MID_MIX`].
+/// High's lines' families, as [`MID_FAMILIES`]: they peak 3193, 2393, 2985, 961, 1337, 2497, 1641,
+/// 2337, 401 and 2073 frames after their direct reflections.
+const HIGH_FAMILIES: [usize; 10] = [1, 8, 4, 6, 3, 9, 2, 5, 0, 7];
+/// High's mixing, as [`MID_MIX`], run with [`HIGH_LEVELS`].
 const HIGH_MIX: [[f64; 10]; 10] = [
-    [-0.3505, 0.4295, -0.1924, -0.0537, 0.0075, -0.3268, 0.1435, 0.1060, 0.5352, 0.4771],
-    [0.0860, -0.3274, -0.2498, 0.4474, -0.5296, 0.0010, -0.2102, 0.2026, 0.4694, -0.1917],
-    [0.0058, -0.1742, 0.1377, -0.4571, -0.2860, 0.1088, 0.5422, -0.3906, 0.3727, -0.2503],
-    [-0.3179, -0.0114, -0.4861, -0.1392, -0.1307, 0.5316, -0.3165, -0.4312, -0.0892, 0.2223],
-    [-0.1294, -0.5533, -0.4348, -0.1269, 0.4352, -0.4947, -0.0239, -0.1498, 0.0246, -0.1194],
-    [-0.5303, 0.2847, 0.0787, 0.1914, -0.2975, -0.3769, -0.0621, -0.2746, -0.2756, -0.4573],
-    [-0.4159, -0.2044, 0.3309, -0.5132, -0.0401, 0.0648, -0.4358, 0.4347, 0.1265, -0.1082],
-    [0.3864, 0.3906, -0.5008, -0.4627, -0.1853, -0.1402, -0.1052, 0.2412, -0.1112, -0.3123],
-    [-0.1085, -0.3080, -0.0982, -0.1086, -0.4948, -0.1701, 0.3284, 0.2563, -0.4894, 0.4303],
-    [0.3696, -0.0376, 0.2832, -0.1628, -0.2488, -0.3990, -0.4773, -0.4456, 0.0437, 0.3254],
+    [-0.348113, 0.431273, -0.190544, -0.054873, 0.003126, -0.328649, 0.142605, 0.102578, 0.534750, 0.478192],
+    [0.085721, -0.327071, -0.250251, 0.447068, -0.525203, 0.000062, -0.212144, 0.201146, 0.472698, -0.196046],
+    [0.005687, -0.173832, 0.137437, -0.457475, -0.280688, 0.109642, 0.539417, -0.392038, 0.375058, -0.255809],
+    [-0.319107, -0.011948, -0.485638, -0.138487, -0.133577, 0.531357, -0.315474, -0.430384, -0.090890, 0.223175],
+    [-0.129695, -0.552898, -0.434898, -0.127689, 0.437665, -0.494356, -0.024158, -0.148806, 0.023321, -0.113284],
+    [-0.531302, 0.283413, 0.077284, 0.191711, -0.292916, -0.376628, -0.061197, -0.272901, -0.275947, -0.461145],
+    [-0.416906, -0.203191, 0.330902, -0.512201, -0.037540, 0.065516, -0.435820, 0.435421, 0.127347, -0.107735],
+    [0.385716, 0.390266, -0.501488, -0.462877, -0.182072, -0.138763, -0.106304, 0.241407, -0.110776, -0.314508],
+    [-0.107498, -0.309132, -0.097002, -0.110037, -0.501957, -0.170334, 0.331383, 0.257650, -0.484688, 0.423402],
+    [0.369272, -0.038617, 0.284305, -0.163968, -0.252294, -0.398535, -0.478311, -0.446345, 0.039609, 0.319961],
 ];
+/// Each of High's lines' output level against the others', as [`MID_LEVELS`].
+const HIGH_LEVELS: [f64; 10] = [0.9988, 1.0030, 1.0019, 1.0025, 1.0007, 1.0022, 1.0044, 1.0013, 0.9930, 0.9922];
 /// High's sides: five lines on each.
 const HIGH_SIDES: [usize; 10] = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
 
@@ -471,11 +441,9 @@ const HIGH_SIDES: [usize; 10] = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
 enum Laws {
     /// Low's: [`length_at`], and [`fast_length_at`] under Smooth Fast.
     Low,
-    /// Read at Size 100 at each Scale ([`read_length_at`]), the same under Smooth Fast.
-    Read(&'static [[f64; 7]], f64),
-    /// The same with two allpasses a line, the shorter's blocks at Scale 40 % as given
-    /// ([`paired_length_at`]).
-    Paired(&'static [[f64; 7]], &'static [f64]),
+    /// [`shared_length_at`] for each line's family, with two allpasses a line when `true`, and
+    /// each line's delay from the family given, when not its own.
+    Shared(bool, Option<&'static [usize]>),
 }
 
 /// One Density's measured network.
@@ -491,18 +459,18 @@ pub(crate) struct Design {
     input_gains: [f64; MAX_LINES],
     /// Each line's family, when it is not its input (as at Low).
     copies: Option<[[f64; MAX_GROUPS]; MAX_LINES]>,
-    /// Where each line's family's copy starts (blocks, reference room).
-    offsets: [f64; MAX_LINES],
+    /// Each line's family ([`FAMILY_LENGTHS`]).
+    families: [usize; MAX_LINES],
     /// The mixing as read; [`orthonormal`] makes it exactly orthogonal.
     mix: [[f64; MAX_LINES]; MAX_LINES],
+    /// Each line's output level against the others' ([`loop_mix`]).
+    levels: [f64; MAX_LINES],
     /// The side each line is heard on.
     pub sides: [usize; MAX_LINES],
     /// How much of a frame past its length each line is read with Smooth None.
     fractions: [f64; MAX_LINES],
     /// How the lines get their lengths.
     laws: Laws,
-    /// How much of the Diffusion setting the allpasses take.
-    pub diffusion: f32,
     /// How many times as much of the damping shelves' loss a line takes per second as Low's law
     /// gives ([`Lengths::trips`]).
     trip_scale: f64,
@@ -531,6 +499,46 @@ const fn pad_rows<const N: usize, const C: usize, const M: usize>(rows: [[f64; C
 }
 
 /// `sides` padded to [`MAX_LINES`]; a line past the last is heard nowhere.
+/// `families` padded to [`MAX_LINES`] (the rest unused).
+const fn pad_families<const N: usize>(families: [usize; N]) -> [usize; MAX_LINES] {
+    let mut out = [0; MAX_LINES];
+    let mut i = 0;
+    while i < N {
+        out[i] = families[i];
+        i += 1;
+    }
+    out
+}
+
+/// [`FRACTION`]'s A and B hundredth of a frame on the lines of families A and B among `families`:
+/// with Smooth None Sparse's, Mid's and High's A and B lines run it as Low's do (Sparse's C line,
+/// which has A's delay, is whole). Without it, their tails at Size 0.222 keep up to 5 dB too much
+/// above 12 kHz by 2 to 3 s and drift to −4 to −7 dB of Live's; with it their None tails match as
+/// closely as their Fast ones, at Size 0.222 and 100 alike, and no other hundredth fits as well
+/// (`reverb-network-density-size`, `reverb-network-density` Scale 40 %).
+const fn family_fractions<const N: usize>(families: [usize; N]) -> [f64; MAX_LINES] {
+    let mut out = [0.0; MAX_LINES];
+    let mut i = 0;
+    while i < N {
+        if families[i] < 2 {
+            out[i] = FRACTION[families[i]];
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `levels` padded with ones to [`MAX_LINES`].
+const fn pad_levels<const N: usize>(levels: [f64; N]) -> [f64; MAX_LINES] {
+    let mut out = [1.0; MAX_LINES];
+    let mut i = 0;
+    while i < N {
+        out[i] = levels[i];
+        i += 1;
+    }
+    out
+}
+
 const fn pad_sides<const N: usize>(sides: [usize; N]) -> [usize; MAX_LINES] {
     let mut out = [2; MAX_LINES];
     let mut i = 0;
@@ -548,12 +556,12 @@ static LOW: Design = Design {
     inputs: pad_rows(FAMILIES),
     input_gains: pad(FAMILY_GAINS),
     copies: None,
-    offsets: pad(FAMILY_OFFSETS),
+    families: pad_families([0, 1, 2, 3, 4, 5]),
     mix: pad_rows(MIX),
+    levels: [1.0; MAX_LINES],
     sides: pad_sides(SIDES),
     fractions: pad(FRACTION),
     laws: Laws::Low,
-    diffusion: 1.0,
     trip_scale: 1.0,
 };
 /// Sparse's network.
@@ -563,13 +571,12 @@ static SPARSE: Design = Design {
     inputs: pad_rows(SPARSE_INPUTS),
     input_gains: pad([SPARSE_INPUT_GAIN; 4]),
     copies: Some(pad_rows(SPARSE_COPIES)),
-    offsets: pad(SPARSE_OFFSETS),
+    families: pad_families(SPARSE_FAMILIES),
     mix: pad_rows(SPARSE_MIX),
+    levels: pad_levels(SPARSE_LEVELS),
     sides: pad_sides(SPARSE_SIDES),
-    fractions: [0.0; MAX_LINES],
-    laws: Laws::Read(&SPARSE_LENGTHS, 0.0),
-    // A fifth of the Diffusion setting, not read from Live's network.
-    diffusion: 0.2,
+    fractions: family_fractions(SPARSE_FAMILIES),
+    laws: Laws::Shared(false, Some(&SPARSE_DELAYS)),
     // Fitted to the High and Low Shelves at 4 kHz, 1 kHz and 500 Hz and the default damping at
     // Size 1.53, 10.54 and 100 (`reverb-network-density-filters`); the exponent of the length came
     // out at 0.99.
@@ -582,12 +589,12 @@ static MID: Design = Design {
     inputs: pad_rows(MID_INPUTS),
     input_gains: [MID_HIGH_INPUT_GAIN; MAX_LINES],
     copies: Some(pad_rows(MID_COPIES)),
-    offsets: pad(MID_OFFSETS),
+    families: pad_families(MID_FAMILIES),
     mix: pad_rows(MID_MIX),
+    levels: pad_levels(MID_LEVELS),
     sides: pad_sides(MID_SIDES),
-    fractions: [0.0; MAX_LINES],
-    laws: Laws::Paired(&MID_LENGTHS, &MID_SHORTER),
-    diffusion: 1.0,
+    fractions: family_fractions(MID_FAMILIES),
+    laws: Laws::Shared(true, None),
     trip_scale: 1.0,
 };
 /// High's network.
@@ -597,12 +604,12 @@ static HIGH: Design = Design {
     inputs: pad_rows(HIGH_INPUTS),
     input_gains: [MID_HIGH_INPUT_GAIN; MAX_LINES],
     copies: Some(pad_rows(HIGH_COPIES)),
-    offsets: pad(HIGH_OFFSETS),
+    families: pad_families(HIGH_FAMILIES),
     mix: pad_rows(HIGH_MIX),
+    levels: pad_levels(HIGH_LEVELS),
     sides: pad_sides(HIGH_SIDES),
-    fractions: [0.0; MAX_LINES],
-    laws: Laws::Paired(&HIGH_LENGTHS, &HIGH_SHORTER),
-    diffusion: 1.0,
+    fractions: family_fractions(HIGH_FAMILIES),
+    laws: Laws::Shared(true, None),
     trip_scale: 1.0,
 };
 
@@ -652,6 +659,19 @@ fn orthonormal(design: &Design) -> [[f64; MAX_LINES]; MAX_LINES] {
         }
     }
     rows
+}
+
+/// The mixing the loop runs: [`orthonormal`]'s, between the lines as heard, each at its level.
+/// The loop keeps its energy measured with each line taken at its level.
+fn loop_mix(design: &Design) -> [[f64; MAX_LINES]; MAX_LINES] {
+    let mut mix = orthonormal(design);
+    let levels = &design.levels[..design.lines];
+    for (row, level) in mix.iter_mut().zip(levels) {
+        for (m, from) in row.iter_mut().zip(levels) {
+            *m *= level / from;
+        }
+    }
+    mix
 }
 
 /// The lengths and gains the measured network runs with, worked out at the control rate.
@@ -718,8 +738,8 @@ impl Lengths {
 
     /// `design`'s lengths for size factor `room`, Scale `scale` (0..1) at `sample_rate`, under
     /// Smooth Fast (or Slow) when `fast`; `gain` gives a line's gain per trip from its length in
-    /// seconds. Whole frames when `settled`, but for A's and B's fractions under Fast. Only Low's
-    /// lines are measured under Fast: Mid's and High's keep None's lengths.
+    /// seconds. Whole frames when `settled`, but for the A and B lines' fractions under Fast, at
+    /// every Density.
     #[allow(clippy::too_many_arguments)]
     pub fn tune(
         &mut self,
@@ -735,25 +755,30 @@ impl Lengths {
         let frames = sample_rate / RATE;
         let whole = |x: f64| if settled { x.round() } else { x }.max(2.0);
         let percent = scale * 100.0;
-        let low = design.laws == Laws::Low;
-        let fast = fast && low;
+        let low_fast = fast && design.laws == Laws::Low;
         for k in 0..design.lines {
+            // Under Fast the lines of families A and B keep their fractions, at every Density
+            // (Sparse's B line, `reverb-network-density-size`).
+            let between = fast && design.families[k] < 2;
             let (line, allpass, second) = match design.laws {
-                Laws::Low if fast => with_no_second(fast_length_at(k, room, percent, settled)),
+                Laws::Low if low_fast => with_no_second(fast_length_at(k, room, percent, settled)),
                 Laws::Low => with_no_second(length_at(k, room, percent, settled)),
-                Laws::Read(rows, extra) => with_no_second(read_length_at(&rows[k], extra, room, percent, settled)),
-                Laws::Paired(rows, shorter) => paired_length_at(&rows[k], shorter[k], room, percent, settled),
+                Laws::Shared(second, delays) => {
+                    let family = design.families[k];
+                    let delay = delays.map_or(family, |d| d[k]);
+                    shared_length_at(delay, family, second, room, percent, settled, fast)
+                }
             };
             let (line, allpass, second) = (line * frames, allpass * frames, second * frames);
             self.seconds[k] = if second > 0.0 { whole(second) } else { 0.0 };
             self.second_losses[k] = gain(second / sample_rate);
-            if fast && k < 2 {
+            if between {
                 // Read between frames, linearly, moving or not.
                 self.lines[k] = line.floor().max(2.0);
                 self.fractions[k] = line - self.lines[k];
             } else {
                 self.lines[k] = whole(line);
-                self.fractions[k] = if fast { 0.0 } else { design.fractions[k] };
+                self.fractions[k] = if low_fast { 0.0 } else { design.fractions[k] };
             }
             self.allpasses[k] = whole(allpass);
             // The allpass loses its own time on each pass, so the echoes it holds back decay
@@ -761,7 +786,7 @@ impl Lengths {
             self.gains[k] = gain(line / sample_rate);
             self.losses[k] = gain(allpass / sample_rate);
             self.trips[k] = design.trip_scale * (line + allpass + second) / sample_rate / trip_seconds;
-            let front = if fast { fast_front(k, room, settled) } else { front_of(design.offsets[k], room, settled) };
+            let front = front(design.families[k], room, settled, fast);
             self.fronts[k] = whole(front * frames);
         }
     }
@@ -769,8 +794,8 @@ impl Lengths {
     /// Each of `design`'s copies' level for size factor `room`, as the reflections fade by `fade`
     /// (dB per ms of their delay) over its family's offset.
     pub fn fade(&mut self, design: &Design, room: f64, fade: f64) {
-        for (gain, &offset) in self.copy_gains.iter_mut().zip(&design.offsets).take(design.lines) {
-            let peak = front_of(offset, room, false) + 1.0;
+        for (gain, &family) in self.copy_gains.iter_mut().zip(&design.families).take(design.lines) {
+            let peak = peak(family, room, false, false);
             *gain = 10f64.powf(-fade * peak * 1_000.0 / RATE / 20.0);
         }
     }
@@ -779,8 +804,10 @@ impl Lengths {
     pub fn longest(design: &Design, room: f64, sample_rate: f64) -> f64 {
         let line = |k: usize| match design.laws {
             Laws::Low => length_at(k, room, 100.0, false).0,
-            Laws::Read(rows, extra) => read_length_at(&rows[k], extra, room, 100.0, false).0,
-            Laws::Paired(rows, shorter) => paired_length_at(&rows[k], shorter[k], room, 100.0, false).0,
+            Laws::Shared(second, delays) => {
+                let family = design.families[k];
+                shared_length_at(delays.map_or(family, |d| d[k]), family, second, room, 100.0, false, false).0
+            }
         };
         (0..design.lines).map(line).fold(0.0, f64::max) * sample_rate / RATE
     }
@@ -797,7 +824,7 @@ pub(crate) struct Network {
     copy_filters: [Biquad; MAX_LINES],
     /// The network running.
     design: &'static Design,
-    /// Its mixing, exactly orthogonal.
+    /// Its mixing ([`loop_mix`]).
     mix: [[f64; MAX_LINES]; MAX_LINES],
     /// Cosine and sine of each line's Chorus phase.
     chorus_phases: [(f64, f64); MAX_LINES],
@@ -810,7 +837,7 @@ impl Default for Network {
             fronts: Default::default(),
             copy_filters: Default::default(),
             design: &LOW,
-            mix: orthonormal(&LOW),
+            mix: loop_mix(&LOW),
             chorus_phases: chorus_phases(&LOW),
         }
     }
@@ -835,7 +862,7 @@ impl Network {
     pub fn set_design(&mut self, design: &'static Design) {
         if !std::ptr::eq(self.design, design) {
             self.design = design;
-            self.mix = orthonormal(design);
+            self.mix = loop_mix(design);
             self.chorus_phases = chorus_phases(design);
             self.clear();
         }
@@ -933,6 +960,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_densitys_a_and_b_lines_run_a_hundredth_of_a_frame_long() {
+        // Sparse's C line has A's delay but is whole (`reverb-network-density-size`).
+        for (design, lines) in [(&LOW, &[0, 1][..]), (&SPARSE, &[1]), (&MID, &[0, 7]), (&HIGH, &[0, 8])] {
+            for k in 0..design.lines {
+                let want = if lines.contains(&k) { 0.01 } else { 0.0 };
+                assert_eq!(design.fractions[k], want, "line {k} of {} lines", design.lines);
+            }
+        }
+    }
+
+    #[test]
+    fn the_entry_is_its_measured_length_at_every_shape() {
+        // Live's entries (frames) at Shape 0, 0.25, 0.5, 0.75 and 1, Smooth None then Fast.
+        for (fast, frames) in
+            [(false, [-1.0, 391.0, 775.0, 1159.0, 1543.0]), (true, [-1.0, 384.0, 770.0, 1156.0, 1542.0])]
+        {
+            for (shape, want) in [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().zip(frames) {
+                assert_eq!(entry(shape, true, fast), want, "Shape {shape}, fast {fast}");
+            }
+        }
+    }
+
+    #[test]
     fn the_loop_mix_is_orthogonal_and_close_to_the_measured_one() {
         for design in [&SPARSE, &LOW, &MID, &HIGH] {
             let mix = orthonormal(design);
@@ -950,6 +1000,27 @@ mod tests {
     }
 
     #[test]
+    fn the_loop_keeps_its_energy_with_each_line_at_its_level() {
+        for design in [&SPARSE, &LOW, &MID, &HIGH] {
+            let (mix, levels, n) = (loop_mix(design), &design.levels, design.lines);
+            // Taken at their levels, the lines mix orthogonally.
+            let heard = |k: usize, i: usize| mix[k][i] * levels[i] / levels[k];
+            for i in 0..n {
+                for j in 0..n {
+                    let dot: f64 = (0..n).map(|k| heard(k, i) * heard(k, j)).sum();
+                    let want = if i == j { 1.0 } else { 0.0 };
+                    assert!((dot - want).abs() < 1e-12, "{n} lines, columns {i} and {j}: {dot}");
+                }
+            }
+            // Within 1 % of each other, about one.
+            let mean = (levels[..n].iter().map(|l| l.ln()).sum::<f64>() / n as f64).exp();
+            assert!((mean - 1.0).abs() < 1e-4, "{n} lines: {mean}");
+            assert!(levels[..n].iter().all(|l| (l - 1.0).abs() < 0.01), "{n} lines: {levels:?}");
+        }
+        assert_eq!(loop_mix(&LOW), orthonormal(&LOW));
+    }
+
+    #[test]
     fn sparses_lines_are_their_measured_lengths() {
         // Live's first passes at Size 100 less the entry (frames), as below.
         let measured: [[f64; 6]; 4] = [
@@ -958,10 +1029,11 @@ mod tests {
             [4522.0, 4610.0, 4730.0, 4850.0, 4970.0, 5082.0],
             [9538.0, 9706.0, 9930.0, 10146.0, 10370.0, 10586.0],
         ];
-        for (k, (row, lengths)) in SPARSE_LENGTHS.iter().zip(measured).enumerate() {
+        for (k, lengths) in measured.into_iter().enumerate() {
             for (percent, want) in [5.0, 20.0, 40.0, 60.0, 80.0, 100.0].into_iter().zip(lengths) {
-                let (line, allpass) = read_length_at(row, 0.0, 1.0, percent, true);
-                assert_eq!(line + allpass, want, "line {k} at Scale {percent} %");
+                let (line, allpass, second) =
+                    shared_length_at(SPARSE_DELAYS[k], SPARSE.families[k], false, 1.0, percent, true, false);
+                assert_eq!(line + allpass + second, want, "line {k} at Scale {percent} %");
             }
         }
     }
@@ -982,16 +1054,78 @@ mod tests {
             [10027.0, 11635.0, 13787.0, 15947.0, 18091.0, 20243.0],
             [16019.0, 16435.0, 16987.0, 17539.0, 18091.0, 18643.0],
         ];
-        for (k, (row, lengths)) in HIGH_LENGTHS.iter().zip(measured).enumerate() {
+        for (k, lengths) in measured.into_iter().enumerate() {
+            let family = HIGH.families[k];
             for (percent, want) in [5.0, 20.0, 40.0, 60.0, 80.0, 100.0].into_iter().zip(lengths) {
-                let (line, first, second) = paired_length_at(row, HIGH_SHORTER[k], 1.0, percent, true);
+                let (line, first, second) = shared_length_at(family, family, true, 1.0, percent, true, false);
                 assert_eq!(line + first + second, want, "line {k} at Scale {percent} %");
             }
         }
         // Mid's are High's but the second and the last.
-        let mid: Vec<_> =
-            HIGH_LENGTHS.iter().enumerate().filter(|(k, _)| ![1, 9].contains(k)).map(|(_, r)| *r).collect();
-        assert_eq!(mid, MID_LENGTHS);
+        let mid: Vec<_> = HIGH.families[..HIGH.lines].iter().filter(|f| ![8, 7].contains(*f)).copied().collect();
+        assert_eq!(mid, MID.families[..MID.lines]);
+    }
+
+    #[test]
+    fn d_and_the_2073_familys_allpasses_split_as_measured_at_size_10_54() {
+        // Each allpass (frames) where Mid's and High's tails match Live's at Diffusion 30 and
+        // 60 % (`reverb-network-density-split`). With the allpasses split as first read, D's
+        // second came a block short at Scale 40 %, and at 100 % D's first and the 2073 family's
+        // came a block long and the 2073 family's second a block short; at Diffusion 0.1 % only
+        // their sums show, which hold at every Size and Scale read.
+        let room = (10.54f64 / 100.0).cbrt();
+        for (family, percent, want) in
+            [(3, 40.0, (265.0, 529.0)), (3, 100.0, (657.0, 1305.0)), (7, 100.0, (289.0, 1025.0))]
+        {
+            let (_, first, second) = shared_length_at(family, family, true, room, percent, true, false);
+            assert_eq!((first, second), want, "family {family} at Scale {percent} %");
+        }
+    }
+
+    #[test]
+    fn every_densitys_lines_are_their_measured_lengths_at_the_ends_of_the_size_range() {
+        // Live's first passes less the entry (frames), Scale 40 %, at Size 0.222 and 500, with
+        // Smooth None and Fast (`reverb-network-density-size`); under Fast the A and B lines' are
+        // between frames.
+        let small = (0.222f64 / 100.0).cbrt();
+        let large = (500.0f64 / 100.0).cbrt();
+        let high: [[f64; 4]; 10] = [
+            [675.0, 8699.0, 664.92, 8693.68],
+            [683.0, 8747.0, 668.0, 8742.0],
+            [723.0, 9355.0, 714.0, 9343.0],
+            [939.0, 12187.0, 930.0, 12178.0],
+            [1291.0, 16891.0, 1289.0, 16883.0],
+            [747.0, 9595.0, 733.0, 9588.0],
+            [771.0, 9987.0, 763.0, 9981.0],
+            [979.0, 12651.0, 965.0, 12639.0],
+            [1811.0, 23571.0, 1799.16, 23559.6],
+            [2219.0, 29035.0, 2215.0, 29020.0],
+        ];
+        // Sparse's last line at Size 0.222 under Fast overlaps others and is not read.
+        let sparse: [[f64; 4]; 4] = [
+            [482.0, 6226.0, 475.0, 6220.0],
+            [514.0, 6666.0, 509.98, 6661.68],
+            [626.0, 8082.0, 617.0, 8077.0],
+            [1306.0, 16970.0, f64::NAN, 16960.0],
+        ];
+        let check = |name: &str, k: usize, delay: usize, family: usize, second: bool, want: [f64; 4]| {
+            for ((room, fast), want) in
+                [(small, false), (large, false), (small, true), (large, true)].into_iter().zip(want)
+            {
+                if want.is_nan() {
+                    continue;
+                }
+                let (line, first, second) = shared_length_at(delay, family, second, room, 40.0, true, fast);
+                let got = line + first + second;
+                assert!((got - want).abs() < 0.06, "{name} line {k}, room {room}, fast {fast}: {got} against {want}");
+            }
+        };
+        for (k, want) in high.into_iter().enumerate() {
+            check("High", k, HIGH.families[k], HIGH.families[k], true, want);
+        }
+        for (k, want) in sparse.into_iter().enumerate() {
+            check("Sparse", k, SPARSE_DELAYS[k], SPARSE.families[k], false, want);
+        }
     }
 
     #[test]
@@ -999,13 +1133,13 @@ mod tests {
         // As at Low, each family's copy joins one line, and none shares its offset.
         for design in [&MID, &HIGH] {
             let mut peaks: Vec<_> =
-                design.offsets[..design.lines].iter().map(|&o| (front_of(o, 1.0, true) + 1.0) as i64).collect();
+                design.families[..design.lines].iter().map(|&k| peak(k, 1.0, true, false) as i64).collect();
             peaks.sort_unstable();
             peaks.dedup();
             assert_eq!(peaks.len(), design.lines);
         }
-        assert_eq!(front_of(MID.offsets[2], 1.0, true) + 1.0, 961.0);
-        assert_eq!(front_of(HIGH.offsets[9], 1.0, true) + 1.0, 2073.0);
+        assert_eq!(peak(MID.families[2], 1.0, true, false), 961.0);
+        assert_eq!(peak(HIGH.families[9], 1.0, true, false), 2073.0);
     }
 
     #[test]
@@ -1043,6 +1177,43 @@ mod tests {
     }
 
     #[test]
+    fn the_smallest_rooms_c_and_r_are_their_measured_lengths() {
+        // Read from Live's tail at Size 0.222 (`reverb-network-small`): C's family offset and
+        // delay, and R's A delay and G, are each one rounded length, not two.
+        let room = (0.222 / 100.0f64).cbrt();
+        assert_eq!(length_at(2, room, 40.0, true).0, 8.0 * 82.0 + 1.0);
+        assert_eq!(length_at(5, room, 40.0, true).0, 8.0 * 160.0 + 1.0);
+    }
+
+    #[test]
+    fn the_largest_rooms_r_is_its_measured_length() {
+        // Live's tail at Size 500 (`reverb-size decay-3.46s-size-500`) has R a block shorter than
+        // the reads at Size 0.222 to 100 put it: 2087 blocks and a frame.
+        let room = 5.0f64.cbrt();
+        assert_eq!(length_at(5, room, 40.0, true).0, 8.0 * 2087.0 + 1.0);
+    }
+
+    #[test]
+    fn r_at_size_350_is_its_measured_length() {
+        // Low's tail at Size 350 (`reverb-network-size-level`) has R 1854 blocks and a frame, a
+        // block longer than the reads at Size 0.222 to 100 and 500 alone put it.
+        let room = 3.5f64.cbrt();
+        assert_eq!(length_at(5, room, 40.0, true).0, 8.0 * 1854.0 + 1.0);
+    }
+
+    #[test]
+    fn mids_and_highs_lines_are_their_measured_lengths_at_size_400() {
+        // Live's first passes less the entry (frames) at Size 400, Scale 40 %, Smooth None
+        // (`reverb-network-size-level`), where the 3193, 2337, 961 and 2497 families' lines are a
+        // block shorter than the reads at the other Sizes alone put them.
+        let room = 4.0f64.cbrt();
+        for (family, want) in [(1, 8075.0), (5, 11739.0), (6, 11315.0), (9, 8907.0)] {
+            let (line, first, second) = shared_length_at(family, family, true, room, 40.0, true, false);
+            assert_eq!(line + first + second, want, "family {family}");
+        }
+    }
+
+    #[test]
     fn under_smooth_fast_a_line_is_its_measured_loop() {
         // Live's loops under Smooth Fast (frames: each line's first pass and 5), read at each
         // (Size, Scale %) of `reverb-network-fast`.
@@ -1053,6 +1224,14 @@ mod tests {
             (1.53, 40.0, [622.191, 774.411, 1319.0, 1231.0, 1856.0, 2489.0]),
             (1.53, 100.0, [698.192, 920.409, 1422.0, 1705.0, 2116.0, 2585.0]),
         ];
+        // C's, D's, F's and R's at the ends of the range (`reverb-network-density-size`).
+        for (size, loops) in [(0.222, [694.0, 647.0, 976.0, 1308.0]), (500.0, [9078.0, 8470.0, 12778.0, 17138.0])] {
+            let room = (size / 100.0f64).cbrt();
+            for (k, want) in (2..LOOP).zip(loops) {
+                let (line, allpass) = fast_length_at(k, room, 40.0, true);
+                assert_eq!(line + allpass, want, "line {k} at Size {size}");
+            }
+        }
         for (size, percent, loops) in measured {
             let room = (size / 100.0f64).cbrt();
             for (k, want) in loops.into_iter().enumerate() {
@@ -1068,16 +1247,44 @@ mod tests {
     }
 
     #[test]
+    fn under_smooth_fast_an_allpass_is_its_measured_length() {
+        // Read at Diffusion 48 and 60 %, where a frame between a line's delay and its allpass
+        // shows (`reverb-impulse` reverb-decay, reverb-decay-none, reverb-texture): A to R.
+        let measured = [
+            (100.0, 40.0, [204.0, 392.0, 279.0, 1274.0, 700.0, 258.0]),
+            (10.54, 40.0, [96.0, 186.0, 132.0, 602.0, 331.0, 122.0]),
+            (1.53, 5.0, [7.0, 13.0, 9.0, 40.0, 22.0, 8.0]),
+            (1.53, 40.0, [51.0, 98.0, 70.0, 317.0, 174.0, 64.0]),
+            (1.53, 100.0, [127.0, 244.0, 173.0, 791.0, 434.0, 160.0]),
+            (500.0, 40.0, [348.0, 670.0, 477.0, 2178.0, 1196.0, 441.0]),
+        ];
+        for (size, percent, allpasses) in measured {
+            let room = (size / 100.0f64).cbrt();
+            for (k, want) in allpasses.into_iter().enumerate() {
+                assert_eq!(
+                    fast_length_at(k, room, percent, true).1,
+                    want,
+                    "line {k} at Size {size}, Scale {percent} %"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn under_smooth_fast_each_copy_starts_where_measured() {
         let measured = [
             (100.0, [396.0, 3191.0, 1640.0, 1336.0, 2983.0, 2337.0]),
             (10.54, [187.0, 1508.0, 775.0, 631.0, 1409.0, 1104.0]),
             (1.53, [99.0, 793.0, 408.0, 332.0, 741.0, 581.0]),
         ];
+        // A's and D's filtered reflections at Size 500 (`reverb-structure size-500-er`).
+        let room = 5.0f64.cbrt();
+        assert_eq!(peak(0, room, true, true), 676.0);
+        assert_eq!(peak(3, room, true, true), 2285.0);
         for (size, peaks) in measured {
             let room = (size / 100.0f64).cbrt();
             for (k, want) in peaks.into_iter().enumerate() {
-                assert_eq!(fast_front(k, room, true) + 1.0, want, "family {k} at Size {size}");
+                assert_eq!(peak(k, room, true, true), want, "family {k} at Size {size}");
             }
         }
     }
@@ -1087,12 +1294,39 @@ mod tests {
         let measured = [
             (100.0, [401.0, 3193.0, 1641.0, 1337.0, 2985.0, 2337.0]),
             (10.54, [193.0, 1513.0, 777.0, 633.0, 1409.0, 1105.0]),
-            (0.22, [57.0, 417.0, 217.0, 177.0, 393.0, 305.0]),
+            (0.222, [57.0, 417.0, 217.0, 177.0, 393.0, 305.0]),
+            // `reverb-size decay-3.46s-size-500`: A and B read, the rest where a block either way
+            // fits Live's tail worse.
+            (500.0, [681.0, 5457.0, 2809.0, 2289.0, 5105.0, 4001.0]),
+            // Low's reflections alone at Size 250 to 400 (`reverb-network-size-level`), where the
+            // 401 family is a block shorter at 250 and 350 and the 3193 family a block longer at
+            // 250 and 300 than the reads up to 100 and at 500 alone put them.
+            (250.0, [537.0, 4337.0, 2233.0, 1817.0, 4049.0, 3177.0]),
+            (300.0, [577.0, 4609.0, 2369.0, 1929.0, 4305.0, 3377.0]),
+            (350.0, [601.0, 4849.0, 2497.0, 2033.0, 4529.0, 3553.0]),
+            (400.0, [633.0, 5065.0, 2609.0, 2121.0, 4737.0, 3713.0]),
         ];
         for (size, peaks) in measured {
             let room = (size / 100.0f64).cbrt();
             for (k, want) in peaks.into_iter().enumerate() {
-                assert_eq!(peak(k, room, true), want, "family {k} at Size {size}");
+                assert_eq!(peak(k, room, true, false), want, "family {k} at Size {size}");
+            }
+        }
+    }
+
+    #[test]
+    fn mids_and_highs_own_families_peak_where_measured() {
+        // Mid's and High's reflections alone at Size 0.222 and 500 (`reverb-network-density-size`):
+        // the 961, 2073, 2393 and 2497 families, None then Fast.
+        let measured = [
+            (0.222, [129.0, 273.0, 313.0, 329.0], [126.0, 271.0, 313.0, 326.0]),
+            (500.0, [1649.0, 3545.0, 4097.0, 4265.0], [1643.0, 3543.0, 4091.0, 4265.0]),
+        ];
+        for (size, none, fast) in measured {
+            let room = (size / 100.0f64).cbrt();
+            for (i, (none, fast)) in none.into_iter().zip(fast).enumerate() {
+                assert_eq!(peak(6 + i, room, true, false), none, "family {} at Size {size}", 6 + i);
+                assert_eq!(peak(6 + i, room, true, true), fast, "family {} at Size {size}, Fast", 6 + i);
             }
         }
     }
