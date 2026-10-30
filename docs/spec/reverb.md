@@ -533,7 +533,7 @@ Each entry: what was chosen, what it costs, why.
     (reading it at the impulse made every phase look 0.06 to 0.18 rad late, growing with the delay).
     Cost: six lines read once a frame.
 
-23. **Density Low's network also takes three families of filtered reflections,** each a fixed
+23. **Density Low's network also takes four families of filtered reflections,** each a fixed
     number of frames after the direct ones (`COPY_OFFSETS`). Each family of filtered reflections
     (Decision 12: a direct one 395, 1335, 1639, 2336, 2982 or 3190 frames later, on one side) is a
     mix of the six groups, the same for both reflections of a group, and those mixes are the
@@ -547,8 +547,10 @@ Each entry: what was chosen, what it costs, why.
     direct reflections follow one family's weights (fit 0.96 to 1.00), its move with Scale names
     the lines it passed, and Shape tilts a copy as the filtered reflection it is (at 101 ms), not
     as its source (48 ms). So:
-    - the return line takes the 2336 family at 0.43 of a direct reflection's share (its returns
-      came at 0.57 to 0.66 of their sources' own, with no repeat at twice the offset);
+    - the return line takes the 2336 family at 0.51 of a direct reflection's share (its returns
+      came at 0.57 to 0.66 of their sources' own, with no repeat at twice the offset), and the 395
+      family (the first pattern's) at −0.36 (moving with Scale by A's and G's allpasses, 409
+      frames after the 2336 family would be at Scale 5, 40 and 100 %);
     - the 2982 family (left) feeds F straight from the groups (0.51), and B (0.44) and the
       1641-frame line (−0.76, heard on the right through C) one offset later;
     - the 1639 family feeds A (0.20) and C (−0.18) one offset later, where Live's path through
@@ -563,7 +565,9 @@ Each entry: what was chosen, what it costs, why.
     is now within 0.6 dB of Live's from 0.15 s at every Scale and Size, and within 0.3 dB past 0.7
     s (0.6 to 1.7 dB short before), the right within 0.5 dB from 0.7 s, and the right's 0.05 to
     0.1 s within 0.5 dB (1.5 short before). The right is still 0.7 to 1.1 dB short from 0.15 to 0.5
-    s, where smaller arrivals follow the 3190, 1335 and 395 families' weights (Known differences). Cost: three filters and three short lines.
+    s, where the paths that end through the 1641-frame line and then C are weak (Known
+    differences). Over the `reverb-impulse` set 889 of 1,084 energy windows are within 1 dB (788
+    before) and 648 within 0.5 dB (447), the median error 0.38 dB (0.61). Cost: three filters and three short lines.
 
 ## Known differences
 
@@ -613,11 +617,14 @@ What is further off, and why it is left:
   repeat correlates 0.25 to 0.45, this device's strongest about 0.1 to 0.2. That loop sets the
   pitch of the ringing at Size 1.53 (about 56 Hz apart; this device's strongest repeat there is
   36.8 ms).
-- **Live's right side from 0.15 to 0.5 s** (Decisions 21 and 23): 0.3 to 0.5 dB louder than
-  Suhina's over the `reverb-impulse` set (0.5 to 0.9 dB before Decision 23), and 0.7 to 1.1 dB in
-  the sparse `reverb-network-taps` renders, where smaller missing arrivals follow the 3190, 1335
-  and 395 families' weights; their paths are not read yet. Over the set 888 of 1,084 energy
-  windows are within 1 dB (788 before Decision 23), the median error 0.40 dB (0.61). The return
+- **Live's right side from 0.15 to 1 s** (Decisions 21 and 23): 0.1 to 0.4 dB louder than
+  Suhina's over the `reverb-impulse` set (0.5 to 0.9 dB before Decision 23), and 0.6 to 0.8 dB in
+  the sparse `reverb-network-taps` renders. The paths there that end through the 1641-frame line
+  and then C are weak: the 1335 family's through A (77 % of Live's), the 3190 mix's through B (63
+  %) and the 2982 mix's through F (69 %), while the 1639 mix's straight through the 1641-frame
+  line is right (within 12 %). So that line takes too little of A, B and F in the fitted mix,
+  which, kept orthogonal, cannot take more without taking less elsewhere (D, at 0.64, is the
+  candidate); not changed yet. The return
   line's feed from the loop lines (`RETURN_LOOP`) is still fitted, now at 0.85 of its first fit.
   At Size 1.53 and 10.54 the tail is louder than Live's, most at Diffusion 0.1 % (0.4 to 1.6 dB
   from 0.15 s, 0.3 to 0.6 dB more since Decision 23): the families were read at Size 100 only.
