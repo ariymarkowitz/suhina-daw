@@ -330,10 +330,10 @@ fn every_filtered_reflection_follows_exactly_one_direct_one() {
         }
     };
     for (taps, ms, side, expected) in [
-        (&TAPS_MID[..], 63.946, RIGHT, 7.370),
-        (&TAPS_HIGH[..], 56.576, RIGHT, 0.0),
-        (&TAPS_HIGH[..], 64.444, LEFT, 34.172),
-        (&TAPS_HIGH[..], 64.444, RIGHT, 11.429),
+        (&TAPS_MID[..], 63.901, RIGHT, 7.370),
+        (&TAPS_HIGH[..], 56.532, RIGHT, 0.0),
+        (&TAPS_HIGH[..], 64.448, LEFT, 34.172),
+        (&TAPS_HIGH[..], 64.384, RIGHT, 11.429),
     ] {
         let found = source(taps, ms, side);
         assert!((found - expected).abs() < 0.02, "{ms} ms: {found} against {expected}");

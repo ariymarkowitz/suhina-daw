@@ -128,6 +128,19 @@ pub(crate) fn peak(k: usize, room: f64, settled: bool) -> f64 {
     front(k, room, settled) + 1.0
 }
 
+/// How many blocks short of its reference-room length a filtered reflection's offset scales
+/// from, for [`copy_front`].
+const COPY_SHORT: f64 = 0.45;
+
+/// Where a filtered reflection `frames` after its direct one in the reference room is heard for
+/// size factor `room`: `BLOCK * ceil((frames / BLOCK - COPY_SHORT) * room)`, whole blocks when
+/// `settled`. Every family's copies in Live's reflections alone (`reverb-network-density`,
+/// `reverb-network-density-filters`, Mid and High at Size 1.53, 10.54 and 100) sit there, the
+/// shortfall between 0.41 and 0.5 for all ten.
+pub(crate) fn copy_front(frames: f64, room: f64, settled: bool) -> f64 {
+    blocks((frames / BLOCK - COPY_SHORT) * room, 1.0, settled)
+}
+
 /// Where family `k`'s copy starts under Smooth Fast, as [`front`].
 fn fast_front(k: usize, room: f64, settled: bool) -> f64 {
     frames(BLOCK * FAST_FAMILY_OFFSETS[k] * room, 0.0, settled)

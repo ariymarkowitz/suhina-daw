@@ -795,8 +795,8 @@ Each entry: what was chosen, what it costs, why.
     default damping) showed Suhina 1.0 to 1.8 dB loud at Size 1.53 and 10.54 with the filters off:
     Decision 25's law (reflections 0.926 + 0.00074 per unit of Size, the network's input taking
     it twice) fits them; the tail is now within 0.6 dB of Live's at all three Sizes (within 0.35 dB
-    at Mid and High). The early reflections alone are 0.3 to 0.65 dB quiet at every Size, the
-    extra faint taps Live has at Mid and High among the cause. The damping: Mid's and High's
+    at Mid and High). The early reflections alone were 0.3 to 0.65 dB quiet at every Size (at
+    Mid and High, Decision 32). The damping: Mid's and High's
     follow Low's law (the Low-Pass a whole one-pole a pass, the shelves with a loss proportional to
     the line's length) to within 0.8 dB/s in every band and case; Sparse's shelves lose 1.37 times
     as much (fitted over the 1 kHz and 500 Hz shelves, the 4 kHz shelf and the default damping at
@@ -805,6 +805,27 @@ Each entry: what was chosen, what it costs, why.
     default settings, now within 0.4 dB/s). Not explained: at the default Decay of 1 s Mid and
     High still decay 1.4 to 1.6 dB/s too slowly from 8 to 16 kHz, though their damping matches at
     Decay 60 s; no Live render of those two at a short Decay with the bare network exists.
+
+32. **Mid's and High's filtered reflections are one low-passed copy each, in families of whole
+    8-frame blocks.** Solved straight from Live's reflections alone (`reverb-network-density`,
+    Decay 60 s, Hi Cut off, Spin off, Size 100) by least squares over the ten direct taps and,
+    for each family, one gain per direct tap, with the copy's shape left free: the shape came out
+    as the reflections' own low-pass (0.535, 1, 0.407, −0.056 against 0.537, 1, 0.393, −0.066),
+    the direct taps at exactly ±1 once the fade is taken out, and the fit within −50 dB (Mid) and
+    −43 dB (High) of Live's energy. Mid has eight families and High ten, heard 400, 960, 1336,
+    1640, 2072 (High only), 2336, 2392 (High only), 2496, 2984 and 3192 frames after their direct
+    reflections; with every gain fitted (80 and 100 of them) the "extra faint taps" are no more
+    than these families' small gains. The tables had read each copy as two taps two frames
+    apart, which smeared it (peaks at 0.78 of Live's), and put the 2072 and 2496 families 1 and 3
+    frames early. At smaller Sizes every family's copy, the six in Low's network included, sits at
+    `8 × ceil((n − s) × room)` frames, n its blocks at Size 100 and s between 0.41 and 0.5 for all
+    ten (0.45 is used); the four families Low lacks scaled freely before and came 3 to 6 frames
+    early at Size 1.53 and 10.54. Against Live's reflections alone the first 140 ms went from −7 to
+    −15 dB to −38 dB at Size 100, and from −4 to −6 dB to −18 to −27 dB at Size 1.53 and 10.54
+    (every window with reflections in it at −38 to −42 dB; the rest is the network's tail at
+    Diffuse's minimum), and their level from 0.5 to 0.8 dB quiet to within 0.06 dB. Mid's and
+    High's networks still take their copies of these families as `front_of` (120 and 312 blocks
+    at Mid), not this law, which was not checked against the network.
 
 ## Known differences
 
