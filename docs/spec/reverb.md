@@ -147,7 +147,8 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   two on the right and three on the left, each at its own level. A return line (Decision 21)
   takes the groups again, runs the first and sixth lines' delays and 2 frames more (227.5 ms at
   Scale 40 %) through one allpass as long as both of theirs, takes 0.757 of its own output and a share of every loop line's, and
-  is heard on the right only; it feeds nothing back. Every length scales with the size
+  is heard on the right only; it feeds nothing back. Three families of filtered reflections enter
+  as well, one offset after their mix of the groups (Decision 23). Every length scales with the size
   factor, small rooms too; damping and chorus are as below. Every path fades with its whole time
   from the input: each line's gain covers its delay, its allpass loses its own delay's gain on
   every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`), and each plain delay its own.
@@ -532,6 +533,38 @@ Each entry: what was chosen, what it costs, why.
     (reading it at the impulse made every phase look 0.06 to 0.18 rad late, growing with the delay).
     Cost: six lines read once a frame.
 
+23. **Density Low's network also takes three families of filtered reflections,** each a fixed
+    number of frames after the direct ones (`COPY_OFFSETS`). Each family of filtered reflections
+    (Decision 12: a direct one 395, 1335, 1639, 2336, 2982 or 3190 frames later, on one side) is a
+    mix of the six groups, the same for both reflections of a group, and those mixes are the
+    network's inputs: the 395 family's is the first pattern (1.04 to 1.19 times it, group by
+    group), 3190's the second, 1639's the third (which also feeds the 1641-frame line), 1335's the
+    fourth, 2336's the return line's `RETURN_FEED` (1.31 to 1.48 times), and the plain delays in
+    front of the loop are those offsets (400.75, 1336.75 and 3192.75 frames). The network takes some
+    mixes again one offset later, as the filtered reflections themselves, which the first fit
+    missed. Found in `reverb-network-taps` (Stereo 120, Diffusion 0.1 %, Decay 60 s), arrival by
+    arrival against Suhina's render of the same cases: a missing arrival's levels over the ten
+    direct reflections follow one family's weights (fit 0.96 to 1.00), its move with Scale names
+    the lines it passed, and Shape tilts a copy as the filtered reflection it is (at 101 ms), not
+    as its source (48 ms). So:
+    - the return line takes the 2336 family at 0.43 of a direct reflection's share (its returns
+      came at 0.57 to 0.66 of their sources' own, with no repeat at twice the offset);
+    - the 2982 family (left) feeds F straight from the groups (0.51), and B (0.44) and the
+      1641-frame line (−0.76, heard on the right through C) one offset later;
+    - the 1639 family feeds A (0.20) and C (−0.18) one offset later, where Live's path through
+      the 1641-frame line and then A was 3.9 dB stronger than the mix gave, and through it and
+      then C 1.2 dB weaker.
+
+    Each copy is read from the filtered reflections' own offset lines before their side's low-pass,
+    passes a low-pass like theirs and waits the Shape entry as the groups do. With these in,
+    `RETURN_LOOP` (fitted when they were missing) made the right's late tail 0.6 dB loud, so it
+    keeps its fitted shape at 0.85 of its size; at zero the right falls 2.1 dB short, so Live's
+    return line does take a share of the loop. In `reverb-network-taps` at Decay 60 s the left
+    is now within 0.6 dB of Live's from 0.15 s at every Scale and Size, and within 0.3 dB past 0.7
+    s (0.6 to 1.7 dB short before), the right within 0.5 dB from 0.7 s, and the right's 0.05 to
+    0.1 s within 0.5 dB (1.5 short before). The right is still 0.7 to 1.1 dB short from 0.15 to 0.5
+    s, where smaller arrivals follow the 3190, 1335 and 395 families' weights (Known differences). Cost: three filters and three short lines.
+
 ## Known differences
 
 Measured against Live's renders of the same sets imported and rendered by `suhina-cli render` at
@@ -580,10 +613,17 @@ What is further off, and why it is left:
   repeat correlates 0.25 to 0.45, this device's strongest about 0.1 to 0.2. That loop sets the
   pitch of the ringing at Size 1.53 (about 56 Hz apart; this device's strongest repeat there is
   36.8 ms).
-- **Live's right side from 0.15 to 1 s** (Decision 21): 0.5 to 0.9 dB louder than Suhina's
-  over the `reverb-impulse` set, and at Size 1.53 and 10.54 the late right side is 0.8 to 1.4 dB
-  above Live's from 1 s, most at Diffusion 0.1 %. The return line was identified at Size 100
-  only, and its feed from the loop lines is fitted, not read.
+- **Live's right side from 0.15 to 0.5 s** (Decisions 21 and 23): 0.3 to 0.5 dB louder than
+  Suhina's over the `reverb-impulse` set (0.5 to 0.9 dB before Decision 23), and 0.7 to 1.1 dB in
+  the sparse `reverb-network-taps` renders, where smaller missing arrivals follow the 3190, 1335
+  and 395 families' weights; their paths are not read yet. Over the set 888 of 1,084 energy
+  windows are within 1 dB (788 before Decision 23), the median error 0.40 dB (0.61). The return
+  line's feed from the loop lines (`RETURN_LOOP`) is still fitted, now at 0.85 of its first fit.
+  At Size 1.53 and 10.54 the tail is louder than Live's, most at Diffusion 0.1 % (0.4 to 1.6 dB
+  from 0.15 s, 0.3 to 0.6 dB more since Decision 23): the families were read at Size 100 only.
+- **Timing of the filtered reflections' copies:** Live's paths through them come 4 to 6 frames
+  after Suhina's (the 2982 family's through B and C 6 frames, the 1639 family's through A 4),
+  as with the network's other responses (below).
 - **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
   the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
   reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's

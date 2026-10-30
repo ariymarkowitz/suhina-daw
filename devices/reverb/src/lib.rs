@@ -906,6 +906,9 @@ struct Tuning {
     entry: f64,
     /// Gain of the input into the measured network.
     measured_feed: f64,
+    /// Gain of the filtered reflections into the measured network, from their level as heard to a
+    /// direct reflection's share of the input.
+    copy_feed: f64,
 }
 
 impl Default for Tuning {
@@ -924,6 +927,7 @@ impl Default for Tuning {
             measured: measured::Lengths::default(),
             entry: 2.0,
             measured_feed: 0.0,
+            copy_feed: 0.0,
         }
     }
 }
@@ -948,6 +952,7 @@ impl Tuning {
         self.measured.between(&from.measured, &to.measured, t);
         self.entry = from.entry + (to.entry - from.entry) * t;
         self.measured_feed = from.measured_feed + (to.measured_feed - from.measured_feed) * t;
+        self.copy_feed = from.copy_feed + (to.copy_feed - from.copy_feed) * t;
     }
 }
 
@@ -1188,8 +1193,9 @@ pub struct Reverb {
     high_cut: Biquad,
     /// The low-pass the input passes while High Cut is off.
     top_cut: Biquad,
-    /// The reflections' low-pass, for the filtered taps of each side.
-    reflection_filters: [Biquad; 2],
+    /// The reflections' low-pass, for the filtered taps of each side and for each family of them
+    /// the measured network takes again ([`measured::COPY_OFFSETS`]).
+    reflection_filters: [Biquad; 2 + measured::COPIES],
     /// The early reflections of the Density setting.
     taps: &'static [Tap],
     /// The Density whose reflections [`taps`](Self::taps) are.
@@ -1205,8 +1211,9 @@ pub struct Reverb {
     /// the network's taps read.
     feed_line: DelayLine,
     /// The measured network's input groups, each the sum of its direct reflections as they were
-    /// read (Spin's shift included), delayed by the Shape entry before the network takes them.
-    group_lines: [DelayLine; measured::GROUPS],
+    /// read (Spin's shift included), delayed by the Shape entry before the network takes them; the
+    /// last ones hold the families of filtered reflections it takes as well.
+    group_lines: [DelayLine; measured::GROUPS + measured::COPIES],
     /// The damping in front of [`feed_line`](Self::feed_line).
     input_damper: Damper,
     /// The low-pass after [`input_damper`](Self::input_damper), at [`FEED_CUT`].
@@ -1635,6 +1642,7 @@ impl Reverb {
         // it keeps Shape's share of the fade over the 20 ms, about Shape 0.5.
         t.measured_feed =
             t.feed * MEASURED_GAIN * db_to_gain(-TAP_FADE_PER_SHAPE * (shape - 0.5) * TAIL_LAG_MS / setting);
+        t.copy_feed = t.measured_feed / (TAP_GAIN * predelay_gain * norm);
         t.feed *= db_to_gain(-short);
         t.feed *= (line_room / room).sqrt().min(SMALL_ROOM_GAIN_LIMIT);
         let corner = (REFLECTION_TOP - REFLECTION_SPAN * setting.powf(-REFLECTION_POWER)).clamp(20.0, 0.45 * sr);
@@ -1893,7 +1901,7 @@ impl Device for Reverb {
             // of its own, in turn, after the Shape delay, and the first feeds a few.
             let (mut direct, mut filtered) = ([0.0f64; 2], [0.0f64; 2]);
             let mut inputs = [0.0f64; 16];
-            let mut groups = [0.0f64; measured::GROUPS];
+            let mut groups = [0.0f64; measured::GROUPS + measured::COPIES];
             let mut direct_index = 0;
             let mut next_line = 0;
             let mut spread = FIRST_TAP_LINES.clamp(1, active);
@@ -1936,11 +1944,6 @@ impl Device for Reverb {
                     spread = 1;
                 }
             }
-            for (group, line) in groups.iter_mut().zip(&mut self.group_lines) {
-                let late = if whole { line.read(entry_whole as usize) } else { line.read_hermite(t.entry) };
-                line.push(*group as f32);
-                *group = f64::from(late);
-            }
             let mut mixes = [0.0f64; FILTERED_OFFSETS.len()];
             for (route, &gain) in self.routes.iter().zip(&t.tap_gains).take(self.taps.len()) {
                 if let &Route::Follows { source, offset } = route
@@ -1949,7 +1952,8 @@ impl Device for Reverb {
                     *mix += reads.get(source).copied().unwrap_or(0.0) * gain;
                 }
             }
-            for ((((line, mix), &offset), &(_, side)), _) in self
+            let mut copies = [0.0f64; measured::COPIES];
+            for ((((line, mix), &offset), &(frames, side)), _) in self
                 .offset_lines
                 .iter_mut()
                 .zip(mixes)
@@ -1962,10 +1966,23 @@ impl Device for Reverb {
                 if let Some(out) = filtered.get_mut(side) {
                     *out += f64::from(y);
                 }
+                if let Some(copy) = measured::COPY_OFFSETS.iter().position(|o| o.contains(&frames)) {
+                    copies[copy] += f64::from(y);
+                }
                 line.push(mix as f32);
             }
-            let [left_filter, right_filter] = &mut self.reflection_filters;
+            let [left_filter, right_filter, copy_filters @ ..] = &mut self.reflection_filters;
             let early = [direct[0] + left_filter.process(filtered[0]), direct[1] + right_filter.process(filtered[1])];
+            if measured {
+                for ((group, filter), copy) in groups[measured::GROUPS..].iter_mut().zip(copy_filters).zip(copies) {
+                    *group = filter.process(copy) * feed * t.copy_feed;
+                }
+            }
+            for (group, line) in groups.iter_mut().zip(&mut self.group_lines) {
+                let late = if whole { line.read(entry_whole as usize) } else { line.read_hermite(t.entry) };
+                line.push(*group as f32);
+                *group = f64::from(late);
+            }
 
             // The network. Without Chorus the swing is zero whatever the phase.
             let (chorus_sin, chorus_cos) =

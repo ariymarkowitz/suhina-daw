@@ -125,7 +125,42 @@ const RETURN_SELF: f64 = 0.757;
 /// energy had spread over its lines, where Live's sides stay level; with these it stays within
 /// 0.6 dB from 0.5 to 1.4 s, and the right's waveform matches Live's better past 0.36 s. The line
 /// feeds nothing back, so the loop's stability does not depend on it.
-const RETURN_LOOP: [f64; LOOP] = [-0.420, 0.288, 0.265, -0.336, 0.125, 0.275, 0.005];
+const RETURN_LOOP: [f64; LOOP] = [-0.357, 0.245, 0.225, -0.286, 0.106, 0.234, 0.004];
+/// Families of filtered reflections the network takes as well as the direct ones, by their offset
+/// from the direct ones (frames, reference room, [`crate::FILTERED_OFFSETS`]): the right's 2336
+/// pair, which the return line takes, and the left's 2982 pair, which B and P take. Each family is
+/// a mix of the groups heard again one offset later (its weights are [`RETURN_FEED`] and
+/// [`LEFT_FAMILY`]), and the network takes it at both times, as Live's renders show: with the
+/// network fed only the direct reflections, the right missed every return one family offset late,
+/// and both sides missed arrivals whose levels over the ten direct reflections follow the 2982
+/// family's weights (`reverb-network-taps`, Stereo 120, Diffusion 0.1 %, Decay 60 s; the line
+/// each passed told by how it moves with Scale).
+pub(crate) const COPY_OFFSETS: [[usize; 2]; COPIES] = [[2336, 2338], [2982, 2984], [1639, 1641]];
+/// Families in [`COPY_OFFSETS`].
+pub(crate) const COPIES: usize = 3;
+/// How much of the 2336 family the return line takes, against a direct reflection's share of the
+/// input.
+pub(crate) const RETURN_COPY: f64 = 0.43;
+/// The 2982 family's weights over the groups: each filtered reflection's level against the direct
+/// one it follows, the same for both reflections of a group.
+const LEFT_FAMILY: [f64; GROUPS] = [-0.67, 0.405, -0.66, -0.49, -0.57, -0.53];
+/// What each loop line takes from the 2982 family as the direct reflections make it (heard on the
+/// left after F's length).
+const FROM_LEFT_FAMILY: [f64; LOOP] = [0.0, 0.0, 0.0, 0.0, 0.51, 0.0, 0.0];
+/// What each loop line takes from each family of [`COPY_OFFSETS`] one offset later, as its
+/// filtered reflections: the 2982 family is heard on the left after B's length and on the right
+/// after P's and C's. The 1639 family (pattern 2's weights) reaches the right through P and then A
+/// at 1.57 times, and through P and then C at 0.87 times, what the loop's mix gives; A and C take
+/// the difference from its filtered reflections.
+const FROM_COPIES: [[f64; COPIES]; LOOP] = [
+    [0.0, 0.0, 0.20],
+    [0.0, 0.44, 0.0],
+    [0.0, 0.0, -0.18],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, -0.76, 0.0],
+];
 /// The return line's level on the right: Live's return, and its repeat, against the left side's
 /// first arrivals at Scale 5, 40 and 100 and Diffusion 0.1 %. ([`RETURN_LOOP`] was fitted with the
 /// level 2.3 dB higher and is raised by as much, so the late tail keeps its share.)
@@ -348,13 +383,14 @@ impl Network {
     #[inline]
     pub fn process(
         &mut self,
-        groups: &[f64; GROUPS],
+        input: &[f64; GROUPS + COPIES],
         n: &Lengths,
         diffusion: f32,
         damping: &Damping,
         swing: impl Fn(usize, f64) -> f64,
         frozen: bool,
     ) -> [f64; 2] {
+        let (groups, copies) = input.split_at(GROUPS);
         let p: [f64; PATTERNS] = self.patterns.map(|v| v.iter().zip(groups).map(|(a, g)| a * g).sum());
         let pattern = |row: &[f64; PATTERNS]| row.iter().zip(&p).map(|(a, x)| a * x).sum::<f64>();
 
@@ -389,17 +425,22 @@ impl Network {
         let y = f64::from(r.diffuser.process_lossy(read, n.return_allpass, diffusion, n.return_loss as f32));
         let back = r.damper.damp(y, damping) * n.return_gain;
         tail[1] += RETURN_LEVEL * back;
-        let fed = RETURN_FEED.iter().zip(groups).map(|(a, g)| a * g).sum::<f64>();
+        let fed = RETURN_FEED.iter().zip(groups).map(|(a, g)| a * g).sum::<f64>() + RETURN_COPY * copies[0];
         let looped = RETURN_LOOP.iter().zip(&outs).map(|(a, y)| a * y).sum::<f64>();
         let mut next = fed + looped + RETURN_SELF * back;
         if frozen {
             next = crate::limit(next);
         }
         r.delay.push(next as f32);
+        let family = LEFT_FAMILY.iter().zip(groups).map(|(a, g)| a * g).sum::<f64>();
         for (k, line) in self.lines.iter_mut().enumerate() {
             let mixed: f64 = self.mix[k].iter().zip(&outs).map(|(m, y)| m * y).sum();
             let fed: f64 = FROM_DELAYS[k].iter().zip(&delayed).map(|(m, y)| m * y).sum();
-            let mut next = mixed + fed + pattern(&FROM_PATTERNS[k]);
+            let mut next = mixed
+                + fed
+                + pattern(&FROM_PATTERNS[k])
+                + FROM_LEFT_FAMILY[k] * family
+                + FROM_COPIES[k].iter().zip(copies).map(|(a, c)| a * c).sum::<f64>();
             if frozen {
                 next = crate::limit(next);
             }
