@@ -488,14 +488,24 @@ const OFFSET_LINE_SECONDS: f64 = 0.13;
 const ENTRY_LINE_SECONDS: f64 = 0.06;
 /// Peak swing of a line's delay per unit of Chorus Amount.
 const CHORUS_SECONDS: f64 = 0.001_8;
-/// The reflections' low-pass: a cookbook low-pass with this Q ...
-const REFLECTION_Q: f64 = 0.508;
-/// ... whose corner rises towards this frequency (Hz) with the Decay setting ...
-const REFLECTION_TOP: f64 = 12_000.0;
-/// ... being this many hertz lower at a decay of one second ...
-const REFLECTION_SPAN: f64 = 818.0;
-/// ... and less, as Decay to this power, for longer decays.
-const REFLECTION_POWER: f64 = 0.886;
+/// The reflections' low-pass: a cookbook low-pass with this Q, so two equal poles ...
+const REFLECTION_Q: f64 = 0.5;
+/// ... whose corner rises towards this frequency (Hz) as Decay grows ...
+const REFLECTION_TOP: f64 = 11_980.0;
+/// ... its pole (at 44.1 kHz) above the top's by this much times `1 - exp(-t / Decay)` ...
+const REFLECTION_REACH: f64 = 1.115;
+/// ... with `t` (seconds) by Density, in Density order (`reverb-er-decay`, Decision 33).
+const REFLECTION_SECONDS: [f64; 4] = [0.2092, 0.0512, 0.3200, 0.2657];
+
+/// The reflections' low-pass corner (Hz) for a Decay of `decay` seconds at Density `density`.
+fn reflection_corner(decay: f64, density: usize) -> f64 {
+    // A cookbook low-pass of Q 0.5 at angle w has its double pole at tan(pi/4 - w/2).
+    let angle = |hz: f64| std::f64::consts::TAU * hz / REFERENCE_RATE;
+    let top = (std::f64::consts::FRAC_PI_4 - angle(REFLECTION_TOP) / 2.0).tan();
+    let seconds = REFLECTION_SECONDS.get(density).copied().unwrap_or(REFLECTION_SECONDS[LOW]);
+    let pole = top + REFLECTION_REACH * (1.0 - (-seconds / decay.max(1e-3)).exp());
+    (std::f64::consts::FRAC_PI_2 - 2.0 * pole.atan()) * REFERENCE_RATE / std::f64::consts::TAU
+}
 /// The input band's high cut never goes above this frequency, and the input passes a low-pass
 /// at it when High Cut is off.
 const TOP_CUT: f64 = 18_000.0;
@@ -1416,7 +1426,7 @@ impl Reverb {
         // every Shape as Live's (`reverb-network-exact`, `reverb-network-density`), with no trim
         // for the Density.
         t.measured_feed = tail_gain * MEASURED_GAIN * size_level * size_level;
-        let corner = (REFLECTION_TOP - REFLECTION_SPAN * setting.powf(-REFLECTION_POWER)).clamp(20.0, 0.45 * sr);
+        let corner = reflection_corner(setting, density_index).clamp(20.0, 0.45 * sr);
         let reflection = Coefficients::lowpass(sr, corner, REFLECTION_Q);
         for filter in &mut self.reflection_filters {
             filter.set(reflection);

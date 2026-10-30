@@ -106,8 +106,10 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   the reference room, each on one side with its sign and level. The first tap is 1 frame (at 44.1 kHz) before the predelay, with a gain of 0.0942 (Decision 24); at
   Density Low every tap is `0.92594 + 0.00074059 × Size` of that level (0.926 at the smallest
   Size, 1.296 at 500, Decision 25). The
-  filtered taps pass, per side, a cookbook low-pass of Q 0.508 at `12 kHz − 818 Hz × decay^−0.886`
-  (8.5 kHz at 0.2 s, 11.3 kHz at 1.2 s). Every tap fades by `(0.0328 + 0.0668 × shape) / decay`
+  filtered taps pass, per side, a cookbook low-pass of Q 0.5 whose double pole (at 44.1 kHz) is
+  that of 11.98 kHz plus `1.115 × (1 − exp(−t / decay))`, t 0.0512 s at Low, 0.2092 at Sparse,
+  0.3200 at Mid and 0.2657 at High (Low 8.5 kHz at 0.2 s and 11.3 kHz at 1.2 s, Mid 1.37 and
+  8.35 kHz; Decision 33). Every tap fades by `(0.0328 + 0.0668 × shape) / decay`
   dB per ms of its delay (decay in seconds), and the whole wet signal, tail included, is
   `0.0113 / decay` dB quieter per ms of predelay (0.0565 at 0.2 s, 0.0094 at 1.2 s, −2.8 dB
   at 250 ms for Decay 1 s: Live's drop at 250 ms is 5.6, 2.3, 0.8 and 0.2 dB at Decay 0.5, 1.2,
@@ -827,7 +829,35 @@ Each entry: what was chosen, what it costs, why.
     High's networks still take their copies of these families as `front_of` (120 and 312 blocks
     at Mid), not this law, which was not checked against the network.
 
+33. **The reflections' low-pass follows Decay by Density.** Live's reflections alone at every
+    Density and Decay 0.2, 0.83, 1.2, 3.46, 14.4 and 60 s (`reverb-er-decay`, Size 100, Hi Cut off,
+    Spin off, Smooth None), solved as in Decision 32 with the corner searched in the whole model:
+    every copy is a cookbook low-pass of Q 0.50 (best Q 0.50 in all 24 cases), and Hi Cut does
+    not change it (Low and Mid at 1.2 s, 11.32 and 8.35 kHz either way). Its corner falls with
+    Decay faster the denser the reflections: at 1.2 s 11.32 kHz at Low, 9.46 at Sparse, 8.88 at
+    High and 8.35 at Mid; at 0.2 s 8.47, 2.88, 1.97 and 1.37 kHz; at 60 s 11.91 to 11.99 kHz for
+    all. The law fits all 24 corners to 15 Hz rms: a Q 0.5 low-pass has a double pole at
+    `tan(π/4 − w/2)`, and that pole is 11.98 kHz's plus `1.115 × (1 − exp(−t / decay))`, `t` by
+    Density (Low 0.0512 s, Sparse 0.2092, High 0.2657, Mid 0.3200). With the pole's reach fixed at
+    1 minus the top's, so that it tends to 1 as Decay shrinks, the fit is 42 Hz rms with errors of
+    up to 122 Hz at 0.2 s, so the reach is fitted. Low keeps its old corners to within about 25 Hz
+    (the old law, `12 kHz − 818 Hz × decay^−0.886` at Q 0.508, was read at Low alone). Mid and
+    High's reflections were 0.4 to 0.9 dB bright from 4 to 16 kHz at 1.2 s; now Low, Mid and High
+    are within 0.1 dB of Live's in every octave at every Decay, their waveforms −37 to −45 dB. The
+    networks' copies pass the same filter: Mid's and High's tails at Diffusion 60 % with the
+    default damping (`reverb-network-density-decay`, Decay 0.83 s, 1.2 s and 3.46 s), 0.25 to 1.05 dB
+    loud at 8 kHz before, are within 0.17 dB from 0.15 to 1 s, and 16 kHz within 0.3 dB; Mid's 4
+    kHz from 0.15 to 0.5 s went from within 0.1 dB to 0.3 to 0.5 dB quiet.
+
 ## Known differences
+
+- **Hi Cut's delay under Smooth None.** In `reverb-er-decay`, Low's and Mid's reflections at 1.2 s
+  with Hi Cut on come at the same frames as with it off, where this device adds Decision 24's 8.0
+  frames; 8 frames later they match Live's to −39 and −43 dB. What sets Live's delay (Smooth, the
+  band's settings) was not read.
+- **Sparse's filtered reflections** are still read as pairs two frames apart (as Mid's and High's
+  were before Decision 32): against `reverb-er-decay` they match to −17 to −23 dB from 0.83 s up,
+  0.2 to 0.9 dB dark at 8 kHz.
 
 Measured against Live's renders of the same sets imported and rendered by `suhina-cli render` at
 44.1 kHz: energy in five windows of the impulse response (0–0.15, 0.15–0.5, 0.5–1, 1–2, 2–4 s),
