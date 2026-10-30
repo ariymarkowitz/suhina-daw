@@ -1604,7 +1604,11 @@ impl Device for Reverb {
             ] {
                 s.next_value();
             }
-            let diffusion = r.diffusion.next_value() * design.diffusion;
+            // Every Density's allpasses take the whole Diffusion as their gain. At Sparse a fifth of
+            // it left the tail at Size 0.222 −16 dB from Live's by 3 s at Diffusion 0.1 %, the whole
+            // of it −21; at the default 60 % −2.8 dB from 0.08 to 0.3 s against −11.8
+            // (`reverb-network-density-size`, `reverb-texture` density-sparse).
+            let diffusion = r.diffusion.next_value();
             let damping = Damping {
                 high: f64::from(r.high.next_value()),
                 low_pass: f64::from(r.low_pass.next_value()),

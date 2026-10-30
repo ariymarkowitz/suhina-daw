@@ -207,7 +207,9 @@ matrix, and each line has its own mix of the direct taps as input.
   whole time: each line's gain covers its delay, and its allpass loses its own delay's gain on every
   pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`). The mix is made exactly orthogonal, so nothing
   is lost on a pass but the decay: the late tail falls by the same dB per second at every Size.
-- **Sparse's allpasses** take a fifth of the Diffusion setting.
+- **Every Density's allpasses** take the Diffusion setting as their gain. (Sparse's once took a
+  fifth of it, never read from Live: at Diffusion 0.1 % and 60 % the whole setting fits far better,
+  and 0.55 or 0.65 of it worse.)
 
 ### Damping
 
@@ -387,25 +389,22 @@ Measured against Live's renders of the same settings, imported and rendered by `
   from 1 to 2 s at every Scale at Size 100, −33 to −38 dB at Sizes 1.53 to 50. Energy in windows to
   4.8 s is within 0.5 dB in 941 of 1,084 cases (median 0.10 dB), and the decay time within 10 % in
   every band to 8 kHz.
-- **Sparse, Mid and High:** waveform within −33 to −38 dB at Size 100 over 0.15 to 1 s (−29 to
-  −33 dB at 3 to 4 s at Sparse and Mid, −26 to −30 at High) and level within 0.25 dB over 0.15 to
-  4 s. At Size 0.222 and 500, None and Fast (Diffusion 0.1 %, Decay 60 s): −31 to −37 dB to 0.4 s
-  at Size 0.222, and −36 to −39 dB to 1 s at Size 500 under None (−29 to −34 under Fast).
-  The network's level is within 0.05 dB of Live's at every Density from Size 0.222 to 500.
+- **Sparse, Mid and High:** waveform within −37 to −39 dB of Live's at Size 100 from 0.3 to 8 s at
+  every Scale, and at Size 1.53 from 0.08 to 3 s, flat with time. At Size 0.222 and 500 under None
+  (Diffusion 0.1 %, Decay 60 s) −36 to −39 dB to 3 s; at Diffusion 60 % and Decay 0.83 s to 60 s
+  −34 to −39 dB to 3 s. The network's level is within 0.05 dB of Live's at every Density from
+  Size 0.222 to 500.
 
 ### What is further off
 
-- **Sparse, Mid and High away from Size 100 and the defaults.** Their tails drift slowly from
-  Live's by the same amount per trip at every Size, so soonest at small Sizes (at Size 0.222 −16
-  dB by 2 to 3 s at Sparse and Mid, −11 at High, under None and Fast alike). What is left is the
-  same in every band from 50 Hz to 20 kHz with the level right, so it is not a length: it grows
-  as a 1 % error per trip in the mix or the lines' gains would, and their mixes were read only
-  to 1 %. Their damping at Decay 1 s was not read either: at the default damping the 8 to
+- **Sparse, Mid and High under Smooth Fast.** Their tails drift slowly from Live's under Fast,
+  where under None they do not: −29 dB by 3 s at Sparse at Size 0.222 (Mid −34, High −37), and
+  −23 to −29 dB at every Density at Size 500. At Size 10.54 with the default damping Mid's and
+  High's tails are uncorrelated with Live's after 80 ms. Their damping at Decay 1 s was not read either: at the default damping the 8 to
   16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
 - **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100, Diffusion 0.1
   to 60 % and Decay 60 and 0.83 s; at Size 500 the waveform is within −43 dB under None, and
-  under Fast drifts to −28 dB by 3 s (every Density at 500 drifts under Fast: −21 to −26 dB by
-  3 s at Sparse, Mid and High), not read. Under Smooth Fast the entry was read at Shape 0.5 only.
+  under Fast drifts to −28 dB by 3 s, not read. Under Smooth Fast the entry was read at Shape 0.5 only.
 - **Stereo's delay** was read at 44.1 kHz only; whether it is 0.625 ms or 27.5625 frames at other
   rates, and how it moves while Stereo is automated, were not read.
 - **Low Cut** is extrapolated for edges between 44.2 and 132 Hz and above 841 Hz.

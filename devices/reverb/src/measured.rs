@@ -277,10 +277,10 @@ const SPARSE_COPIES: [[f64; 4]; 4] = [
 const SPARSE_FAMILIES: [usize; 4] = [4, 1, 5, 2];
 /// Sparse's mixing, as [`MID_MIX`].
 const SPARSE_MIX: [[f64; 4]; 4] = [
-    [-0.1673, -0.3341, 0.6631, -0.6486],
-    [0.8718, -0.0777, 0.4175, 0.2440],
-    [-0.3485, -0.6331, 0.2299, 0.6518],
-    [-0.3002, 0.6939, 0.5770, 0.3090],
+    [-0.166755, -0.334405, 0.663378, -0.648302],
+    [0.871775, -0.077310, 0.418061, 0.243425],
+    [-0.348542, -0.633013, 0.230244, 0.651767],
+    [-0.301196, 0.693896, 0.576318, 0.309270],
 ];
 /// Sparse's sides: X and Y on the left, Z and W on the right.
 const SPARSE_SIDES: [usize; 4] = [0, 0, 1, 1];
@@ -331,17 +331,22 @@ const MID_COPIES: [[f64; 8]; 8] = [
 /// Mid's lines' families ([`FAMILY_LENGTHS`]): they peak 3193, 2985, 961, 1337, 2497, 1641, 2337
 /// and 401 frames after their direct reflections at Size 100.
 const MID_FAMILIES: [usize; 8] = [1, 4, 6, 3, 9, 2, 5, 0];
-/// Mid's mixing, as [`MIX`]: made orthogonal from the fit, whose rows were orthogonal to 1 %.
+/// Mid's mixing, as [`MIX`]. First read from the two-line paths, orthogonal to 1 %; then each
+/// network's mix fitted as a rotation of that (`M · exp(A)`, `A` antisymmetric, by Gauss-Newton
+/// on renders) to Live's whole tails at Size 0.222 and 500 (`reverb-network-density-size`, Diffusion
+/// 0.1 %, Decay 60 s), moving no entry more than 0.004 (Sparse's 0.001, High's 0.007). The tails
+/// at Size 0.222 had drifted to −14 to −18 dB of Live's by 3 s; now −36 to −39, and at Size 100,
+/// which was not fitted, −37 to −39 dB to 8 s at every Scale (`reverb-network-density`).
 #[allow(clippy::approx_constant, reason = "a fitted value that is near Euler's constant by chance")]
 const MID_MIX: [[f64; 8]; 8] = [
-    [0.3683, 0.1089, -0.5817, -0.5682, 0.0864, 0.0322, 0.3445, -0.2530],
-    [0.2738, -0.0658, 0.0484, -0.4655, 0.0708, 0.1216, -0.5105, 0.6491],
-    [0.3658, 0.3945, 0.4225, -0.0576, -0.4669, 0.5088, 0.0048, -0.2277],
-    [0.3560, -0.8371, -0.0694, 0.1303, -0.3314, 0.0861, -0.0680, -0.1699],
-    [0.3949, -0.1376, 0.5762, -0.0673, 0.3871, -0.2537, 0.5069, 0.1322],
-    [0.3996, 0.1362, -0.3218, 0.6134, 0.3823, 0.3886, 0.0205, 0.2107],
-    [0.2975, 0.2551, -0.1855, 0.2348, -0.5423, -0.5772, 0.1158, 0.3410],
-    [0.3532, 0.1574, 0.0777, 0.0653, 0.2640, -0.4116, -0.5876, -0.5058],
+    [0.368161, 0.108775, -0.581296, -0.568820, 0.086265, 0.031482, 0.343733, -0.254124],
+    [0.271656, -0.064204, 0.048059, -0.466431, 0.070065, 0.122714, -0.509307, 0.650271],
+    [0.365622, 0.394272, 0.422556, -0.057502, -0.466574, 0.509036, 0.004660, -0.228428],
+    [0.357116, -0.837262, -0.069221, 0.129876, -0.330419, 0.086300, -0.069221, -0.168481],
+    [0.395007, -0.137308, 0.576006, -0.067730, 0.387312, -0.252981, 0.506916, 0.133311],
+    [0.398688, 0.136657, -0.322884, 0.612085, 0.381779, 0.390011, 0.022096, 0.212413],
+    [0.296946, 0.254839, -0.185537, 0.234442, -0.543292, -0.575630, 0.117608, 0.342265],
+    [0.355373, 0.158482, 0.077321, 0.067185, 0.264291, -0.412222, -0.588521, -0.501964],
 ];
 /// Mid's sides: four lines heard on the left, four on the right.
 const MID_SIDES: [usize; 8] = [0, 0, 0, 0, 1, 1, 1, 1];
@@ -379,16 +384,16 @@ const HIGH_COPIES: [[f64; 10]; 10] = [
 const HIGH_FAMILIES: [usize; 10] = [1, 8, 4, 6, 3, 9, 2, 5, 0, 7];
 /// High's mixing, as [`MID_MIX`].
 const HIGH_MIX: [[f64; 10]; 10] = [
-    [-0.3505, 0.4295, -0.1924, -0.0537, 0.0075, -0.3268, 0.1435, 0.1060, 0.5352, 0.4771],
-    [0.0860, -0.3274, -0.2498, 0.4474, -0.5296, 0.0010, -0.2102, 0.2026, 0.4694, -0.1917],
-    [0.0058, -0.1742, 0.1377, -0.4571, -0.2860, 0.1088, 0.5422, -0.3906, 0.3727, -0.2503],
-    [-0.3179, -0.0114, -0.4861, -0.1392, -0.1307, 0.5316, -0.3165, -0.4312, -0.0892, 0.2223],
-    [-0.1294, -0.5533, -0.4348, -0.1269, 0.4352, -0.4947, -0.0239, -0.1498, 0.0246, -0.1194],
-    [-0.5303, 0.2847, 0.0787, 0.1914, -0.2975, -0.3769, -0.0621, -0.2746, -0.2756, -0.4573],
-    [-0.4159, -0.2044, 0.3309, -0.5132, -0.0401, 0.0648, -0.4358, 0.4347, 0.1265, -0.1082],
-    [0.3864, 0.3906, -0.5008, -0.4627, -0.1853, -0.1402, -0.1052, 0.2412, -0.1112, -0.3123],
-    [-0.1085, -0.3080, -0.0982, -0.1086, -0.4948, -0.1701, 0.3284, 0.2563, -0.4894, 0.4303],
-    [0.3696, -0.0376, 0.2832, -0.1628, -0.2488, -0.3990, -0.4773, -0.4456, 0.0437, 0.3254],
+    [-0.348113, 0.431273, -0.190544, -0.054873, 0.003126, -0.328649, 0.142605, 0.102578, 0.534750, 0.478192],
+    [0.085721, -0.327071, -0.250251, 0.447068, -0.525203, 0.000062, -0.212144, 0.201146, 0.472698, -0.196046],
+    [0.005687, -0.173832, 0.137437, -0.457475, -0.280688, 0.109642, 0.539417, -0.392038, 0.375058, -0.255809],
+    [-0.319107, -0.011948, -0.485638, -0.138487, -0.133577, 0.531357, -0.315474, -0.430384, -0.090890, 0.223175],
+    [-0.129695, -0.552898, -0.434898, -0.127689, 0.437665, -0.494356, -0.024158, -0.148806, 0.023321, -0.113284],
+    [-0.531302, 0.283413, 0.077284, 0.191711, -0.292916, -0.376628, -0.061197, -0.272901, -0.275947, -0.461145],
+    [-0.416906, -0.203191, 0.330902, -0.512201, -0.037540, 0.065516, -0.435820, 0.435421, 0.127347, -0.107735],
+    [0.385716, 0.390266, -0.501488, -0.462877, -0.182072, -0.138763, -0.106304, 0.241407, -0.110776, -0.314508],
+    [-0.107498, -0.309132, -0.097002, -0.110037, -0.501957, -0.170334, 0.331383, 0.257650, -0.484688, 0.423402],
+    [0.369272, -0.038617, 0.284305, -0.163968, -0.252294, -0.398535, -0.478311, -0.446345, 0.039609, 0.319961],
 ];
 /// High's sides: five lines on each.
 const HIGH_SIDES: [usize; 10] = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
@@ -426,8 +431,6 @@ pub(crate) struct Design {
     fractions: [f64; MAX_LINES],
     /// How the lines get their lengths.
     laws: Laws,
-    /// How much of the Diffusion setting the allpasses take.
-    pub diffusion: f32,
     /// How many times as much of the damping shelves' loss a line takes per second as Low's law
     /// gives ([`Lengths::trips`]).
     trip_scale: f64,
@@ -507,7 +510,6 @@ static LOW: Design = Design {
     sides: pad_sides(SIDES),
     fractions: pad(FRACTION),
     laws: Laws::Low,
-    diffusion: 1.0,
     trip_scale: 1.0,
 };
 /// Sparse's network.
@@ -522,8 +524,6 @@ static SPARSE: Design = Design {
     sides: pad_sides(SPARSE_SIDES),
     fractions: family_fractions(SPARSE_FAMILIES),
     laws: Laws::Shared(false, Some(&SPARSE_DELAYS)),
-    // A fifth of the Diffusion setting, not read from Live's network.
-    diffusion: 0.2,
     // Fitted to the High and Low Shelves at 4 kHz, 1 kHz and 500 Hz and the default damping at
     // Size 1.53, 10.54 and 100 (`reverb-network-density-filters`); the exponent of the length came
     // out at 0.99.
@@ -541,7 +541,6 @@ static MID: Design = Design {
     sides: pad_sides(MID_SIDES),
     fractions: family_fractions(MID_FAMILIES),
     laws: Laws::Shared(true, None),
-    diffusion: 1.0,
     trip_scale: 1.0,
 };
 /// High's network.
@@ -556,7 +555,6 @@ static HIGH: Design = Design {
     sides: pad_sides(HIGH_SIDES),
     fractions: family_fractions(HIGH_FAMILIES),
     laws: Laws::Shared(true, None),
-    diffusion: 1.0,
     trip_scale: 1.0,
 };
 
