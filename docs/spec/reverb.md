@@ -152,9 +152,12 @@ matrix, and each line has its own mix of the direct taps as input.
 | Mid | 8 | eight groups | four each |
 | High | 10 | ten taps | five each |
 
-- **Input.** The direct taps are read after the **Shape entry**, `17.574 + s × (Shape − 0.5) × size
-  factor` ms (s 35.19 below Shape 0.5 and 34.83 above), at their reflection levels and fades, so
-  Shape and Decay shape the tail's onset as they shape the reflections. The network is mono: it
+- **Input.** The direct taps are read after the **Shape entry**, `1543.5 × Shape` frames at
+  44.1 kHz (35 ms a unit) less a frame, rounded up to whole 8-frame blocks under None and down to a
+  whole frame under Fast and Slow: −1, 391, 775, 1159 and 1543 frames at Shape 0, 0.25, 0.5, 0.75
+  and 1 under None, −1, 384, 770, 1156 and 1542 under Fast, at every Size and Density. They come at
+  their reflection levels and fades, so Shape and Decay shape the tail's onset as they shape the
+  reflections. The network is mono: it
   hears no side of the input, and the input passes no damping. The level is
   `1.236 × 0.2383 × Size level × Network level` times each line's input weight, where *Size
   level* is the reflections' `0.92594 + 0.00074059 × Size` above and *Network level* is
@@ -199,10 +202,11 @@ matrix, and each line has its own mix of the direct taps as input.
   blocks. Each length is its continuous value rounded down to a frame, and a frame: the allpass
   `floor(8 × c × Scale × size factor) + 1`, the delay `floor(8 × y × size factor) + 1`, but A's and
   B's delays keep their fraction of a frame (`8 × y × size factor + 1`, read by linear
-  interpolation, most of the highs lost). The loops are 5 frames longer than their first passes and
-  the input reaches them 5 frames sooner. The other Densities' lines do the same with their own
-  lengths: whole frames, but the A and B lines' delays keep their fraction (Mid's and High's A and
-  B lines, and Sparse's B line), and the input 5 frames sooner.
+  interpolation, most of the highs lost). The loops are 5 frames longer than their first passes, and
+  the Shape entry rounds to a frame, not a block (Input above), so at Shape 0.5 the input reaches
+  them 5 frames sooner, and at Shape 0 and 1 a frame or none. The other Densities' lines do the
+  same with their own lengths: whole frames, but the A and B lines' delays keep their fraction
+  (Mid's and High's A and B lines, and Sparse's B line), and the same entry.
 - **Decay.** The network is tuned to a T60 of 0.9 of the Decay setting. Every path fades with its
   whole time: each line's gain covers its delay, and its allpass loses its own delay's gain on every
   pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`). The mix is made exactly orthogonal, so nothing
@@ -404,7 +408,9 @@ Measured against Live's renders of the same settings, imported and rendered by `
   16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
 - **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100, Diffusion 0.1
   to 60 % and Decay 60 and 0.83 s; at Size 500 the waveform is within −43 dB under None, and
-  under Fast drifts to −28 dB by 3 s, not read. Under Smooth Fast the entry was read at Shape 0.5 only.
+  under Fast drifts to −28 dB by 3 s, not read. The Shape entry was read at Size 100 and Density
+  Low only, at Shape 0, 0.25, 0.5, 0.75 and 1; that it holds at every Size is inferred from Shape
+  0.5's being the same at every Size, as none of the entry is left for Size to scale.
 - **Stereo's delay** was read at 44.1 kHz only; whether it is 0.625 ms or 27.5625 frames at other
   rates, and how it moves while Stereo is automated, were not read.
 - **Low Cut** is extrapolated for edges between 44.2 and 132 Hz and above 841 Hz.

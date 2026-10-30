@@ -454,8 +454,8 @@ const FILTERED_LATE: [f64; 20] =
 const FILTERED_FAMILIES: [usize; 20] = [0, 0, 6, 6, 3, 3, 2, 2, 7, 7, 5, 5, 8, 8, 9, 9, 4, 4, 1, 1];
 /// Longest delay a filtered offset reaches, at the largest Size (seconds).
 const OFFSET_LINE_SECONDS: f64 = 0.13;
-/// Longest delay from a direct reflection to the measured network, [`measured::ENTRY_MS`] at Shape
-/// 1 and the largest Size (seconds).
+/// Longest delay from a direct reflection to the measured network, [`measured::entry`] at Shape
+/// 1 (seconds).
 const ENTRY_LINE_SECONDS: f64 = 0.06;
 /// Peak swing of a line's delay per unit of Chorus Amount: a 1 kHz tone through Live's tail swings
 /// 12 to 343 cents (left and right added) at five Amounts and Rates, and through Suhina's 12 to 397
@@ -1403,13 +1403,7 @@ impl Reverb {
         let design = measured::design(density_index);
         t.measured.tune(design, room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
         t.measured.fade(design, room, fade);
-        let (entry, below, above) = measured::ENTRY_MS;
-        let per_shape = if shape < 0.5 { below } else { above };
-        t.entry = (entry + per_shape * (shape - 0.5) * room) * ms;
-        // Under Fast every Density's network hears its input sooner (`reverb-network-density-size`).
-        if fast {
-            t.entry -= measured::FAST_EARLIER * sr / REFERENCE_RATE;
-        }
+        t.entry = measured::entry(shape, settled, fast) * sr / REFERENCE_RATE;
         let tail_gain = TAIL_GAIN * predelay_gain;
         // The measured network's lines scale with the room's own size factor, small rooms too, and
         // its input with the reflections' level and its own ([`NETWORK_SIZE_LEVEL`]). Every path through it fades with its

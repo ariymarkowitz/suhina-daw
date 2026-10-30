@@ -20,7 +20,7 @@
 //! Times are frames at 44.1 kHz. A line of Low is a delay and an allpass, each a whole number of 8-frame
 //! blocks and one frame: the delay's blocks grow with the room's size factor, the allpass's with
 //! the size factor times Scale (%), each rounding down at its own edge ([`length_at`]). The input
-//! reaches the lines [`ENTRY_MS`] after each direct reflection, whatever the Size. Under Smooth Fast
+//! reaches the lines [`entry`] after each direct reflection, whatever the Size. Under Smooth Fast
 //! or Slow the lengths keep to no blocks and A and B are read between frames ([`DELAYS`]).
 //! Every value was read from `reverb-network-exact` (Hi Cut off, Diffusion 0.1 %, Decay 60 s,
 //! Stereo 120, Scale 5 to 100 %): with the input's fixed filter divided out each arrival is one
@@ -82,10 +82,6 @@ const ALLPASS_EDGE: f64 = 0.9;
 /// (`reverb-network-density-size`), where Sparse, Mid and High hear Low's six here too.
 const FAST_FAMILY_LENGTHS: [f64; FAMILY_COUNT] =
     [49.3955, 398.832, 204.9654, 166.9645, 372.8029, 292.0821, 120.0675, 258.9583, 299.0174, 311.7368];
-/// Under Smooth Fast the input reaches the lines this many frames sooner than [`ENTRY_MS`] gives,
-/// and each line's loop is that much longer than its first pass (every path through two lines
-/// arrives 5 frames after their first passes), at every Size (`reverb-network-fast-train`).
-pub(crate) const FAST_EARLIER: f64 = 5.0;
 
 /// `x` rounded down past `edge` to a whole frame, or, while things move, the straight line through
 /// the middle of the steps.
@@ -213,10 +209,31 @@ pub(crate) const MIX: [[f64; LOOP]; LOOP] = [
 const FRACTION: [f64; LOOP] = [0.01, 0.01, 0.0, 0.0, 0.0, 0.0];
 /// The side each line is heard on (0 left, 1 right), all at one level before Stereo's rotation.
 pub(crate) const SIDES: [usize; LOOP] = [1, 0, 1, 0, 0, 1];
-/// The input's delay to the lines after each direct reflection, at Shape 0.5 (ms), and how much
-/// more per unit of Shape below and above 0.5 (ms, times the size factor): −1, 775 and 1543
-/// frames at Shape 0, 0.5 and 1 at Size 100, so 776 frames for the half below and 768 above.
-pub(crate) const ENTRY_MS: (f64, f64, f64) = (17.574, 35.193, 34.830);
+/// How much later the input reaches the lines per unit of Shape (frames at 44.1 kHz; 35 ms),
+/// whatever the Size and the Density ([`entry`]).
+const SHAPE_ENTRY: f64 = 1543.5;
+
+/// The input's delay to the lines after each direct reflection (frames at 44.1 kHz) at `shape`:
+/// [`SHAPE_ENTRY`] times Shape less a frame, rounded up to whole blocks with Smooth None and down
+/// to a whole frame under Fast or Slow, or, while things move, the straight line through the
+/// middle of the steps. With None −1, 391, 775, 1159 and 1543 frames at Shape 0, 0.25, 0.5, 0.75
+/// and 1 (`reverb-network-exact`, `reverb-network-id`, `reverb-size` shape-*-tail), under Fast −1,
+/// 384, 770, 1156 and 1542 (`reverb-structure` shape-*, read from the tail after 160 ms), which
+/// together leave 1543 to 1544 frames a unit. So at Shape 0.5 Fast's input comes 5 frames sooner
+/// than None's, and at Shape 0 and 1 it does not. The entry is 775 frames at Shape 0.5 at every
+/// Size (`reverb-network-small`); that Shape's share does not grow with Size either is inferred,
+/// as none of the entry is left for Size to scale.
+pub(crate) fn entry(shape: f64, settled: bool, fast: bool) -> f64 {
+    let x = SHAPE_ENTRY * shape;
+    let whole = if fast {
+        frames(x, 0.0, settled)
+    } else if settled {
+        BLOCK * (x / BLOCK).ceil()
+    } else {
+        x + 0.5 * BLOCK
+    };
+    whole - 1.0
+}
 /// Longest delay a line needs (seconds, with room for Size 500): High's longest line.
 pub(crate) const LINE_SECONDS: f64 = 0.65;
 /// Longest allpass a line needs (seconds, with room for Size 500): Mid's and High's longest
@@ -898,6 +915,18 @@ mod tests {
             for k in 0..design.lines {
                 let want = if lines.contains(&k) { 0.01 } else { 0.0 };
                 assert_eq!(design.fractions[k], want, "line {k} of {} lines", design.lines);
+            }
+        }
+    }
+
+    #[test]
+    fn the_entry_is_its_measured_length_at_every_shape() {
+        // Live's entries (frames) at Shape 0, 0.25, 0.5, 0.75 and 1, Smooth None then Fast.
+        for (fast, frames) in
+            [(false, [-1.0, 391.0, 775.0, 1159.0, 1543.0]), (true, [-1.0, 384.0, 770.0, 1156.0, 1542.0])]
+        {
+            for (shape, want) in [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().zip(frames) {
+                assert_eq!(entry(shape, true, fast), want, "Shape {shape}, fast {fast}");
             }
         }
     }
