@@ -111,12 +111,11 @@ pub(crate) const MIX: [[f64; LOOP]; LOOP] = [
     [-0.3852, 0.2966, -0.4863, -0.4104, -0.4819, -0.3556],
     [-0.3740, 0.3540, 0.1679, -0.3865, 0.1348, 0.7342],
 ];
-/// What each line's output keeps on its way into the mix, beyond the decay's own loss (the length
-/// of each column of the mix as read). Not while frozen, so a frozen tail does not drain by it.
-const LOSSES: [f64; LOOP] = [0.9961, 0.9939, 0.9928, 0.9954, 0.9956, 0.9944];
-/// A and B hear their input this much again one frame later on every pass, a slight loss of the
-/// highs (0.18 dB at the top); the other lines have none.
-const NEXT_FRAME: [f64; LOOP] = [0.0105, 0.0109, 0.0, 0.0, 0.0, 0.0];
+/// A and B run this much of a frame past their whole length, read by linear interpolation (0.99
+/// of the frame and 0.01 of the next): a slight loss of the highs on every pass (0.18 dB at the
+/// top) and none of the lows. The other lines are whole. No line loses anything else on a pass:
+/// the whole tail falls with the decay's loss per second, at every Size (Decision 26).
+const FRACTION: [f64; LOOP] = [0.01, 0.01, 0.0, 0.0, 0.0, 0.0];
 /// The side each line is heard on (0 left, 1 right), all at one level before Stereo's rotation.
 pub(crate) const SIDES: [usize; LOOP] = [1, 0, 1, 0, 0, 1];
 /// The input's delay to the lines after each direct reflection, at Shape 0.5 (ms), and how much
@@ -323,8 +322,8 @@ impl Network {
         for (k, (line, out)) in self.lines.iter_mut().zip(&mut outs).enumerate() {
             let length = n.lines[k] + swing(k, n.lines[k]);
             let mut read = f64::from(line.delay.read_hermite(length));
-            if NEXT_FRAME[k] != 0.0 {
-                read += NEXT_FRAME[k] * f64::from(line.delay.read_hermite(length + 1.0));
+            if FRACTION[k] != 0.0 {
+                read += FRACTION[k] * (f64::from(line.delay.read_hermite(length + 1.0)) - read);
             }
             let y = f64::from(line.diffuser.process_lossy(read as f32, n.allpasses[k], diffusion, n.losses[k] as f32));
             *out = line.damper.damp(y, damping) * n.gains[k];
@@ -332,11 +331,8 @@ impl Network {
                 *t += *out;
             }
         }
-        // Into the mix: each line's output and its family's copy, through the loss a pass keeps
-        // (while frozen, an exactly orthogonal mix of a pass that keeps its level).
-        let into: [f64; LOOP] = std::array::from_fn(|j| {
-            if frozen { outs[j] / (1.0 + NEXT_FRAME[j]) + copies[j] } else { LOSSES[j] * (outs[j] + copies[j]) }
-        });
+        // Into the mix: each line's output and its family's copy.
+        let into: [f64; LOOP] = std::array::from_fn(|j| outs[j] + copies[j]);
         for (k, line) in self.lines.iter_mut().enumerate() {
             let mixed: f64 = self.mix[k].iter().zip(&into).map(|(m, y)| m * y).sum();
             let mut next = families[k] + mixed;

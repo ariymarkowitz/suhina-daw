@@ -118,6 +118,30 @@ fn the_measured_network_decays_in_the_decay_time_at_every_diffusion() {
     }
 }
 
+#[test]
+fn the_smallest_room_still_decays_at_the_longest_decay() {
+    // At Size 0.22 and Decay 60 s a trip through a line loses under 0.1 %, so no line may pass
+    // more than it takes in, or the mode that lives in it grows without end.
+    let sr = 44_100.0;
+    let mut r = reverb(
+        sr,
+        &[
+            (param::DENSITY, LOW as f64),
+            (param::SIZE, 0.22),
+            (param::SMOOTH, 0.0),
+            (param::DECAY, 60.0),
+            (param::DIFFUSION, 0.001),
+            (param::REFLECT, MIN_LEVEL_DB),
+            (param::HIGH_DAMPING, 0.0),
+            (param::LOW_DAMPING, 0.0),
+        ],
+    );
+    let ir = impulse_response(&mut r, sr, 30.0);
+    let (early, late) = (energy(&ir, sr, 4.0, 6.0), energy(&ir, sr, 24.0, 26.0));
+    let fall = 10.0 * (early / late).log10() / 20.0;
+    assert!(fall > 0.8, "the tail falls {fall} dB/s from 5 to 25 s");
+}
+
 /// A 1 kHz sine burst, 0.2 s long, then silence, `seconds` in all.
 fn burst(sample_rate: f64, seconds: f64) -> Vec<f32> {
     let frames = (seconds * sample_rate) as usize;

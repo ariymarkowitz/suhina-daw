@@ -739,8 +739,8 @@ const AIR_POWER: f64 = 0.15;
 const MEASURED_AIR_POWER: f64 = 0.25;
 /// The measured network's fixed loss of the highs per trip with Smooth None (dB), whatever the
 /// decay: none. Live's loss of the highs comes almost all with Smooth Slow or Fast; with None
-/// the only loss is two lines' next-frame tap (`measured::NEXT_FRAME`), read from
-/// `reverb-network-exact`, where every other pass is one sample.
+/// the only loss is two lines' fraction of a frame (`measured::FRACTION`), read from
+/// `reverb-network-exact` and `reverb-network-small`, where every other pass is one sample.
 const MEASURED_AIR_NONE_DB: f64 = 0.0;
 /// In rooms below this size factor (Size 10.5) the measured network's loss of the highs with
 /// Smooth Slow or Fast grows per second as the room shrinks: Live's 8 kHz octave decays 3.8 dB/s

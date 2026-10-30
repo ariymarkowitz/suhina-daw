@@ -154,7 +154,8 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   own offset, `8 × round(x × size factor) + 1` frames with x 50.43, 399.28, 205.12, 167.33,
   373.20 and 292.27), faded as a reflection of that delay, and that copy enters the mix as part of its own
   line's output. One 6 × 6 orthogonal mix takes the six outputs (each with its copy) after every
-  trip, each kept 0.993 to 0.996 (all of it while frozen). The lines are a delay and a Schroeder
+  trip, losing nothing on the way: the tail falls only by the decay's loss per second (Decision
+  26). The lines are a delay and a Schroeder
   allpass (Diffusion as its gain), each a whole number of 8-frame blocks and one frame at 44.1
   kHz: the delay `8 × floor(y × size factor + 0.85) + 1` frames, with y 286.875, 339.649,
   423.336, 459.936 and 846.683 for A, B, C, D and F, and the allpass `8 × floor(c × Scale ×
@@ -163,8 +164,9 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   as a plain delay; R runs A's delay, then `8 × floor(934.943 × size factor − 0.411)` frames
   more, then its own allpass. So at Scale 40 % in the reference room A, B, D and F are 57, 71,
   113 and 170 ms, C 1640 frames and then 83 ms, R 228 ms. While Size or Scale move, each length
-  follows the straight line through the middle of its steps. A and B hear their input 1.05 and
-  1.09 % again a frame later on every pass. A, C and R are heard on the right and B, D and F on
+  follows the straight line through the middle of its steps. A and B are a hundredth of a frame
+  longer, read by linear interpolation (0.99 of the frame and 0.01 of the next), so they lose a
+  little of the highs on every pass and none of the lows. A, C and R are heard on the right and B, D and F on
   the left, all at one level. Damping and chorus are as below. Every path fades with
   its whole time from the input: each line's gain covers its delay, and its allpass loses its own
   delay's gain on every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`).
@@ -607,7 +609,9 @@ Each entry: what was chosen, what it costs, why.
     fitted on (−36 to −40 dB from 100 Hz to 16 kHz). Its mix came out orthogonal to 0.3 % without
     being made so, the lines' output levels equal to 0.3 %, and its low-pass the reflections' own
     (to 0.003 a sample). Suhina runs those values, with the mix made exactly orthogonal and the
-    loss it had (0.4 to 0.7 % a pass) kept apart, so a frozen tail does not drain by it. Against
+    loss it had (0.4 to 0.7 % a pass) kept apart, so a frozen tail does not drain by it (that
+    loss and the tap's own level turned out to be one Size's reading of something else; see
+    Decision 26). Against
     the same renders Suhina's network now matches Live's to −39 dB over 0.5 s and −30 dB from 1 to
     2 s at every Scale, energy within 0.15 dB, and at Decay 0.83 s to −42 dB (Shape 0.5) and −32
     dB (Shape 0 and 1). Two more things came out of the reflections alone: Live's are one frame
@@ -651,6 +655,31 @@ Each entry: what was chosen, what it costs, why.
     0.18 dB (0.25); the small-room cases, 0.7 to 1.7 dB loud before, are within 0.5 dB to 1 s,
     and Size 500's first 0.5 s, 2 dB quiet, is within 0.2 dB. The filtered pairs of Density
     Sparse, Mid and High move with the same law; their Size law was not read. Cost: none.
+26. **Density Low's network loses nothing on a pass; A and B are a hundredth of a frame long.**
+    At Decay 60 s Live's tail falls 1.11 to 1.14 dB/s from 250 Hz to 2 kHz at every Size from
+    0.22 to 100 (`reverb-network-small`, `-sections`, `-exact`): its loss is all per second, as
+    the decay's (a T60 of 54 s, 0.9 of the setting). Its highs fall faster in small rooms (8 to 16
+    kHz against the mids: 0.28 dB/s at Size 100, 0.55 at 10.54, 0.81 at 1.53, 1.09 at 0.22), and
+    in each the difference eases as the tail goes on (at Size 1.53, 1.25 dB/s from 1 to 2 s and
+    0.63 from 6 to 9.4 s). Solved line by line against the first second of each render, with the
+    network falling at 54 s and each line free to have a main tap and one a frame either side,
+    every Size and Scale gives the same: A and B are `[0.990, 0.010]` (a read 0.01 frame late by
+    linear interpolation; a delay of 0.0100 frame and no loss at DC), C, D, F and R plain, and
+    every line passes DC at 1.0000 ± 0.0005. The fit reaches −41 to −42 dB at Sizes 1.53 to 100
+    (−39 at Size 100 with the values of Decision 24). With only the late tap free and the
+    network falling at 60 s, as in Decision 24, the same arrivals read as a tap of 1.05 % and a
+    loss of 0.4 to 0.7 % a pass: at one Size a loss a pass and a loss a second cannot be told
+    apart. Those values gave A and B 0.5 to 0.7 % more than unity a pass, the others less, so the
+    late tail sat in A and B, losing their highs as fast as its first second did (the tail 0.4
+    dB/s too fast at Size 1.53, the right side, with A, faster still), and at Size 0.22 and Decay
+    60 s, where a pass's decay takes less than 0.1 %, the tail grew without end (0.8 dB/s by 25 s).
+    With Live's values the late highs gather in C to R, which lose none, and Suhina's tail now
+    falls as Live's in every band and window to 0.01 dB/s from Size 1.53 to 100 (the simulation
+    and the renders agree to the same), and every energy window to 9 s is within 0.1 dB on both
+    sides (0.4 dB at Size 0.22). The input reaches the network 0.06 to 0.1 dB quieter than Live's
+    at every Size (before this too). Over the `reverb-impulse` set 918 of 1,084 energy windows
+    are within 0.5 dB (912), median 0.13 dB (0.18), the right side's median 0.11 dB (0.19); the
+    cases that moved away are the Smooth Fast Size cases Live rendered at Size 100. Cost: none.
 
 ## Known differences
 
@@ -699,11 +728,11 @@ What is further off, and why it is left:
   36.8 ms).
 - **Density Low's network beyond what was read** (Decisions 24 and 25): the lengths and levels
   were read at Size 0.22 to 100, Diffusion 0.1 to 60 %, Decay 60 and 0.83 s, Smooth None and
-  network filters off. In small rooms the tail fades faster than Live's: at Decay 60 s it is 0.4,
-  0.2 and 0.1 dB/s faster at Size 1.53, 10.54 and 50 (0.3 dB at 1.53 by 1 s, 0.7 to 1.2 dB from
-  2 to 4 s), most above 4 kHz (3 dB above 10 kHz by 4 to 8 s at Size 1.53), and the right side
-  about 0.5 dB more than the left by 4 s at every one of these Sizes. Size 0.22 matches only
-  its first 200 frames: its arrivals crowd, and it was not read further. The 4 kHz High Shelf
+  network filters off. At those settings its fade matches Live's at every Size from 1.53 to 100, in
+  every band, to 9 s (Decision 26); whether Smooth Slow and Fast's loss of the highs
+  (`MEASURED_AIR_ROOM`, fitted with the old loss a pass in place) still fits small rooms was not
+  checked against a render that took its Size. Size 0.22's energy is within 0.4 dB to 9 s but its
+  waveform matches only its first 200 frames: its arrivals crowd, and it was not read further. The 4 kHz High Shelf
   cases are 1 dB quiet to 0.15 s. The network Lowpass at 1 kHz is 1 to 1.7 dB quiet to 0.5 s; whether the network's input passes the
   damping once (Decision 13) was not read for this network and is kept. Below 100 Hz the
   simulation matches Live to only −24 dB. The other Densities run the Householder network.
