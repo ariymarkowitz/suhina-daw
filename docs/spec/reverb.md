@@ -679,7 +679,10 @@ Each entry: what was chosen, what it costs, why.
     sides (0.4 dB at Size 0.22). The input reaches the network 0.06 to 0.1 dB quieter than Live's
     at every Size (before this too). Over the `reverb-impulse` set 918 of 1,084 energy windows
     are within 0.5 dB (912), median 0.13 dB (0.18), the right side's median 0.11 dB (0.19); the
-    cases that moved away are the Smooth Fast Size cases Live rendered at Size 100. Cost: none.
+    cases that moved away are Smooth Fast's at Size 1.53 (`reverb-decay`, `reverb-texture`), from
+    1 s on 0.3 to 0.5 dB louder than before: Fast's own loss in small rooms
+    (`MEASURED_AIR_ROOM`) was fitted with the loss a pass in place (Known differences). Cost:
+    none.
 
 ## Known differences
 
@@ -729,13 +732,26 @@ What is further off, and why it is left:
 - **Density Low's network beyond what was read** (Decisions 24 and 25): the lengths and levels
   were read at Size 0.22 to 100, Diffusion 0.1 to 60 %, Decay 60 and 0.83 s, Smooth None and
   network filters off. At those settings its fade matches Live's at every Size from 1.53 to 100, in
-  every band, to 9 s (Decision 26); whether Smooth Slow and Fast's loss of the highs
-  (`MEASURED_AIR_ROOM`, fitted with the old loss a pass in place) still fits small rooms was not
-  checked against a render that took its Size. Size 0.22's energy is within 0.4 dB to 9 s but its
+  every band, to 9 s (Decision 26); with Smooth Fast in small rooms it does not (next item). Size 0.22's energy is within 0.4 dB to 9 s but its
   waveform matches only its first 200 frames: its arrivals crowd, and it was not read further. The 4 kHz High Shelf
   cases are 1 dB quiet to 0.15 s. The network Lowpass at 1 kHz is 1 to 1.7 dB quiet to 0.5 s; whether the network's input passes the
   damping once (Decision 13) was not read for this network and is kept. Below 100 Hz the
   simulation matches Live to only −24 dB. The other Densities run the Householder network.
+- **Smooth Fast in small rooms** (Density Low). The `reverb-impulse` set's Fast cases at a stored
+  Size took it (their reflections move with the cube root of Size, as None's do), and
+  `reverb-size` holds each with Smooth None. Against its None twin, Live's Fast tail at Size
+  1.53 is 1.2, 2.7 and 3.5 dB down at 0.15 to 0.5, 1 to 2 and 2 to 4 s (Decay 3.46 s; 1.1 to
+  1.8 dB by 2 to 4 s in the `reverb-texture` cases at Decay 1.2 s), this device's 0.5, 1.7 and
+  2.5; at Size 10.54 to 500 the two agree within 0.7 dB. The difference starts with the first
+  arrivals (0.6 dB from 0.05 s, 0.15 here), so it is not all a loss a second; at the top this
+  device loses more (16 kHz 8.3 dB/s faster than with None at Size 1.53, Live's 5 to 7.5).
+  `MEASURED_AIR_ROOM` was fitted with the loss a pass that Decision 26 took out, and these cases
+  are now 0.5 to 1.2 dB loud from 1 s (0.3 to 0.9 before). Live's Fast also moves the
+  reflections earlier than None's, by 4 frames on the left and by 4 or 9 to 10 on the right
+  depending on the reflection, at every Size from 0.22 to 500 (`reverb-structure size-*-er`
+  against `reverb-size size-*-er`); this device's Fast keeps None's times. How Fast reads the
+  lines (whose delays already run up to 11 frames short, Decision 19) was not read sample by
+  sample.
 - **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
   the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
   reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's
