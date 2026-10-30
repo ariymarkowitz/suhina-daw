@@ -434,7 +434,8 @@ fn freeze_holds_the_tail_and_cut_keeps_new_input_out() {
     r.set_param(param::FREEZE, 1.0);
     let mut held = vec![0.0f32; 44_100 * 2 * 2];
     run(&mut r, &mut held);
-    let (early, late) = (level(&held[17_640..35_280]), level(&held[158_760..]));
+    // Over 0.4 s or more: a sine's frozen tail beats between the modes near it.
+    let (early, late) = (level(&held[17_640..52_920]), level(&held[123_480..]));
     // Nearly lossless, but the energy spreads evenly over the lines, which moves the output a
     // little (Live's frozen tail rises up to 2.7 dB the same way).
     assert!((early - late).abs() < 3.0, "{early} dB then {late} dB");
@@ -459,7 +460,8 @@ fn a_frozen_tail_keeps_its_damping_with_flat_off() {
         for block in signal.chunks_mut(512) {
             r.process(&ProcessContext::default(), block);
         }
-        // The level above 6 kHz against the level below it (dB), 1 s and 3.5 s in.
+        // The level above 6 kHz against the level below it (dB), 0.1 s and 1 s in: with Flat off
+        // the highs are mostly gone by then.
         let highs = |from: usize| {
             let left: Vec<f64> =
                 signal[from * 2..(from + 22_050) * 2].iter().step_by(2).map(|v| f64::from(*v)).collect();
@@ -472,7 +474,7 @@ fn a_frozen_tail_keeps_its_damping_with_flat_off() {
             }
             10.0 * (high / all).log10()
         };
-        highs(44_100) - highs(132_300)
+        highs(4_410) - highs(44_100)
     };
     let (flat, unflat) = (band(1.0), band(0.0));
     assert!(flat < 2.0, "Flat on: the highs fell {flat} dB more than the rest");

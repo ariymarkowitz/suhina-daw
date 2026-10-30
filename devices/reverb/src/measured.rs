@@ -15,7 +15,8 @@
 //! Times are frames at 44.1 kHz. A line is a delay and an allpass, each a whole number of 8-frame
 //! blocks and one frame: the delay's blocks grow with the room's size factor, the allpass's with
 //! the size factor times Scale (%), each rounding down at its own edge ([`length_at`]). The input
-//! reaches the lines [`ENTRY_MS`] after each direct reflection, whatever the Size.
+//! reaches the lines [`ENTRY_MS`] after each direct reflection, whatever the Size. Under Smooth Fast
+//! or Slow the lengths keep to no blocks and A and B are read between frames ([`FAST_DELAYS`]).
 //! Every value was read from `reverb-network-exact` (Hi Cut off, Diffusion 0.1 %, Decay 60 s,
 //! Stereo 120, Scale 5 to 100 %): with the input's fixed filter divided out each arrival is one
 //! sample, and a simulation of this structure with these values matches Live's renders to −41 dB
@@ -48,6 +49,48 @@ const ALLPASSES: [f64; LOOP] = [0.63406, 1.22440, 0.87055, 3.97925, 2.18381, 0.8
 /// Where an allpass rounds up to its next block (blocks).
 const ALLPASS_EDGE: f64 = 0.9;
 
+/// Under Smooth Fast (and Slow, which renders as Fast) no length keeps to blocks
+/// (`reverb-network-fast`, `reverb-network-fast-train`): each line's delay is `8 × y × room + 1`
+/// frames, with y these (blocks), and its allpass `floor(8 × c × Scale × room +
+/// FAST_ALLPASS_EDGE) + 1`. A's and B's delays keep their fraction of a frame and are read
+/// between frames, linearly; C's, D's and F's round down to whole frames, and R's (A's delay and
+/// G's together) rounds down past [`FAST_R_EDGE`]. Read at Size 1.53, 10.54 and 100 (Scale 40 %)
+/// and Scale 5 and 100 % at Size 1.53: A and B to 0.005 frame, the rest to the frame.
+const FAST_DELAYS: [f64; LOOP] = [287.0993, 340.0779, 628.6862, 459.9587, 846.774, 1220.6339];
+/// Where R's delay rounds up to its next frame under Smooth Fast (frames).
+const FAST_R_EDGE: f64 = 0.494;
+/// Each line's allpass under Smooth Fast, as [`ALLPASSES`]: C's and R's are 0.1 and 0.2 % below
+/// and above those, the middle of what their allpasses at Size 1.53 and Scale 100 % (172 and 160
+/// frames) and the other reads allow.
+const FAST_ALLPASSES: [f64; LOOP] = [0.63406, 1.22440, 0.8693, 3.97925, 2.18381, 0.8053];
+/// Where an allpass rounds up to its next frame under Smooth Fast (frames).
+const FAST_ALLPASS_EDGE: f64 = 0.15;
+/// Where each family's copy starts under Smooth Fast (blocks, reference room), rounded down to a
+/// whole frame: 0 to 6 frames before Smooth None's (396, 3191, 1640, 1336, 2983 and 2337 to the
+/// peak at Size 100).
+const FAST_FAMILY_OFFSETS: [f64; LOOP] = [49.4299, 398.832, 204.9654, 166.9265, 372.8029, 292.0821];
+/// Under Smooth Fast the input reaches the lines this many frames sooner than [`ENTRY_MS`] gives,
+/// and each line's loop is that much longer than its first pass (every path through two lines
+/// arrives 5 frames after their first passes), at every Size (`reverb-network-fast-train`).
+pub(crate) const FAST_EARLIER: f64 = 5.0;
+
+/// `x` rounded down past `edge` to a whole frame, or, while things move, the straight line through
+/// the middle of the steps.
+fn frames(x: f64, edge: f64, settled: bool) -> f64 {
+    if settled { (x + edge).floor() } else { x + edge - 0.5 }
+}
+
+/// Line `k`'s delay and allpass under Smooth Fast, as [`length_at`].
+fn fast_length_at(k: usize, room: f64, percent: f64, settled: bool) -> (f64, f64) {
+    let x = BLOCK * FAST_DELAYS[k] * room;
+    let line = match k {
+        0 | 1 => x + 1.0,
+        5 => frames(x, FAST_R_EDGE, settled),
+        _ => frames(x, 0.0, settled) + 1.0,
+    };
+    (line, frames(BLOCK * FAST_ALLPASSES[k] * percent * room, FAST_ALLPASS_EDGE, settled) + 1.0)
+}
+
 /// `BLOCK` times `x` rounded down past `edge`, or, while things move, the straight line through
 /// the middle of the steps, so a glide does not jump a block at a time.
 fn blocks(x: f64, edge: f64, settled: bool) -> f64 {
@@ -72,6 +115,11 @@ fn length_at(k: usize, room: f64, percent: f64, settled: bool) -> (f64, f64) {
 /// size factor `room`, in whole blocks and a frame when `settled`.
 pub(crate) fn peak(k: usize, room: f64, settled: bool) -> f64 {
     front(k, room, settled) + 1.0
+}
+
+/// Where family `k`'s copy starts under Smooth Fast, as [`front`].
+fn fast_front(k: usize, room: f64, settled: bool) -> f64 {
+    frames(BLOCK * FAST_FAMILY_OFFSETS[k] * room, 0.0, settled)
 }
 
 /// Where family `k`'s copy starts (frames at 44.1 kHz) for size factor `room`: whole blocks when
@@ -111,10 +159,12 @@ pub(crate) const MIX: [[f64; LOOP]; LOOP] = [
     [-0.3852, 0.2966, -0.4863, -0.4104, -0.4819, -0.3556],
     [-0.3740, 0.3540, 0.1679, -0.3865, 0.1348, 0.7342],
 ];
-/// A and B run this much of a frame past their whole length, read by linear interpolation (0.99
-/// of the frame and 0.01 of the next): a slight loss of the highs on every pass (0.18 dB at the
-/// top) and none of the lows. The other lines are whole. No line loses anything else on a pass:
-/// the whole tail falls with the decay's loss per second, at every Size (Decision 26).
+/// With Smooth None, A and B run this much of a frame past their whole length, read by linear
+/// interpolation (0.99 of the frame and 0.01 of the next): a slight loss of the highs on every
+/// pass (0.18 dB at the top) and none of the lows. The other lines are whole. No line loses
+/// anything else on a pass: the whole tail falls with the decay's loss per second, at every Size
+/// (Decision 26). Under Smooth Fast A's and B's fractions are larger ([`FAST_DELAYS`]), and they
+/// are all of Fast's loss of the highs.
 const FRACTION: [f64; LOOP] = [0.01, 0.01, 0.0, 0.0, 0.0, 0.0];
 /// The side each line is heard on (0 left, 1 right), all at one level before Stereo's rotation.
 pub(crate) const SIDES: [usize; LOOP] = [1, 0, 1, 0, 0, 1];
@@ -154,6 +204,8 @@ fn orthonormal() -> [[f64; LOOP]; LOOP] {
 pub(crate) struct Lengths {
     /// Each line's delay (frames).
     pub lines: [f64; LOOP],
+    /// How much of a frame past its delay each line is read, by linear interpolation.
+    pub fractions: [f64; LOOP],
     /// Each line's allpass (frames).
     pub allpasses: [f64; LOOP],
     /// Each line's gain per trip through its delay.
@@ -172,6 +224,7 @@ impl Default for Lengths {
     fn default() -> Self {
         Self {
             lines: [2.0; LOOP],
+            fractions: [0.0; LOOP],
             allpasses: [2.0; LOOP],
             gains: [0.0; LOOP],
             losses: [0.0; LOOP],
@@ -191,6 +244,7 @@ impl Lengths {
             }
         }
         mix(&mut self.lines, &from.lines, &to.lines, t);
+        mix(&mut self.fractions, &from.fractions, &to.fractions, t);
         mix(&mut self.allpasses, &from.allpasses, &to.allpasses, t);
         mix(&mut self.gains, &from.gains, &to.gains, t);
         mix(&mut self.losses, &from.losses, &to.losses, t);
@@ -199,31 +253,43 @@ impl Lengths {
         mix(&mut self.copy_gains, &from.copy_gains, &to.copy_gains, t);
     }
 
-    /// The lengths for size factor `room`, Scale `scale` (0..1) at `sample_rate`; `gain` gives a
-    /// line's gain per trip from its length in seconds. Whole frames when `settled`.
+    /// The lengths for size factor `room`, Scale `scale` (0..1) at `sample_rate`, under Smooth
+    /// Fast (or Slow) when `fast`; `gain` gives a line's gain per trip from its length in seconds.
+    /// Whole frames when `settled`, but for A's and B's fractions under Fast.
+    #[allow(clippy::too_many_arguments)]
     pub fn tune(
         &mut self,
         room: f64,
         scale: f64,
         sample_rate: f64,
         settled: bool,
+        fast: bool,
         gain: impl Fn(f64) -> f64,
         trip_seconds: f64,
     ) {
         let frames = sample_rate / RATE;
         let whole = |x: f64| if settled { x.round() } else { x }.max(2.0);
         let percent = scale * 100.0;
-        for k in 0..LOOP {
-            let (line, allpass) = length_at(k, room, percent, settled);
+        for (k, &none_fraction) in FRACTION.iter().enumerate() {
+            let (line, allpass) =
+                if fast { fast_length_at(k, room, percent, settled) } else { length_at(k, room, percent, settled) };
             let (line, allpass) = (line * frames, allpass * frames);
-            self.lines[k] = whole(line);
+            if fast && k < 2 {
+                // Read between frames, linearly, moving or not.
+                self.lines[k] = line.floor().max(2.0);
+                self.fractions[k] = line - self.lines[k];
+            } else {
+                self.lines[k] = whole(line);
+                self.fractions[k] = if fast { 0.0 } else { none_fraction };
+            }
             self.allpasses[k] = whole(allpass);
             // The allpass loses its own time on each pass, so the echoes it holds back decay
             // as fast as the rest (as Live's tail does at every Diffusion).
             self.gains[k] = gain(line / sample_rate);
             self.losses[k] = gain(allpass / sample_rate);
             self.trips[k] = (line + allpass) / sample_rate / trip_seconds;
-            self.fronts[k] = whole(front(k, room, settled) * frames);
+            let front = if fast { fast_front(k, room, settled) } else { front(k, room, settled) };
+            self.fronts[k] = whole(front * frames);
         }
     }
 
@@ -322,8 +388,8 @@ impl Network {
         for (k, (line, out)) in self.lines.iter_mut().zip(&mut outs).enumerate() {
             let length = n.lines[k] + swing(k, n.lines[k]);
             let mut read = f64::from(line.delay.read_hermite(length));
-            if FRACTION[k] != 0.0 {
-                read += FRACTION[k] * (f64::from(line.delay.read_hermite(length + 1.0)) - read);
+            if n.fractions[k] != 0.0 {
+                read += n.fractions[k] * (f64::from(line.delay.read_hermite(length + 1.0)) - read);
             }
             let y = f64::from(line.diffuser.process_lossy(read as f32, n.allpasses[k], diffusion, n.losses[k] as f32));
             *out = line.damper.damp(y, damping) * n.gains[k];
@@ -384,6 +450,46 @@ mod tests {
             for (k, want) in lengths.into_iter().enumerate() {
                 let (line, allpass) = length_at(k, room, percent, true);
                 assert_eq!(line + allpass, want, "line {k} at Size {size}, Scale {percent} %");
+            }
+        }
+    }
+
+    #[test]
+    fn under_smooth_fast_a_line_is_its_measured_loop() {
+        // Live's loops under Smooth Fast (frames: each line's first pass and 5), read at each
+        // (Size, Scale %) of `reverb-network-fast`.
+        let measured = [
+            (100.0, 40.0, [2501.795, 3113.620, 5309.0, 4954.0, 7474.0, 10023.0]),
+            (10.54, 40.0, [1181.926, 1472.137, 2508.0, 2341.0, 3531.0, 4735.0]),
+            (1.53, 5.0, [578.192, 689.411, 1258.0, 954.0, 1704.0, 2433.0]),
+            (1.53, 40.0, [622.191, 774.411, 1319.0, 1231.0, 1856.0, 2489.0]),
+            (1.53, 100.0, [698.192, 920.409, 1422.0, 1705.0, 2116.0, 2585.0]),
+        ];
+        for (size, percent, loops) in measured {
+            let room = (size / 100.0f64).cbrt();
+            for (k, want) in loops.into_iter().enumerate() {
+                let (line, allpass) = fast_length_at(k, room, percent, true);
+                let most = if k < 2 { 0.01 } else { 0.0 };
+                assert!(
+                    (line + allpass - want).abs() <= most,
+                    "line {k} at Size {size}, Scale {percent} %: {}",
+                    line + allpass
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn under_smooth_fast_each_copy_starts_where_measured() {
+        let measured = [
+            (100.0, [396.0, 3191.0, 1640.0, 1336.0, 2983.0, 2337.0]),
+            (10.54, [187.0, 1508.0, 775.0, 631.0, 1409.0, 1104.0]),
+            (1.53, [99.0, 793.0, 408.0, 332.0, 741.0, 581.0]),
+        ];
+        for (size, peaks) in measured {
+            let room = (size / 100.0f64).cbrt();
+            for (k, want) in peaks.into_iter().enumerate() {
+                assert_eq!(fast_front(k, room, true) + 1.0, want, "family {k} at Size {size}");
             }
         }
     }

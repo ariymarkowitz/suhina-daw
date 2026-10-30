@@ -342,7 +342,8 @@ Each entry: what was chosen, what it costs, why.
    0.27, the 10 to 16 kHz third-octaves decayed 1 to 2 dB per second too slowly at 14.4 and 60 s,
    heard as a harsh top; with 0.15 they are within 0.4 dB per second at 14.4 s and 1.2 at 60 s.
    Below 3.46 s the loss stays at 0.96 dB: letting it grow further took 2 dB per second too much
-   from 6 to 8 kHz at 0.83 s.
+   from 6 to 8 kHz at 0.83 s. Density Low has no such shelf: Live's loss of the highs there is A's
+   and B's reads between frames (Decisions 26 and 27).
 9. **Low Cut is a 14 dB first-order shelf** half way at the band's lower edge. Live's Lo Cut fits
    no simple filter (3 to 8 dB/octave, flattening at the bottom); at 1 kHz, width 5.85 the shelf is
    within 0.6 dB rms of its measured response (1.3 dB at worst, at 57 Hz), and at 5 kHz it is
@@ -446,7 +447,10 @@ Each entry: what was chosen, what it costs, why.
    preset's filters, against 0.2 at 1 kHz. Leaving out every filter and draining all bands alike
    had Suhina's frozen tail 30 dB bright at 4 kHz and over 100 dB at 16 kHz after 8 s with Flat
    off, and 4 to 7 dB bright at 8 to 16 kHz with Flat on; now each band's drain is within
-   0.2 dB/s of Live's from 125 Hz to 8 kHz. The soft limit with Cut
+   0.2 dB/s of Live's from 125 Hz to 8 kHz. Density Low's frozen network drains nothing with Flat
+   on and 0.03 dB/s with Flat off besides its damping: A's and B's reads under Smooth Fast take
+   the rest, and its frozen tail falls within 0.1 dB/s of Live's at 1 to 8 kHz and 0.1 to 0.7 at
+   13 kHz (Decision 27). The soft limit with Cut
    off is Suhina's, so a frozen tail fed for minutes cannot overflow.
 16. **Cost: about 3.2 % of a core at the defaults,** over the 1 % budget, as the device notes allow
     for reverbs: the ten direct taps (cubic while Spin moves them), the filtered taps (up to 168,
@@ -484,9 +488,7 @@ Each entry: what was chosen, what it costs, why.
     of the energy of each side to 135 ms, 81 / 77 % (left / right) to 204 ms, 67 / 59 % to 272 ms
     and 57 / 31 % to 363 ms, with no timing lag; the old network was uncorrelated past its first
     arrivals. What is not found: Live's own allpasses (one per line here; the return line's alone is
-    measured, Decision 21) and how Smooth Fast changes the network (Live's Fast renders run its delays a
-    little shorter, up to 11 frames by 0.25 s and 39 by 0.9 s at Size 500, so they do not match
-    its Smooth None renders sample for sample). Cost: 7 lines and 4 plain delays against 8 lines,
+    measured, Decision 21). How Smooth Fast changes the network is Decision 27. Cost: 7 lines and 4 plain delays against 8 lines,
     and a 7 × 7 mix.
 20. **In the measured network every path fades with its whole time** (Density Low). Live's tail
     at Decay 0.2 s falls at 336 dB/s from its first arrivals down (a T60 of 0.18 s, 0.9 of the
@@ -681,8 +683,31 @@ Each entry: what was chosen, what it costs, why.
     are within 0.5 dB (912), median 0.13 dB (0.18), the right side's median 0.11 dB (0.19); the
     cases that moved away are Smooth Fast's at Size 1.53 (`reverb-decay`, `reverb-texture`), from
     1 s on 0.3 to 0.5 dB louder than before: Fast's own loss in small rooms
-    (`MEASURED_AIR_ROOM`) was fitted with the loss a pass in place (Known differences). Cost:
+    (`MEASURED_AIR_ROOM`) was fitted with the loss a pass in place (Decision 27 replaced it). Cost:
     none.
+27. **Under Smooth Fast or Slow, Density Low runs Fast's own lengths, and loses its highs only in
+    A's and B's reads.** Live's Fast network (`reverb-network-fast`, `reverb-network-fast-train`:
+    Hi Cut off, Diffusion 0.1 %, Decay 60 and 0.83 s, Size 1.53, 10.54 and 100) keeps None's
+    levels, mix and decay, but no length keeps to 8-frame blocks: each line's delay is `8 × y × r
+    + 1` frames and its allpass `floor(8 × c × Scale × r + 0.15) + 1`. A's and B's delays keep
+    their fraction of a frame (0.795 and 0.620 at Size 100) and are read linearly between frames;
+    C's, D's and F's round down to whole frames, and R's (A's delay and G's) down past 0.494. Every
+    line's loop is 5 frames longer than its first pass, and the input reaches the lines 5 frames
+    sooner (770 frames after each reflection at Shape 0.5, not 775). The families' copies start at
+    whole frames, `floor(8 × x × r)`, 0 to 6 earlier than None's. The y, c and x are Fast's own,
+    within 0.5 % of None's: A and B fit to 0.005 frame at the five (Size, Scale) points read, the
+    rest to the frame; C's and R's allpass constants sit 0.1 and 0.2 % off None's, which their
+    allpasses at Size 1.53 and Scale 100 % need. Slow renders exactly as Fast. Before, Fast ran
+    None's lengths and a fitted 8 kHz shelf that shrank with the decay (`MEASURED_AIR_*`): Live's
+    loss of the highs is the same per second at every Decay and eases as the highs gather in C to
+    R, which no shelf can do, so the preset's 60 s tail was 4 to 9 dB bright at 8 to 16 kHz by 2
+    to 4 s, and the lengths, up to 11 frames long, moved its modes (correlation with Live's 0.09
+    by 1.5 s). Now `reverb-network-fast` matches to −29 to −40 dB at every Size and Scale with
+    energy within 0.1 dB, as None's does; `reverb-decay decay-60s` (Hi Cut on, Diffusion 60 %)
+    is within 0.4 dB of Live's in every band to 16 kHz and window to 9 s, its waveform correlating
+    1.00 at 0.55 s and 0.51 at 4 s (−0.15 before); the small-room Fast cases, 0.5 to 1.2 dB loud,
+    are within 0.3 dB. Over the `reverb-impulse` set 941 of 1,084 windows are within 0.5 dB
+    (918), median 0.10 dB (0.13). Cost: none.
 
 ## Known differences
 
@@ -732,37 +757,18 @@ What is further off, and why it is left:
 - **Density Low's network beyond what was read** (Decisions 24 and 25): the lengths and levels
   were read at Size 0.22 to 100, Diffusion 0.1 to 60 %, Decay 60 and 0.83 s, Smooth None and
   network filters off. At those settings its fade matches Live's at every Size from 1.53 to 100, in
-  every band, to 9 s (Decision 26); with Smooth Fast in small rooms it does not (next item). Size 0.22's energy is within 0.4 dB to 9 s but its
+  every band, to 9 s (Decision 26), and with Smooth Fast at Size 1.53 to 100 (Decision 27). Size 0.22's energy is within 0.4 dB to 9 s but its
   waveform matches only its first 200 frames: its arrivals crowd, and it was not read further. The 4 kHz High Shelf
   cases are 1 dB quiet to 0.15 s. The network Lowpass at 1 kHz is 1 to 1.7 dB quiet to 0.5 s; whether the network's input passes the
   damping once (Decision 13) was not read for this network and is kept. Below 100 Hz the
   simulation matches Live to only −24 dB. The other Densities run the Householder network.
-- **Smooth Fast in small rooms** (Density Low). The `reverb-impulse` set's Fast cases at a stored
-  Size took it (their reflections move with the cube root of Size, as None's do), and
-  `reverb-size` holds each with Smooth None. Against its None twin, Live's Fast tail at Size
-  1.53 is 1.2, 2.7 and 3.5 dB down at 0.15 to 0.5, 1 to 2 and 2 to 4 s (Decay 3.46 s; 1.1 to
-  1.8 dB by 2 to 4 s in the `reverb-texture` cases at Decay 1.2 s), this device's 0.5, 1.7 and
-  2.5; at Size 10.54 to 500 the two agree within 0.7 dB. The difference starts with the first
-  arrivals (0.6 dB from 0.05 s, 0.15 here), so it is not all a loss a second; at the top this
-  device loses more (16 kHz 8.3 dB/s faster than with None at Size 1.53, Live's 5 to 7.5).
-  `MEASURED_AIR_ROOM` was fitted with the loss a pass that Decision 26 took out, and these cases
-  are now 0.5 to 1.2 dB loud from 1 s (0.3 to 0.9 before). Live's Fast also moves the
-  reflections earlier than None's, by 4 frames on the left and by 4 or 9 to 10 on the right
-  depending on the reflection, at every Size from 0.22 to 500 (`reverb-structure size-*-er`
-  against `reverb-size size-*-er`); this device's Fast keeps None's times. With Hi Cut off
-  (`reverb-network-fast`) Fast leaves the reflections alone, so those shifts come with Hi Cut on.
-  Read sample by sample there, Fast's first passes keep None's levels, but every line is 5 to 19
-  frames shorter, following the same constants without the 8-frame blocks; the allpasses are
-  whole frames, and A's and B's delays keep a fraction of a frame read by linear
-  interpolation. The lengths do not move (`reverb-network-fast-train`: the same to 0.01 frame
-  at 39 impulses over 20 s). The input reaches the lines 770 frames after each reflection, not
-  775, and each line's loop is its first pass's length + 5 frames; the copies come at whole
-  frames 0 to 6 earlier than None's. A network built so matches Live's Fast renders to −37 to
-  −41 dB over 0.5 s at Size 1.53, 10.54 and 100, and its 8 to 16 kHz decay against the mids in
-  every window to 9 s within 0.06 dB/s from 2 s on: Fast's loss of the highs is A's and B's
-  linear reads, which this device does not run (it keeps None's lengths and a fitted shelf,
-  `MEASURED_AIR_ROOM`). Slow renders exactly as Fast. The lengths were read at three Sizes and
-  Scale 40 % (and Scale 5 and 100 % at Size 1.53), not enough for a law at every Size.
+- **Smooth Fast beyond what was read** (Density Low, Decision 27). Fast's lengths were read at
+  Size 1.53, 10.54 and 100, Scale 40 % (and 5 and 100 % at Size 1.53), so its constants are
+  sure only there; its entry was read at Shape 0.5 only. With Hi Cut on Live's Fast moves the
+  reflections earlier than None's, by 4 frames on the left and 4 or 9 to 10 on the right by
+  reflection, at every Size (`reverb-structure size-*-er` against `reverb-size size-*-er`); this
+  device's Fast keeps None's times. At `reverb-decay decay-60s` the waveform drifts 2 frames
+  from Live's over 4 s, and 16 to 20 kHz ends 1 to 3 dB dark from 5 s.
 - **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
   the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
   reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's
@@ -787,16 +793,17 @@ What is further off, and why it is left:
   from 60 to 500 ms and decays in the same time (Decision 20); the other Densities still use the
   short-decay cuts of Decision 5. With the input band 0.5 wide
   Low's was 1.4 dB loud before Decision 20 (not checked since).
-- **Smooth None against Fast at Decay 3.46 s:** Live's renders of the same settings with only
-  Smooth changed differ: with None (`reverb-size`) the tail decays in 3.12 s and is up to 2 dB
-  louder by 2.4 s than with Fast (`reverb-decay`, 3.01 s). This device follows Fast, the preset's
-  setting, and Smooth changes nothing while Size stands still; so the four `decay-3.46s-size-*`
-  cases of `reverb-decay` differ from 1 to 4 s by up to 1 dB either way. At Decay 1.2 s the two agree within 0.3 dB.
+- **Smooth None against Fast at Decay 3.46 s** (Densities other than Low): Live's renders of the
+  same settings with only Smooth changed differ: with None (`reverb-size`) the tail decays in
+  3.12 s and is up to 2 dB louder by 2.4 s than with Fast (`reverb-decay`, 3.01 s). There this
+  device follows Fast, the preset's setting, and Smooth changes nothing while Size stands still.
+  Density Low runs each as Live does (Decision 27).
 - **Octave decay times at short decays:** at Decay 0.83 to 1.2 s the 250 Hz octave decays 11 to
   16 % faster than Live's and 1 and 2 kHz up to 6 % slower, in almost every case. Few modes fall in
   those octaves within the fit's half second, and the figure moves by up to half with the fit's
   range, so it was not tuned.
-- **The highs of long and small-room tails** (Decision 8): Live's tail with Smooth Fast loses its
+- **The highs of long and small-room tails** (Decision 8; Densities other than Low, which runs
+  Live's own loss, Decision 27): Live's tail with Smooth Fast loses its
   8 to 16 kHz octaves fastest in its first few seconds and more slowly after, which a fixed shelf
   per trip cannot do. At Decay 60 s and in frozen tails the 8 kHz octave ends up to 2.8 dB and 16
   kHz up to 5 dB bright (2 to 7 s; 4 and 7 dB with the power 0.33); at Size 1.53 the 8 kHz octave

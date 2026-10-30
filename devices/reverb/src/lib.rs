@@ -733,19 +733,6 @@ const AIR_LOSS_DB: f64 = 0.96;
 const AIR_DECAY: f64 = 3.46;
 /// Above [`AIR_DECAY`] the fixed loss of the highs shrinks with the decay to this power.
 const AIR_POWER: f64 = 0.15;
-/// The same for the measured network (Density Low) while Smooth is Slow or Fast: Live's highs
-/// decay at 4 to 16 kHz about as this gives at Decay 14.4 and 60 s (the Householder network's
-/// own losses need the smaller power). 0.33 left the 60 s tail 4 dB bright at 8 kHz by 4 s.
-const MEASURED_AIR_POWER: f64 = 0.25;
-/// The measured network's fixed loss of the highs per trip with Smooth None (dB), whatever the
-/// decay: none. Live's loss of the highs comes almost all with Smooth Slow or Fast; with None
-/// the only loss is two lines' fraction of a frame (`measured::FRACTION`), read from
-/// `reverb-network-exact` and `reverb-network-small`, where every other pass is one sample.
-const MEASURED_AIR_NONE_DB: f64 = 0.0;
-/// In rooms below this size factor (Size 10.5) the measured network's loss of the highs with
-/// Smooth Slow or Fast grows per second as the room shrinks: Live's 8 kHz octave decays 3.8 dB/s
-/// faster than 1 kHz at Size 1.53 against 1.5 to 1.9 dB/s at Size 10.54, 100 and 500.
-const MEASURED_AIR_ROOM: f64 = 0.47;
 /// A frozen tail loses its highs as one of this decay (seconds) does: Live's frozen tail with
 /// Flat on decays 0.2, 0.55, 1.0 and 1.5 dB/s faster at 2, 4, 8 and 16 kHz than at 1 kHz, as the
 /// 60 s tail does.
@@ -764,6 +751,11 @@ const SUBSONIC_FREQUENCY: f64 = 19.0;
 const FREEZE_DRAIN: f64 = 0.07;
 /// ... and this many with Flat off, where the damping stays in too.
 const FREEZE_DRAIN_UNFLAT: f64 = 0.2;
+/// The measured network (Density Low) frozen with Flat off falls this many dB per second besides
+/// its damping and A's and B's reads, and with Flat on nothing besides those reads: Live's frozen
+/// tail at 1 kHz falls 0.11 and 0.20 dB/s with Flat on and off (`reverb-freeze-static`, Smooth
+/// Fast), most of it from A's and B's fractions of a frame.
+const MEASURED_FREEZE_DRAIN_UNFLAT: f64 = 0.03;
 /// Inside a frozen loop that still takes input, levels above this are compressed so the tail
 /// cannot grow without end.
 const FREEZE_LIMIT: f64 = 2.0;
@@ -1630,6 +1622,8 @@ impl Reverb {
         let predelay_gain = db_to_gain(-PREDELAY_FADE * predelay_ms / setting);
         let taps = self.taps;
         let low = density_index == LOW;
+        // Smooth Slow renders as Fast (`reverb-network-fast`).
+        let fast = self.value(param::SMOOTH) as usize != 0;
         let size_level =
             if low { LOW_SIZE_LEVEL + LOW_SIZE_LEVEL_PER_SIZE * REFERENCE_SIZE * room.powi(3) } else { 1.0 };
         // The network is fed by the direct reflections, each at its own level and fade.
@@ -1680,16 +1674,19 @@ impl Reverb {
         }
         let gain = |seconds: f64| {
             if frozen {
-                db_to_gain(-seconds * if self.params.on(param::FLAT) { FREEZE_DRAIN } else { FREEZE_DRAIN_UNFLAT })
+                db_to_gain(-seconds * if self.params.on(param::FLAT) { 0.0 } else { MEASURED_FREEZE_DRAIN_UNFLAT })
             } else {
                 db_to_gain(-60.0 * seconds / decay)
             }
         };
-        t.measured.tune(room, scale, sr, settled, gain, LOSS_TRIP_SECONDS);
+        t.measured.tune(room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
         t.measured.fade(room, fade);
         let (entry, below, above) = measured::ENTRY_MS;
         let per_shape = if shape < 0.5 { below } else { above };
         t.entry = (entry + per_shape * (shape - 0.5) * room) * ms;
+        if fast {
+            t.entry -= measured::FAST_EARLIER * sr / REFERENCE_RATE;
+        }
         let short = 60.0 * TAIL_FADE_SECONDS / setting + TAIL_SHORT_DB / (setting * setting) + fade * TAIL_LAG_MS;
         t.feed = TAIL_GAIN * predelay_gain * db_to_gain(density);
         // The measured network's lines scale with the room's own size factor, small rooms too, and
@@ -1709,13 +1706,10 @@ impl Reverb {
 
         let air_setting = if frozen { FROZEN_AIR_DECAY } else { setting };
         let air_db = AIR_LOSS_DB * (AIR_DECAY / air_setting).powf(AIR_POWER).min(1.0);
-        let measured_air_db = if self.value(param::SMOOTH) as usize == 0 {
-            MEASURED_AIR_NONE_DB
-        } else {
-            AIR_LOSS_DB
-                * (AIR_DECAY / air_setting).powf(MEASURED_AIR_POWER).min(1.0)
-                * (MEASURED_AIR_ROOM / room).max(1.0)
-        };
+        // The measured network (Density Low) has no loss of the highs of its own: with Smooth None
+        // its only loss is A's and B's hundredth of a frame, and under Fast or Slow their larger
+        // fractions (`measured::FAST_DELAYS`), read from `reverb-network-fast-train`.
+        let measured_air_db = 0.0;
         let r = &self.ramps;
         let (high_f, high_g) = (2.0f64.powf(f64::from(r.high_frequency.current())), f64::from(r.high_gain.current()));
         let (low_f, low_g) = (2.0f64.powf(f64::from(r.low_frequency.current())), f64::from(r.low_gain.current()));
