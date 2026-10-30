@@ -180,36 +180,45 @@ const TAP_FADE_PER_SHAPE: f64 = 0.0668;
 /// (0.0565 dB per ms at 0.2 s, 0.0094 at 1.2 s).
 const PREDELAY_FADE: f64 = 0.0113;
 /// Spin swings every reflection's whole delay, predelay included, by this fraction of it per unit
-/// of Spin Amount, times [`spin_reach`] (docs/spec/reverb.md › Early reflections).
-const SPIN_FRACTION: f64 = 0.009_95;
+/// of Spin Amount, times [`spin_reach`] (docs/spec/reverb.md › Early reflections): tracked tap by
+/// tap in Live's click trains at Amount 17.5 and 55 and Predelay 0.5 to 250 ms, the swing is
+/// 1.000 to 1.005 times this (`reverb-spin-taps`, `reverb-spin-rate`).
+const SPIN_FRACTION: f64 = 0.01;
 /// Above the knee, [`spin_reach`] is this many ms over the predelay less
 /// [`SPIN_REACH_OFFSET_MS`]: a long predelay swings by about the same 2 ms times the fraction
 /// whatever the reflection's own delay.
 const SPIN_REACH_MS: f64 = 2.0;
-/// See [`SPIN_REACH_MS`].
-const SPIN_REACH_OFFSET_MS: f64 = 3.02;
-/// Live's Spin LFOs run this much faster than Spin Rate says: on a 1 kHz tone through the
-/// reflections at 0.3 and 1.3 Hz they gain about 235 frames a second on LFOs at the Rate itself, so
-/// at 2.5 ms of predelay the reflections drift ±10 frames from Live's within 6 s (`reverb-spin-grid`).
-const SPIN_RATE_SCALE: f64 = 1.0053;
-/// When the transport starts, Live's Spin LFOs are already this far (seconds at their own rate)
-/// past the phases in [`SPIN_VOICES`] (`reverb-spin-grid`, 0.3 and 1.3 Hz).
-const SPIN_LEAD_SECONDS: f64 = 0.008;
+/// See [`SPIN_REACH_MS`]. The knee is where the two meet, 5 ms: tracked tap by tap, Live's swing
+/// at Predelay 6.5, 8, 10, 25 and 50 ms is 2 / (predelay − 3.00) within 0.1 % (`reverb-spin-knee`,
+/// `reverb-spin-taps`).
+const SPIN_REACH_OFFSET_MS: f64 = 3.0;
 /// Spin's LFOs, one per direct reflection (the same ten times in every Density): the
-/// reflection's time in the reference room (ms), its rate against Spin Rate and its phase at the
-/// start (radians, of a sine that lengthens the delay), as tracked in Live's renders.
+/// reflection's time in the reference room (ms), its rate against Spin Rate and its phase when
+/// playback starts (degrees, of a sine that lengthens the delay). Tracked tap by tap in Live's click
+/// trains (`reverb-spin-taps`, `reverb-spin-rate`, `reverb-spin-knee` at Predelay 8 to 250 ms):
+/// the rates agree to 0.0001 at Spin Rate 0.30 and 1.30 Hz and at every Predelay and Amount, and
+/// the phases, the same at every Rate, are within 0.1° of whole tens of degrees.
 const SPIN_VOICES: [(f64, f64, f64); 10] = [
-    (0.000, 0.983, 0.66),
-    (7.370, 1.042, 1.69),
-    (11.429, 0.992, 1.20),
-    (17.914, 0.978, 1.54),
-    (26.553, 1.016, 0.52),
-    (28.435, 1.000, 0.86),
-    (34.172, 1.025, 1.01),
-    (41.134, 1.008, 0.17),
-    (48.299, 1.009, 1.38),
-    (55.646, 0.985, 0.33),
+    (0.000, 0.9897, 40.0),
+    (7.370, 1.0430, 100.0),
+    (11.429, 0.9981, 70.0),
+    (17.914, 0.9825, 90.0),
+    (26.553, 1.0230, 30.0),
+    (28.435, 1.0071, 50.0),
+    (34.172, 1.0300, 60.0),
+    (41.134, 1.0150, 10.0),
+    (48.299, 1.0150, 80.0),
+    (55.646, 0.9917, 20.0),
 ];
+/// Live's Spin LFOs run no slower than this (Hz): at Spin Rate 0.07 Hz every tap swings 1.057 times
+/// as fast as at 0.30 and 1.30 (`reverb-spin-rate` r0.07-*), at 0.15 Hz at the Rate itself
+/// (`reverb-white-noise` spin-amt35-0.15Hz is 15 dB further from Live's 2 % faster).
+const SPIN_RATE_FLOOR: f64 = 0.074;
+/// Live reads its Spin LFOs this far ahead (seconds): each tap arrives later than an LFO read at
+/// its own time would put it by 6.1 to 6.8 frames times the speed its delay changes at
+/// (`reverb-spin-rate` r1.3-p0.5 and r1.3-a55-p100, tap by tap); 0.12 to 0.18 ms all bring
+/// `reverb-white-noise-modulation` spin-amt55-1.3Hz 4 to 5 dB nearer Live's, 0.15 the most.
+const SPIN_LEAD_SECONDS: f64 = 0.000_15;
 /// The rate the tap tables' frames count at.
 const REFERENCE_RATE: f64 = 44_100.0;
 /// Longest delay from a direct reflection to its family's copy in the network: its filtered
@@ -825,7 +834,7 @@ fn stereo_delay(stereo: f64, fast: bool, sample_rate: f64) -> f64 {
 
 /// How far Spin reaches with `predelay_ms` of predelay, as a share of [`SPIN_FRACTION`]: all of
 /// it up to the knee (5 ms), then [`SPIN_REACH_MS`] over the predelay less
-/// [`SPIN_REACH_OFFSET_MS`] (0.29 at 10 ms, 0.0083 at 250 ms).
+/// [`SPIN_REACH_OFFSET_MS`] (0.29 at 10 ms, 0.0081 at 250 ms).
 fn spin_reach(predelay_ms: f64) -> f64 {
     SPIN_REACH_MS / (predelay_ms - SPIN_REACH_OFFSET_MS).max(SPIN_REACH_MS)
 }
@@ -843,7 +852,7 @@ fn voices(taps: &[Tap]) -> [usize; DIRECT_TAPS] {
 
 /// Spin's LFO positions at the start, in cycles.
 fn spin_start() -> [f64; SPIN_VOICES.len()] {
-    SPIN_VOICES.map(|(_, _, phase)| phase / std::f64::consts::TAU)
+    SPIN_VOICES.map(|(_, _, degrees)| degrees / 360.0)
 }
 
 /// Soft limit for a frozen loop: unchanged up to [`FREEZE_LIMIT`], then compressed towards twice it.
@@ -1264,7 +1273,7 @@ impl Device for Reverb {
         // A network that takes over from another starts silent.
         self.network.set_design(design);
         let (spin_step, chorus_step) =
-            (self.value(param::SPIN_RATE) * SPIN_RATE_SCALE / sr, self.value(param::CHORUS_RATE) / sr);
+            (self.value(param::SPIN_RATE).max(SPIN_RATE_FLOOR) / sr, self.value(param::CHORUS_RATE) / sr);
         // How far ahead of their phases Spin's LFOs are read, in cycles at Spin Rate.
         let spin_lead = SPIN_LEAD_SECONDS * sr * spin_step;
         let frozen = self.frozen();
@@ -1344,7 +1353,9 @@ impl Device for Reverb {
             // each direct reflection's whole delay on its own LFO, by a share of it that falls as
             // the predelay grows, and the network's input with it; a filtered one is a direct one
             // a family's delay later, so it is played from a mix of the direct ones per family.
-            // Without Spin, and with nothing moving, the taps fall on whole frames.
+            // With nothing moving, each tap's own delay falls on a whole frame and Spin's swing is
+            // added to it, as Live's are (`reverb-spin-taps`: its swinging taps centre on the
+            // frames its still ones are read at); without Spin the taps are read at whole frames.
             let mut spin = [0.0f64; SPIN_VOICES.len()];
             if spin_swing > 0.0 {
                 let reach = spin_swing * spin_reach(predelay * 1_000.0 / sr);
@@ -1352,7 +1363,8 @@ impl Device for Reverb {
                     *s = reach * (std::f64::consts::TAU * (phase + spin_lead * rate)).sin();
                 }
             }
-            let whole = spin_swing == 0.0 && !self.moving && self.ramps.predelay.is_settled();
+            let settled = !self.moving && self.ramps.predelay.is_settled();
+            let whole = spin_swing == 0.0 && settled;
             // The groups wait the entry in their own lines, at least two frames; an entry shorter
             // than that (Live's is a frame early at Shape 0) reads the feed line sooner instead.
             let group_delay = t.entry.max(2.0);
@@ -1377,7 +1389,8 @@ impl Device for Reverb {
             let mut reads = [0.0f64; DIRECT_TAPS];
             for (d, tap) in self.taps.iter().enumerate() {
                 let delay = t.tap_delays[d];
-                let at = predelay + delay + spin[self.voices[d]] * (predelay + delay);
+                let still = predelay + delay;
+                let at = if settled { still.round() } else { still } + spin[self.voices[d]] * still;
                 let read = read_from(&self.input, at);
                 direct[tap.side] += read * t.tap_gains[d];
                 reads[d] = read * t.reflection_levels[d];
@@ -1385,7 +1398,7 @@ impl Device for Reverb {
                 // hears the shift Spin gave the reflection, not the one it has an entry later. At
                 // whole frames each is rounded on its own, the reflection where it is heard and the
                 // entry, as Live's are (`reverb-network-small`).
-                let from = at + if whole { t.entry.round() - group_whole } else { t.entry - group_delay };
+                let from = at + if settled { t.entry.round() - group_whole } else { t.entry - group_delay };
                 let u = read_from(&self.input, from) * t.feed_gains[d] * feed * t.network_feed;
                 if let Some(group) = design.tap_groups.get(d).and_then(|&g| groups.get_mut(g)) {
                     *group += u;
@@ -1424,7 +1437,7 @@ impl Device for Reverb {
             }
             let early = delayed;
             for (group, line) in groups.iter_mut().zip(&mut self.group_lines) {
-                let late = if whole { line.read(group_whole as usize) } else { line.read_hermite(group_delay) };
+                let late = if settled { line.read(group_whole as usize) } else { line.read_hermite(group_delay) };
                 line.push(*group as f32);
                 *group = f64::from(late);
             }

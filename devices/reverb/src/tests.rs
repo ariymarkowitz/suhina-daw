@@ -480,6 +480,20 @@ fn sparse_and_low_play_their_own_reflections() {
 }
 
 #[test]
+fn spin_runs_no_slower_than_its_floor() {
+    // Live's LFOs at Spin Rate 0.07 Hz run 1.057 times as fast as the Rate; at 0.15 Hz at the Rate.
+    let mut block = vec![0.0f32; 512 * 2];
+    for (rate, expected) in [(0.07, 0.074), (0.15, 0.15)] {
+        let mut r = reverb(44_100.0, &[(param::SPIN, 1.0), (param::SPIN_RATE, rate)]);
+        r.process(&ProcessContext::default(), &mut block);
+        let step = expected * 512.0 / 44_100.0;
+        for ((ours, start), (_, m, _)) in r.spin_phases.iter().zip(spin_start()).zip(SPIN_VOICES) {
+            assert!((ours - (start + step * m)).abs() < 1e-9, "{rate} Hz: {ours} against {start}");
+        }
+    }
+}
+
+#[test]
 fn spin_starts_again_when_playback_starts() {
     // Live's LFOs have the same phases whenever playback starts, from bar 1 or bar 2 alike.
     let mut r = reverb(44_100.0, &[(param::SPIN, 1.0)]);
@@ -491,7 +505,7 @@ fn spin_starts_again_when_playback_starts() {
     }
     assert_ne!(r.spin_phases, spin_start());
     r.process(&playing, &mut block);
-    let step = 0.3 * SPIN_RATE_SCALE * 512.0 / 44_100.0;
+    let step = 0.3 * 512.0 / 44_100.0;
     for ((ours, start), (_, rate, _)) in r.spin_phases.iter().zip(spin_start()).zip(SPIN_VOICES) {
         assert!((ours - (start + step * rate)).abs() < 1e-9, "{ours} against {start}");
     }
