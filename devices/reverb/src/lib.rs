@@ -723,6 +723,13 @@ const FEED_CUT: f64 = 15_000.0;
 /// The damping shelves are second-order (a cookbook shelf with this Q, half way at the set
 /// frequency), steeper than first-order ones.
 const SHELF_Q: f64 = BUTTERWORTH_Q;
+/// The measured network's (Density Low's) shelves are cookbook shelves of this Q ...
+const MEASURED_SHELF_Q: f64 = 0.70;
+/// ... the High Shelf half way at this much of its frequency and the Low Shelf at its frequency
+/// over this: with them `reverb-network-filters` (1 kHz and 500 Hz, gain 0.2) and
+/// `reverb-network-small` (4 kHz, gain 0.4, Size 1.53 to 100) match Live's renders to −32 to −36 dB
+/// from 4 to 8 s, against −12 to −18 dB with Q 0.707 at the frequency (fitted to those three).
+const MEASURED_SHELF_SHIFT: f64 = 0.98;
 /// A loss of the highs built into the loop: a high shelf half way at this frequency, this many dB
 /// per trip up to [`AIR_DECAY`]; longer decays lose less, with the decay to the power
 /// [`AIR_POWER`].
@@ -1726,13 +1733,13 @@ impl Reverb {
                 / std::f64::consts::TAU
         };
         let pass_corners = [reach(0.25), reach(0.75)];
-        let tune = |damper: &mut Damper, trips: f64, pass_trips: f64, air_db: f64| {
+        let tune = |damper: &mut Damper, trips: f64, pass_trips: f64, air_db: f64, (q, shift): (f64, f64)| {
             let db = |g: f64| 20.0 * g.max(1e-6).log10() * trips;
-            damper.high_shelf.set(Coefficients::high_shelf(sr, high_f, SHELF_Q, db(high_g)));
+            damper.high_shelf.set(Coefficients::high_shelf(sr, high_f * shift, q, db(high_g)));
             for (section, corner) in damper.low_pass.iter_mut().zip(pass_corners) {
                 section.set(FirstOrderCoefficients::high_shelf(sr, corner, db_to_gain(-pass_db * pass_trips / 2.0)));
             }
-            damper.low_shelf.set(Coefficients::low_shelf(sr, low_f, SHELF_Q, db(low_g)));
+            damper.low_shelf.set(Coefficients::low_shelf(sr, low_f / shift, q, db(low_g)));
             damper.air.set(FirstOrderCoefficients::high_shelf(sr, AIR_FREQUENCY, db_to_gain(-air_db * trips)));
         };
         for ((line, base), diffuser) in self.lines.iter_mut().zip(lines).zip(DIFFUSERS) {
@@ -1740,18 +1747,30 @@ impl Reverb {
             // room of another size, loses in proportion to its length, so the loss per second
             // does not depend on the room.
             let trips = (base + diffuser * scale) * room / 1_000.0 / LOSS_TRIP_SECONDS;
-            tune(&mut line.damper, trips, trips, air_db);
+            tune(&mut line.damper, trips, trips, air_db, (SHELF_Q, 1.0));
         }
+        // Each of the measured network's lines passes one whole one-pole of the Low-Pass on every
+        // pass, however long the line (`reverb-network-filters`: at 250 Hz, 1 kHz and 4 kHz and
+        // Size 1.53 to 100 that alone matches Live's renders to −27 to −37 dB).
+        let line_pole = (-std::f64::consts::TAU * high_f / sr).exp();
+        let line_pass = FirstOrderCoefficients { b0: 1.0 - line_pole, b1: 0.0, a1: -line_pole };
         for (line, &trips) in self.measured.lines.iter_mut().zip(&self.to.measured.trips) {
-            tune(&mut line.damper, trips, trips, measured_air_db);
+            tune(&mut line.damper, trips, 0.0, measured_air_db, (MEASURED_SHELF_Q, MEASURED_SHELF_SHIFT));
+            let [whole, rest] = &mut line.damper.low_pass;
+            whole.set(line_pass);
+            rest.set(FirstOrderCoefficients::IDENTITY);
         }
-        // Density Low's input passes no shelf: in Live's bare network each line has its own
-        // shelves, as long as the line, and the input none (`reverb-network-small hi-shelf-4k`),
-        // and with the shelves on Live's first arrivals are as with them off (`reverb-filters
-        // net-*`). It keeps the Low-Pass's pass.
-        let input_trips = if self.value(param::DENSITY) as usize == LOW { 0.0 } else { INPUT_TRIPS };
-        let input_air_db = if self.value(param::DENSITY) as usize == LOW { measured_air_db } else { air_db };
-        tune(&mut self.input_damper, input_trips, INPUT_PASS_TRIPS, input_air_db);
+        // Density Low's input passes no damping: in Live's bare network each line has its own,
+        // and the input none (`reverb-network-small hi-shelf-4k`, `reverb-network-filters`).
+        let low = self.value(param::DENSITY) as usize == LOW;
+        let (input_trips, input_pass_trips) = if low { (0.0, 0.0) } else { (INPUT_TRIPS, INPUT_PASS_TRIPS) };
+        tune(
+            &mut self.input_damper,
+            input_trips,
+            input_pass_trips,
+            if low { measured_air_db } else { air_db },
+            (SHELF_Q, 1.0),
+        );
     }
 
     /// The longest delay Size moves, a line or a direct reflection, in a room of size factor
