@@ -87,8 +87,9 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
 - **Low roll-off.** The input always passes two first-order high-passes, at 127 Hz and 19 Hz:
   the first is the shape of every reflection in Live's renders with both cuts off, the second
   brings the lowest band (32 Hz) within 0.2 dB.
-- **Input band.** Low Cut is a first-order shelf 14 dB deep, half way at
-  `frequency / 2^(width/2)`; High Cut a 12 dB/octave Butterworth low-pass at
+- **Input band.** Low Cut is a first-order high-pass at 2.5 times the band's lower edge,
+  `frequency / 2^(width/2)`, and two first-order shelves at 25 and 250 Hz whose gains follow the
+  edge (Decision 9), and does nothing with the edge below 44.2 Hz; High Cut a 12 dB/octave Butterworth low-pass at
   `frequency × 2^(width/2)`, never above 18 kHz, and 8 frames of 44.1 kHz of delay (Decision 24).
   With High Cut off the input still passes the same low-pass at 18 kHz, without the delay, as
   Live's does (left out at sample rates where 18 kHz is above 0.45 of the rate). Both always run
@@ -350,10 +351,23 @@ Each entry: what was chosen, what it costs, why.
    Below 3.46 s the loss stays at 0.96 dB: letting it grow further took 2 dB per second too much
    from 6 to 8 kHz at 0.83 s. Density Low has no such shelf: Live's loss of the highs there is A's
    and B's reads between frames (Decisions 26 and 27).
-9. **Low Cut is a 14 dB first-order shelf** half way at the band's lower edge. Live's Lo Cut fits
-   no simple filter (3 to 8 dB/octave, flattening at the bottom); at 1 kHz, width 5.85 the shelf is
-   within 0.6 dB rms of its measured response (1.3 dB at worst, at 57 Hz), and at 5 kHz it is
-   0.6 dB above Live's −3 dB point and 1.3 dB above its −6 dB point.
+9. **Low Cut is a first-order high-pass at 2.5 times the band's lower edge, with two shelves.**
+   Live's Lo Cut was read as the noise response against the render with the cuts off
+   (`reverb-locut-law`, `reverb-filters`; 1/3-octave bands, 20 Hz to 5 kHz, lower edges 132, 192,
+   264, 500, 658 and 841 Hz). Its upper corner is a first-order roll-off at 2.33 to 2.5 times the
+   edge (the pole of every fit sits there, to 1 %), and below it the response is not a plain
+   high-pass: after the high-pass at 2.5 times the edge, what is left is a gentle low shelf whose
+   gain falls from +10.6 dB at 25 Hz for an edge of 132 Hz to −12.4 dB at 250 Hz for 841 Hz. So
+   two shelves at 25 and 250 Hz take gains (dB) of (10.57, 1.17), (7.09, 1.30), (4.60, 0.71),
+   (2.65, −3.49), (4.38, −7.11) and (7.58, −12.42) at those edges, joined linearly against the
+   edge's logarithm and held beyond. They match Live's six edges to within 0.9 dB in every
+   third-octave band (rms 0.2 to 0.5 dB), where the 14 dB shelf was 20 dB too loud at 60 Hz for an
+   edge of 841 Hz, and cut 7.5 dB at 40 Hz at an edge of 44 Hz, where Live's does nothing. With the edge below about 44 Hz
+   Live's Lo Cut does nothing (an Input Freq of 300 Hz at Width 5.85, edge 40 Hz, and 1 kHz at
+   Width 9, edge 44.19 Hz, render as with it off), so here too. The gains are fitted to six edges
+   and are not a law: no edge was read from 44.2 to 132 Hz (there the first 132 Hz gains are held
+   and the high-pass at 2.5 times the edge takes the response to nothing near 44 Hz, as a guess)
+   or above 841 Hz (the high-pass alone goes on rising with the edge).
 10. **Spin swings each direct reflection's whole delay on its own LFO, by a share that falls with
    the predelay; a filtered reflection swings with the direct one it follows, and the tail's
    input with them.** Tracked in Live's renders of a click every 0.4 s (and 0.2 s), reflections
@@ -856,9 +870,10 @@ What is further off, and why it is left:
 - **Density Sparse's onset is spikier than Live's** from 100 to 200 ms (kurtosis 76 and 36 against
   63 and 27) and has fewer clicks before 150 ms; at less diffusion the late tail matches
   (Decision 17).
-- **Low Cut at high settings:** with the band's lower edge above about 500 Hz the lowest octaves
-  are 15 to 25 dB louder than Live's: the shelf stops at −14 dB while Live's Lo Cut goes on
-  falling. Its law is not understood (Decisions 9).
+- **Low Cut between edges 44.2 and 132 Hz and above 841 Hz** (Decision 9) is extrapolated: Live's
+  Lo Cut was read at edges of 132 to 841 Hz only, and its law between the ends and for higher
+  settings (Input Freq up to 18 kHz) is not read. Input Freq 1 kHz at Width 6.5 or 7, and 5 or
+  18 kHz at Width 0.5, would show it.
 - **Spin (Decision 10).** Tracked tap by tap the reflections match: the swing of each of the
   clearest taps is within 0.02 ms of Live's at every predelay from 0.5 to 250 ms and at Amount
   17.5 and 55, its phase within about 0.1 rad (within 0.06 rad in `reverb-network-spin`, with each LFO taken

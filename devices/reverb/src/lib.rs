@@ -747,8 +747,25 @@ const AIR_POWER: f64 = 0.15;
 const FROZEN_AIR_DECAY: f64 = 60.0;
 /// Decay time the network is tuned to, against the Decay setting.
 const DECAY_RATIO: f64 = 0.9;
-/// Low Cut: a first-order shelf this deep (linear), half way at the band's lower edge.
-const LOW_CUT_DEPTH: f64 = 0.2;
+/// Low Cut, as measured (`reverb-locut-law`, docs/spec/reverb.md): a first-order high-pass at
+/// this many times the band's lower edge, with two first-order shelves whose gains follow the
+/// edge ...
+const LOW_CUT_RATIO: f64 = 2.5;
+/// ... their corners (Hz) ...
+const LOW_CUT_SHELVES: [f64; 2] = [25.0, 250.0];
+/// ... and their gains (dB) at these lower edges (Hz), joined linearly against the edge's
+/// logarithm and held beyond the ends.
+const LOW_CUT_GAINS: [(f64, [f64; 2]); 6] = [
+    (132.0, [10.57, 1.17]),
+    (192.0, [7.09, 1.30]),
+    (264.0, [4.60, 0.71]),
+    (500.0, [2.65, -3.49]),
+    (658.0, [4.38, -7.11]),
+    (841.0, [7.58, -12.42]),
+];
+/// Below this lower edge (Hz) Live's Low Cut does nothing (read at 40 and 44.19 Hz; between there
+/// and 132 Hz, the lowest edge read otherwise, it is not read).
+const LOW_CUT_LOWEST: f64 = 44.2;
 /// The input always passes a first-order high-pass at this frequency, as measured
 /// (docs/spec/reverb.md).
 const RUMBLE_FREQUENCY: f64 = 127.0;
@@ -1221,8 +1238,8 @@ pub struct Reverb {
     params: ParamBank<{ param::COUNT }>,
     /// Values that ramp to their settings.
     ramps: Ramps<Smoother>,
-    /// Low Cut, a first-order low shelf.
-    low_cut: FirstOrder,
+    /// Low Cut: a high-pass and two shelves.
+    low_cut: [FirstOrder; 3],
     /// The fixed roll-off of the lowest octaves at the input.
     rumble: FirstOrder,
     /// A second, lower high-pass of the lowest octave at the input.
@@ -1390,6 +1407,26 @@ fn limit(x: f64) -> f64 {
     if over <= 0.0 { x } else { x.signum() * (FREEZE_LIMIT + over / (1.0 + over / FREEZE_LIMIT)) }
 }
 
+/// The Low Cut shelves' gains (dB) for lower edge `edge` (Hz).
+fn low_cut_gains(edge: f64) -> [f64; 2] {
+    let at = edge.max(1.0).ln();
+    let [(first, lowest), .., (last, highest)] = LOW_CUT_GAINS;
+    if edge <= first {
+        return lowest;
+    }
+    if edge >= last {
+        return highest;
+    }
+    for pair in LOW_CUT_GAINS.windows(2) {
+        let ((e0, g0), (e1, g1)) = (pair[0], pair[1]);
+        if edge <= e1 {
+            let t = (at - e0.ln()) / (e1.ln() - e0.ln());
+            return [g0[0] + (g1[0] - g0[0]) * t, g0[1] + (g1[1] - g0[1]) * t];
+        }
+    }
+    highest
+}
+
 impl Reverb {
     /// A reverb with every parameter at its default, prepared for the default sample rate
     /// (allocates).
@@ -1399,7 +1436,7 @@ impl Reverb {
             sample_rate: sr,
             params: ParamBank::new(&PARAMS),
             ramps: Ramps::splat(Smoother::new(0.0, 1)),
-            low_cut: FirstOrder::default(),
+            low_cut: [FirstOrder::default(); 3],
             rumble: FirstOrder::default(),
             subsonic: FirstOrder::default(),
             high_cut: Biquad::default(),
@@ -1518,7 +1555,7 @@ impl Reverb {
             smoother.reset(target);
         });
         self.ramps.predelay.set_ramp(Smoother::ramp_frames(PREDELAY_RAMP_SECONDS, self.sample_rate));
-        self.low_cut.reset();
+        self.low_cut.iter_mut().for_each(FirstOrder::reset);
         self.rumble = FirstOrder::new(FirstOrderCoefficients::highpass(self.sample_rate, RUMBLE_FREQUENCY));
         self.subsonic = FirstOrder::new(FirstOrderCoefficients::highpass(self.sample_rate, SUBSONIC_FREQUENCY));
         self.high_cut.reset();
@@ -1599,7 +1636,20 @@ impl Reverb {
         let centre = 2.0f64.powf(f64::from(self.ramps.centre.current()));
         let half = f64::from(self.ramps.width.current()) / 2.0;
         let (low, high) = (centre / 2.0f64.powf(half), centre * 2.0f64.powf(half));
-        self.low_cut.set(FirstOrderCoefficients::low_shelf(sr, low, LOW_CUT_DEPTH));
+        let identity = FirstOrderCoefficients::IDENTITY;
+        let mut low_cut = [identity; 3];
+        if low >= LOW_CUT_LOWEST {
+            low_cut[0] = FirstOrderCoefficients::highpass(sr, low * LOW_CUT_RATIO);
+            let gains = low_cut_gains(low);
+            for ((section, corner), db) in low_cut[1..].iter_mut().zip(LOW_CUT_SHELVES).zip(gains) {
+                let gain = db_to_gain(db);
+                // The shelf is half way (in decibels) at the geometric mean of its zero and pole.
+                *section = FirstOrderCoefficients::low_shelf(sr, corner * gain.sqrt(), gain);
+            }
+        }
+        for (section, coefficients) in self.low_cut.iter_mut().zip(low_cut) {
+            section.set(coefficients);
+        }
         let high = high.min(TOP_CUT);
         self.high_cut.set(if high < sr * 0.45 {
             Coefficients::lowpass(sr, high, BUTTERWORTH_Q)
@@ -1963,7 +2013,8 @@ impl Device for Reverb {
             // Both cuts always run, so switching one crossfades instead of clicking; High Cut
             // takes the place of the fixed top cut.
             let mut x = self.subsonic.process(self.rumble.process((input[0] + input[1]) / 2.0));
-            x += (self.low_cut.process(x) - x) * low_cut;
+            let cut = self.low_cut.iter_mut().fold(x, |y, section| section.process(y));
+            x += (cut - x) * low_cut;
             let top = self.top_cut.process(x);
             let cut = f64::from(self.high_cut_delay.read_hermite(HIGH_CUT_DELAY_SECONDS * self.sample_rate));
             self.high_cut_delay.push(self.high_cut.process(x) as f32);
