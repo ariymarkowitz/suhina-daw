@@ -565,6 +565,23 @@ static HIGH: Design = Design {
     trip_scale: 1.0,
 };
 
+/// Cosine and sine of each line's Chorus phase: each side's lines spread evenly round the cycle,
+/// the right's half a step after the left's. A side's lines then never swing the same way
+/// together, so their Doppler shifts cancel in what it hears. With golden-angle phases Low's right
+/// side's three lines were within a quarter cycle, and on white noise its highs above 16 kHz rose
+/// and fell by 1.1 to 1.2 dB at the Chorus rate against Live's 0.6 (`reverb-modulation-density`
+/// low-chorus-amt2-4Hz); with these, 0.3 to 0.5 dB.
+fn chorus_phases(design: &Design) -> [(f64, f64); MAX_LINES] {
+    let sides = &design.sides[..design.lines];
+    std::array::from_fn(|k| {
+        let Some(&side) = sides.get(k) else { return (0.0, 0.0) };
+        let count = sides.iter().filter(|&&s| s == side).count();
+        let place = sides[..k].iter().filter(|&&s| s == side).count();
+        let p = std::f64::consts::TAU * (place as f64 + 0.5 * side as f64) / count as f64;
+        (p.cos(), p.sin())
+    })
+}
+
 /// The measured network of Density `density` (0 Sparse to 3 High); an unknown one runs Low's.
 pub(crate) fn design(density: usize) -> &'static Design {
     match density {
@@ -729,6 +746,8 @@ pub(crate) struct Network {
     design: &'static Design,
     /// Its mixing, exactly orthogonal.
     mix: [[f64; MAX_LINES]; MAX_LINES],
+    /// Cosine and sine of each line's Chorus phase.
+    chorus_phases: [(f64, f64); MAX_LINES],
 }
 
 impl Default for Network {
@@ -739,6 +758,7 @@ impl Default for Network {
             copy_filters: Default::default(),
             design: &LOW,
             mix: orthonormal(&LOW),
+            chorus_phases: chorus_phases(&LOW),
         }
     }
 }
@@ -762,6 +782,7 @@ impl Network {
         if !std::ptr::eq(self.design, design) {
             self.design = design;
             self.mix = orthonormal(design);
+            self.chorus_phases = chorus_phases(design);
             self.clear();
         }
     }
@@ -788,7 +809,7 @@ impl Network {
 
     /// One frame: `groups` is the input of each group of direct reflections, already delayed by
     /// the entry; returns the tail of each side. `swing` gives each line's chorus swing (frames)
-    /// from its index and length.
+    /// from the cosine and sine of its phase and its length.
     #[inline]
     pub fn process(
         &mut self,
@@ -796,7 +817,7 @@ impl Network {
         n: &Lengths,
         diffusion: f32,
         damping: &Damping,
-        swing: impl Fn(usize, f64) -> f64,
+        swing: impl Fn((f64, f64), f64) -> f64,
         frozen: bool,
     ) -> [f64; 2] {
         let d = self.design;
@@ -824,7 +845,7 @@ impl Network {
         let mut outs = [0.0f64; MAX_LINES];
         let mut tail = [0.0f64; 2];
         for (k, (line, out)) in self.lines.iter_mut().zip(&mut outs).enumerate().take(lines) {
-            let length = n.lines[k] + swing(k, n.lines[k]);
+            let length = n.lines[k] + swing(self.chorus_phases[k], n.lines[k]);
             let mut read = f64::from(line.delay.read_hermite(length));
             if n.fractions[k] != 0.0 {
                 read += n.fractions[k] * (f64::from(line.delay.read_hermite(length + 1.0)) - read);

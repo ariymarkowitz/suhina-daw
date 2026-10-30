@@ -474,8 +474,11 @@ const OFFSET_LINE_SECONDS: f64 = 0.13;
 /// Longest delay from a direct reflection to the measured network, [`measured::ENTRY_MS`] at Shape
 /// 1 and the largest Size (seconds).
 const ENTRY_LINE_SECONDS: f64 = 0.06;
-/// Peak swing of a line's delay per unit of Chorus Amount.
-const CHORUS_SECONDS: f64 = 0.001_8;
+/// Peak swing of a line's delay per unit of Chorus Amount: a 1 kHz tone through Live's tail swings
+/// 12 to 343 cents (left and right added) at five Amounts and Rates, and through Suhina's 12 to 397
+/// with this swing (`reverb-texture` chorus-*). The loop adds each trip's shift to the last, so a
+/// line swings about a fifth of what the tone's deviation read as one line's would say (1.8 ms).
+const CHORUS_SECONDS: f64 = 0.000_38;
 /// The reflections' low-pass: a cookbook low-pass with this Q, so two equal poles ...
 const REFLECTION_Q: f64 = 0.5;
 /// ... whose corner rises towards this frequency (Hz) as Decay grows ...
@@ -1014,8 +1017,6 @@ pub struct Reverb {
     group_lines: [DelayLine; measured::MAX_GROUPS],
     /// The measured network.
     measured: measured::Network,
-    /// Cosine and sine of each line's phase offset.
-    chorus_offsets: [(f64, f64); 16],
     /// How each reflection is read.
     routes: [Route; MAX_TAPS],
     /// The size factor `(size / 100)^(1/3)` as it glides.
@@ -1050,15 +1051,6 @@ impl Default for Reverb {
 /// A level in decibels as a linear gain.
 fn db_to_gain(db: f64) -> f64 {
     10.0f64.powf(db / 20.0)
-}
-
-/// Cosine and sine of golden-angle phase offsets, from the `first`th on, so no two taps or lines
-/// swing together.
-fn phase_offsets<const N: usize>(first: usize) -> [(f64, f64); N] {
-    std::array::from_fn(|k| {
-        let p = std::f64::consts::TAU * ((k + first) as f64 * 0.381_966_011_250_105).fract();
-        (p.cos(), p.sin())
-    })
 }
 
 /// How far Spin reaches with `predelay_ms` of predelay, as a share of [`SPIN_FRACTION`]: all of
@@ -1160,7 +1152,6 @@ impl Reverb {
             input: DelayLine::default(),
             group_lines: std::array::from_fn(|_| DelayLine::default()),
             measured: measured::Network::default(),
-            chorus_offsets: phase_offsets(7),
             routes: routes(&TAPS_LOW),
             room: 1.0,
             from: Tuning::default(),
@@ -1695,11 +1686,8 @@ impl Device for Reverb {
             // The network. Without Chorus the swing is zero whatever the phase.
             let (chorus_sin, chorus_cos) =
                 if chorus_swing > 0.0 { (std::f64::consts::TAU * self.chorus_phase).sin_cos() } else { (0.0, 0.0) };
-            let offsets = &self.chorus_offsets;
-            let swing = |k: usize, length: f64| {
-                let (c, s) = offsets.get(k).copied().unwrap_or((0.0, 0.0));
-                chorus_swing.min(0.5 * length) * (chorus_sin * c + chorus_cos * s)
-            };
+            let swing =
+                |(c, s): (f64, f64), length: f64| chorus_swing.min(0.5 * length) * (chorus_sin * c + chorus_cos * s);
             let tail = self.measured.process(&groups, &t.measured, diffusion, &damping, swing, frozen);
             self.input.push(x as f32);
 

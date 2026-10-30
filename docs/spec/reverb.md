@@ -205,8 +205,9 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   shelves of Q 0.70, the High Shelf half way at 0.98 of its frequency and the Low Shelf at its
   frequency over 0.98 (fitted: −32 to −36 dB from 4 to 8 s against −12 to −18 with Q 0.707 at the
   frequency; Decision 13).
-- **Chorus.** Swings every line's delay either way by up to `1.8 ms × amount` (at most half the
-  line), each with its own phase of one LFO at the Chorus rate; lines are read with cubic
+- **Chorus.** Swings every line's delay either way by up to `0.38 ms × amount` (at most half the
+  line), each with its own phase of one LFO at the Chorus rate: each side's lines spread evenly
+  round the cycle, the right's half a step after the left's. Lines are read with cubic
   interpolation.
 - **Output.** Each side of the tail is the sum of every other line, with a sign per line: the
   left the first, third and so on, the right the others. The sides share no echo, and as the
@@ -410,9 +411,15 @@ Each entry: what was chosen, what it costs, why.
    uncorrelated with its tail without (r −0.04 after the noise), so the network's input taps swing
    with their reflections. Cost: about 0.4 % of a core with Spin on (ten sines a frame, 0.2 %
    more than one LFO for all). Chorus swings every line's delay
-   either way by 1.8 ms per unit of Amount, each line with its own phase; that figure comes from
-   the FM of a tone through the tail, which overstated Spin's swing, and is kept until Chorus is
-   tracked line by line.
+   either way by 0.38 ms per unit of Amount, fitted so that a 1 kHz tone through the tail swings
+   as far as through Live's (12 to 343 cents, left and right added, at five Amounts and Rates;
+   Suhina 12 to 397). Reading that FM as one line's, as at first, gave 1.8 ms: the loop adds each
+   trip's shift to the last, so the tone swung 4 to 5 times Live's, and the tail's highs rose and
+   fell at the Chorus rate, heard as a hiss (2.6 dB above 12 kHz at Amount 2 and 4 Hz, Live's 0.1
+   to 0.2). Each side's lines take phases spread evenly round the cycle, so their Doppler shifts
+   cancel in what the side hears; with golden-angle phases Low's right side had its three lines
+   within a quarter cycle and still rippled twice as much as Live's on white noise
+   (`reverb-modulation-density`).
 11. **Level corrections for large rooms and for Density** (the size factor to the power 0.75
     above the reference room; −0.3 dB for Sparse, +1 dB for High) are fitted to Live's renders: a
     larger network spreads the same energy over longer lines and comes out quieter, which Live's
@@ -931,7 +938,12 @@ What is further off, and why it is left:
 - **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
   the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
   reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's
-  cubic reads do not reproduce.
+  cubic reads do not reproduce. On white noise (`reverb-modulation-density`, reflections alone,
+  Hi Cut on) the highs from 6 to 12 kHz rise and fall at Spin's rate as Live's do (1.1 to 2.1 dB
+  at Amount 55 and 1.3 Hz), but above 12 kHz by 2.7 to 5.7 dB against Live's 0.7 to 1.6: at that
+  speed Live's reflections carry a flat floor of noise from 16 to 22 kHz (−27 to −30 dB against
+  1 kHz, none at Amount 17.5 and 0.3 Hz), which fills in the dips, and it rises and falls at twice
+  the rate (1.5 to 2.3 dB). A windowed-sinc read in place of the cubic one changes neither.
 - **The tail's echoes thicken differently from Live's:** its kurtosis is 26 from 100 to 150 ms,
   5.8 from 150 to 200 and 3.0 (noise) from 200 to 400 ms, Live's 15, 10.5 and 4; from 50 to 250
   ms it has about four fifths of Live's strong clicks per second, and from 150 to 900 ms a third
