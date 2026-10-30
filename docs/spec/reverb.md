@@ -88,9 +88,9 @@ frames of 44.1 kHz and convert to the session rate.
 - **Input band.** Low Cut is a first-order high-pass at 2.5 times the band's lower edge,
   `frequency / 2^(width/2)`, plus two first-order low shelves at 25 and 250 Hz whose gains follow the
   edge (see Low Cut's law below). It does nothing with the edge below 44.2 Hz. High Cut is a
-  12 dB/octave Butterworth low-pass at `frequency × 2^(width/2)`, never above 18 kHz, and delays
-  the signal by 8 frames. With High Cut off the input still passes the same low-pass at 18 kHz,
-  without the delay, as Live's does (left out at sample rates where 18 kHz is above 0.45 of the
+  12 dB/octave Butterworth low-pass at `frequency × 2^(width/2)`, never above 18 kHz, with no
+  delay beyond the filter's own. With High Cut off the input still passes the same low-pass at
+  18 kHz, as Live's does (left out at sample rates where 18 kHz is above 0.45 of the
   rate). Both filters always run and their switches crossfade.
 - **Predelay** delays the wet signal. The wet signal, reflections and tail alike, is also quieter
   by `0.0113 / decay` dB per ms of predelay (decay in seconds).
@@ -108,7 +108,11 @@ changes by more than half a frame a frame: faster, a line is read backwards and 
   taps at Sparse, 10 at Low, Mid and High (the same ten times), and filtered taps up to 130 ms
   (20 taps at Sparse, 71 at Low, 90 at Mid, 108 at High). Every tap has a time (a whole number of
   frames plus the fraction of a frame at which Live rounds it), a side and a level. The first tap
-  arrives one frame before the predelay (8 frames later with High Cut on) at a gain of 0.0942.
+  arrives one frame before the predelay at a gain of 0.0942. The predelay and a tap's time round to
+  a frame together.
+- **Stereo's delay.** Below Stereo 120 the reflections heard, not the tail and not the network's
+  input, come later: `floor(27.5625 × (1 − stereo / 120))` frames (0.625 ms at most) under Smooth
+  Fast and Slow, rounded up to a whole 8-frame block under None (4 and 8 frames at the default 100).
 - **Level.** Every tap is `0.92594 + 0.00074059 × Size` of its reference level (0.926 at the
   smallest Size, 1.296 at 500), and fades by `(0.0328 + 0.0668 × Shape) / decay` dB per ms of its
   delay.
@@ -118,8 +122,11 @@ changes by more than half a frame a frame: faster, a line is read backwards and 
   reflections (Low 8.5 kHz at 0.2 s, 11.3 at 1.2 s; Mid 1.4 and 8.4 kHz). Every filtered tap is a
   direct tap a whole number of frames later (20 offsets in pairs two frames apart, 395 to 3192
   frames, 9 to 72 ms), always on one side per pair. So they are played as one mix of the direct
-  taps per offset, delayed by the offset. Each offset's peak moves in 8-frame blocks with the size
-  factor, and the others scale as `8 × ceil((n − 0.45) × size factor)` frames.
+  taps per offset, delayed by the offset. The ten pairs are ten *families*, the same at every
+  Density (Sparse, Mid and High hear Low's six, and Mid and High four more). A family's peak is
+  `8 × floor(n × size factor + 0.7) + 1` frames after its direct tap under None, `floor(8 × n' ×
+  size factor) + 1` under Fast and Slow, with its own n and n' (blocks): under Fast it comes 0 to 6
+  frames sooner.
 - **Spin** swings each direct tap's whole delay `T` (predelay included) by
   `0.00995 × amount × reach(predelay) × T × sin(2π × m × rate × t + φ)`, where `reach` is 1 up to 5 ms
   of predelay and `2 / (predelay − 3.02)` above it (predelay in ms), so a long predelay swings every
@@ -156,9 +163,10 @@ matrix, and each line has its own mix of the direct taps as input.
   that line's output into the mix.
 - **Lengths.** A line's delay and allpass are whole numbers of 8-frame blocks plus a frame (Live
   builds them so). At Low: the delay is `8 × floor(y × size factor + 0.85) + 1` frames, the allpass
-  `8 × floor(c × Scale × size factor + 0.9) + 1` (Scale in %), with y 287.0993, 340.0779, 628.6862,
-  459.9587, 846.774 and 1220.6339 and c 0.63406, 1.22440, 0.87055, 3.97925, 2.18381 and 0.80374 for
-  A, B, C, D, F and R: Smooth Fast's lengths, rounded to blocks. C's delay is its family's offset
+  `8 × floor(c × Scale × size factor + 0.9) + 1` (Scale in %), with y 287.0993, 340.0779, 628.7004,
+  459.9281, 846.6372 and 1220.5399 and c 0.63476, 1.22412, 0.87055, 3.97956, 2.18481 and 0.80455 for
+  A, B, C, D, F and R, the same numbers as Smooth Fast's (below), rounded to blocks; each is the
+  middle of what both settings' reads at Size 0.222 to 500 allow. C's delay is its family's offset
   and a plain delay, and R's is A's delay and a delay G, but each rounds as one length: at Size
   0.222 rounding the parts on their own makes C a block longer and R a block shorter, which takes
   the tail's waveform apart from Live's after 20 ms. At the
@@ -174,9 +182,12 @@ matrix, and each line has its own mix of the direct taps as input.
   all the highs the network loses on a pass; the other lines are whole frames and are not
   interpolated. Lines with Chorus are read with cubic (Hermite) interpolation.
 - **Smooth Fast and Slow** (Slow renders as Fast) change Low's lengths: none keeps to 8-frame
-  blocks, A's and B's fractions of a frame are larger (and are most of the highs lost), the loops
-  are 5 frames longer than their first passes and the input reaches them 5 frames sooner. The other
-  Densities run None's lengths in all three settings.
+  blocks. Each length is its continuous value rounded down to a frame, and a frame: the allpass
+  `floor(8 × c × Scale × size factor) + 1`, the delay `floor(8 × y × size factor) + 1`, but A's and
+  B's delays keep their fraction of a frame (`8 × y × size factor + 1`, read by linear
+  interpolation, most of the highs lost). The loops are 5 frames longer than their first passes and
+  the input reaches them 5 frames sooner. The other Densities' lines run None's lengths in all three
+  settings; their families follow Fast's law.
 - **Decay.** The network is tuned to a T60 of 0.9 of the Decay setting. Every path fades with its
   whole time: each line's gain covers its delay, and its allpass loses its own delay's gain on every
   pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`). The mix is made exactly orthogonal, so nothing
@@ -330,8 +341,15 @@ Why the device is built as it is.
 - **Level follows Size** as `0.92594 + 0.00074059 × Size`, a pure gain on the reference
   response read at Sizes 0.222 to 500, and the network's input takes it twice. This one law fits all
   four Densities.
-- **High Cut delays everything 8 frames more than its low-pass does**, and Live's reflections are one
-  frame before the predelay, not after it; both were read from the reflections alone.
+- **Stereo, not High Cut, delays the reflections.** The 8 frames once read as High Cut's were the
+  default Stereo's delay under None; with it on the reflections alone and the tail left where it
+  was, every Decay case lines up with Live's to the frame. Live's reflections are one frame before
+  the predelay, not after it.
+- **Two rounding rules, one set of lengths.** Under None every length is whole 8-frame blocks and a
+  frame, under Fast and Slow whole frames, but both come from the same numbers: one y and c per
+  line and two numbers per family fit both settings' reads from Size 0.222 to 500, and the
+  families are the same at every Density. Reads at Size 500 and 0.222 settled lengths that the
+  reads at 1.53 to 100 had left a frame or a block either way.
 - **Smooth's glide times** (45 ms Slow, 15 ms Fast) are what one point of Live's glide gives for an
   exponential glide (50 ms after a jump Fast has finished, Slow has 30 to 40 % left); the curve
   itself was not measured. The half-frame slew limit stops lines being read backwards.
@@ -346,7 +364,8 @@ Measured against Live's renders of the same settings, imported and rendered by `
 44.1 kHz:
 
 - **Early reflections:** every tap within 0.5 ms and 0.5 dB at every Density, the first 140 ms of
-  the reflections alone within −35 to −42 dB of Live's energy at Size 100, and the level within 0.1
+  the reflections alone within −35 to −42 dB of Live's energy at Size 100 and −29 to −43 dB at
+  Size 0.222 and 500 (Low; every Density's first 200 ms at 500), and the level within 0.1
   dB in every octave at every Decay.
 - **The network (Low):** waveform within −39 to −41 dB of Live's over the first 0.5 s and −35 dB
   from 1 to 2 s at every Scale at Size 100, −33 to −38 dB at Sizes 1.53 to 50. Energy in windows to
@@ -357,16 +376,15 @@ Measured against Live's renders of the same settings, imported and rendered by `
 
 ### What is further off
 
-- **Sparse, Mid and High away from Size 100 and the defaults.** Their lengths at other Sizes, their
+- **Sparse, Mid and High away from Size 100 and the defaults.** Their reflections match at Size
+  0.222 to 500 under None and Fast, but their lines' lengths at other Sizes and under Fast, their
   Smooth Fast loss of the highs and (Mid and High) their damping at Decay 1 s were not read: at the
   default damping the 8 to 16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
 - **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100, Diffusion 0.1
-  to 60 % and Decay 60 and 0.83 s. Under Smooth Fast the entry was read at Shape 0.5 only, and
-  Live's Fast also moves the reflections earlier by 4 to 10 frames with High Cut on, which this
-  device does not.
-- **High Cut's delay under Smooth None.** Live's reflections with High Cut on come at the same frames
-  as with it off in some cases; this device always adds 8 frames. What sets Live's delay was not
-  read.
+  to 60 % and Decay 60 and 0.83 s; at Size 500 the waveform is within −24 dB, and the remaining
+  difference is level (0.5 dB loud). Under Smooth Fast the entry was read at Shape 0.5 only.
+- **Stereo's delay** was read at 44.1 kHz only; whether it is 0.625 ms or 27.5625 frames at other
+  rates, and how it moves while Stereo is automated, were not read.
 - **Low Cut** is extrapolated for edges between 44.2 and 132 Hz and above 841 Hz.
 - **Spin.** Tap by tap the swing is within 0.02 ms of Live's. Live's moving reflections carry a flat
   floor of noise from 16 to 22 kHz that follows Spin's speed (−50 dB at the default to −29 dB at the

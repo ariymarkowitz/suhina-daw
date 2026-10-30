@@ -203,6 +203,39 @@ fn reflect_and_diffuse_are_independent_gains() {
 }
 
 #[test]
+fn stereo_delays_the_reflections_as_measured() {
+    // Live's reflections against Stereo 120's (`reverb-er-stereo`, frames at 44.1 kHz).
+    let stereos = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 105.0, 110.0, 115.0, 119.0, 120.0];
+    let fast = [27.0, 25.0, 22.0, 20.0, 18.0, 16.0, 13.0, 11.0, 9.0, 6.0, 4.0, 3.0, 2.0, 1.0, 0.0, 0.0];
+    let none = [32.0, 32.0, 24.0, 24.0, 24.0, 16.0, 16.0, 16.0, 16.0, 8.0, 8.0, 8.0, 8.0, 8.0, 0.0, 0.0];
+    for ((stereo, fast), none) in stereos.into_iter().zip(fast).zip(none) {
+        assert_eq!(stereo_delay(stereo, true, 44_100.0), fast, "Fast at Stereo {stereo}");
+        assert_eq!(stereo_delay(stereo, false, 44_100.0), none, "None at Stereo {stereo}");
+    }
+}
+
+#[test]
+fn stereo_delays_the_reflections_but_not_the_tail() {
+    // At Stereo 100 under Fast the first reflection comes 4 frames later than at 120, and the
+    // network's first arrival (3,178 frames after the impulse at Size 100) does not move.
+    let sr = 44_100.0;
+    let tail = |stereo: f64| {
+        let mut r = reverb(sr, &[(param::STEREO, stereo), (param::REFLECT, MIN_LEVEL_DB)]);
+        let ir = impulse_response(&mut r, sr, 0.08);
+        let loudness = |n: usize| ir[n][0].abs() + ir[n][1].abs();
+        (3_150..3_250).max_by(|&a, &b| loudness(a).total_cmp(&loudness(b)))
+    };
+    let reflections = |stereo: f64| {
+        let mut r = reverb(sr, &[(param::STEREO, stereo), (param::DIFFUSE, MIN_LEVEL_DB)]);
+        let ir = impulse_response(&mut r, sr, 0.01);
+        ir.iter().skip(1).position(|[l, r]| l.abs().max(r.abs()) > 1e-4).map(|n| n + 1)
+    };
+    assert_eq!(reflections(100.0).zip(reflections(120.0)).map(|(a, b)| a - b), Some(4));
+    assert_eq!(tail(100.0), tail(120.0));
+    assert_eq!(tail(100.0), Some(3_178));
+}
+
+#[test]
 fn the_dry_signal_is_not_delayed_and_the_mix_is_equal_power() {
     let sr = 44_100.0;
     let mut r = reverb(sr, &[(param::MIX, 0.55)]);
@@ -219,8 +252,8 @@ fn the_first_reflection_arrives_after_the_predelay() {
         let mut r = reverb(sr, &[(param::PREDELAY, predelay), (param::DIFFUSE, MIN_LEVEL_DB)]);
         let ir = impulse_response(&mut r, sr, 0.3);
         let first = ir.iter().skip(1).position(|[l, r]| l.abs().max(r.abs()) > 1e-4).map(|n| n + 1);
-        // A frame (at 44.1 kHz) before the predelay, and High Cut's own delay later, as measured.
-        let expected = ((predelay + TAP_OFFSET_SECONDS + HIGH_CUT_DELAY_SECONDS) * sr).round() as usize;
+        // A frame (at 44.1 kHz) before the predelay, and Stereo 100's delay later, as measured.
+        let expected = ((predelay + TAP_OFFSET_SECONDS + stereo_delay(100.0, true, sr) / sr) * sr).round() as usize;
         assert!(first.is_some_and(|n| n.abs_diff(expected) <= 2), "{predelay}: {first:?} against {expected}");
     }
 }
@@ -309,7 +342,7 @@ fn spin_swings_each_reflection_by_its_whole_delay() {
         [(0.0005, 0, 11.429, 2.08), (0.1, 0, 11.429, 0.40), (0.0005, 1, 0.0, 0.09), (0.1, 1, 0.0, 0.36)]
     {
         let at = predelay + TAP_OFFSET_SECONDS + tap / 1_000.0;
-        let ours = swing_ms(&arrivals(sr, predelay, 17.5, side, at + HIGH_CUT_DELAY_SECONDS, 0.003));
+        let ours = swing_ms(&arrivals(sr, predelay, 17.5, side, at + stereo_delay(100.0, true, sr) / sr, 0.003));
         let expected = 17.5 * SPIN_FRACTION * spin_reach(predelay * 1_000.0) * at * 1_000.0;
         assert!(
             (ours / expected - 1.0).abs() < 0.1 || (ours - expected).abs() < 0.03,
@@ -325,7 +358,7 @@ fn filtered_reflections_swing_with_the_direct_one_they_follow() {
     // hardly moves at 0.5 ms of predelay, where one swinging by its own delay would move 1.5 ms
     // either way at Amount 5.
     let sr = 44_100.0;
-    let at = 0.0005 + TAP_OFFSET_SECONDS + HIGH_CUT_DELAY_SECONDS + 0.030_272;
+    let at = 0.0005 + TAP_OFFSET_SECONDS + stereo_delay(100.0, true, sr) / sr + 0.030_272;
     let ours = swing_ms(&arrivals(sr, 0.0005, 5.0, 0, at, 0.0003));
     assert!(ours < 0.05, "{ours:.3} ms");
 }
@@ -412,7 +445,8 @@ fn the_reflections_fade_with_shape_and_decay_as_measured() {
         let mut r = reverb(sr, &settings);
         let ir = impulse_response(&mut r, sr, 0.06);
         let tap = |ms: f64| {
-            let at = ((0.0025 + TAP_OFFSET_SECONDS + HIGH_CUT_DELAY_SECONDS + ms / 1_000.0) * sr).round() as usize;
+            let at = ((0.0025 + TAP_OFFSET_SECONDS + stereo_delay(100.0, true, sr) / sr + ms / 1_000.0) * sr).round()
+                as usize;
             ir.get(at - 2..at + 3).unwrap_or_default().iter().map(|[l, _]| l.abs()).fold(0.0f32, f32::max)
         };
         let fall = 20.0 * f64::from(tap(41.134) / tap(11.429)).log10();

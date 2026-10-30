@@ -71,23 +71,23 @@ const TAPS_SPARSE: [Tap; 20] = [
     tap(0.0011, RIGHT, 1.5008, DIRECT),
     tap(26.5367, LEFT, -1.5008, DIRECT),
     tap(37.1666, RIGHT, 0.8118, FILTERED),
-    tap(41.1259, LEFT, 1.5007, DIRECT),
+    tap(41.1210, LEFT, 1.5007, DIRECT),
     tap(52.9716, RIGHT, 1.4018, FILTERED),
-    tap(55.6451, RIGHT, 1.5007, DIRECT),
+    tap(55.6475, RIGHT, 1.5007, DIRECT),
     tap(63.7022, RIGHT, 0.0871, FILTERED),
     tap(67.6201, LEFT, -1.2085, FILTERED),
     tap(72.3367, LEFT, 0.5231, FILTERED),
-    tap(78.2914, RIGHT, 1.8241, FILTERED),
+    tap(78.2865, RIGHT, 1.8241, FILTERED),
     tap(79.5072, RIGHT, -0.8461, FILTERED),
-    tap(92.8106, RIGHT, 0.6035, FILTERED),
-    tap(94.0964, RIGHT, -0.1582, FILTERED),
+    tap(92.8130, RIGHT, 0.6035, FILTERED),
+    tap(94.0915, RIGHT, -0.1582, FILTERED),
     tap(94.1557, LEFT, -0.0990, FILTERED),
     tap(98.8723, LEFT, 1.9045, FILTERED),
-    tap(108.6156, RIGHT, -1.2853, FILTERED),
-    tap(108.7449, LEFT, 0.9975, FILTERED),
-    tap(113.4615, LEFT, -0.1019, FILTERED),
-    tap(123.2641, LEFT, -1.3755, FILTERED),
-    tap(127.9807, LEFT, -0.6703, FILTERED),
+    tap(108.6180, RIGHT, -1.2853, FILTERED),
+    tap(108.7400, LEFT, 0.9975, FILTERED),
+    tap(113.4566, LEFT, -0.1019, FILTERED),
+    tap(123.2665, LEFT, -1.3755, FILTERED),
+    tap(127.9831, LEFT, -0.6703, FILTERED),
 ];
 const TAPS_LOW: [Tap; 71] = [
     tap(0.0011, RIGHT, 1.0006, DIRECT),
@@ -95,10 +95,10 @@ const TAPS_LOW: [Tap; 71] = [
     tap(8.9580, RIGHT, 1.0133, FILTERED),
     tap(11.4138, LEFT, 0.9997, DIRECT),
     tap(16.3276, RIGHT, -1.0113, FILTERED),
-    tap(17.9059, LEFT, -1.0005, DIRECT),
+    tap(17.9011, LEFT, -1.0005, DIRECT),
     tap(20.3707, RIGHT, 0.6052, FILTERED),
     tap(26.5367, LEFT, -0.9953, DIRECT),
-    tap(26.8628, RIGHT, 0.0851, FILTERED),
+    tap(26.8580, RIGHT, 0.0851, FILTERED),
     tap(28.4206, LEFT, 0.9985, DIRECT),
     tap(30.2732, LEFT, -0.6020, FILTERED),
     tap(34.1757, RIGHT, -0.9989, DIRECT),
@@ -106,17 +106,17 @@ const TAPS_LOW: [Tap; 71] = [
     tap(37.1666, RIGHT, 0.1205, FILTERED),
     tap(37.3775, RIGHT, -0.3660, FILTERED),
     tap(37.6428, LEFT, 0.6036, FILTERED),
-    tap(41.1259, LEFT, 0.9976, DIRECT),
+    tap(41.1210, LEFT, 0.9976, DIRECT),
     tap(41.6859, LEFT, 0.7245, FILTERED),
     tap(43.1326, RIGHT, -0.2250, FILTERED),
     tap(44.5362, RIGHT, -0.1168, FILTERED),
-    tap(48.1780, LEFT, -0.3636, FILTERED),
+    tap(48.1732, LEFT, -0.3636, FILTERED),
     tap(48.2846, RIGHT, -0.9966, DIRECT),
     tap(48.5793, RIGHT, 0.5363, FILTERED),
-    tap(50.0828, RIGHT, 0.6059, FILTERED),
+    tap(50.0779, RIGHT, 0.6059, FILTERED),
     tap(52.9716, RIGHT, 0.2329, FILTERED),
-    tap(55.0714, RIGHT, 0.8618, FILTERED),
-    tap(55.6451, RIGHT, 0.9951, DIRECT),
+    tap(55.0666, RIGHT, 0.8618, FILTERED),
+    tap(55.6475, RIGHT, 0.9951, DIRECT),
     tap(56.8088, LEFT, -0.3581, FILTERED),
     tap(57.2415, RIGHT, 0.5709, FILTERED),
     tap(58.6927, LEFT, -0.1423, FILTERED),
@@ -124,15 +124,15 @@ const TAPS_LOW: [Tap; 71] = [
     tap(63.7022, RIGHT, 0.8558, FILTERED),
     tap(64.3843, RIGHT, 0.4778, FILTERED),
     tap(64.4478, LEFT, -0.9218, FILTERED),
-    tap(64.6020, RIGHT, -0.5960, FILTERED),
+    tap(64.6044, RIGHT, -0.5960, FILTERED),
     tap(65.5861, RIGHT, 0.8453, FILTERED),
     tap(67.6201, LEFT, -0.6661, FILTERED),
-    tap(70.8764, RIGHT, -0.1846, FILTERED),
+    tap(70.8716, RIGHT, -0.1846, FILTERED),
     tap(71.3412, RIGHT, -0.0805, FILTERED),
-    tap(71.3980, LEFT, 0.7380, FILTERED),
+    tap(71.3931, LEFT, 0.7380, FILTERED),
     tap(72.3367, LEFT, -0.1142, FILTERED),
     tap(74.9897, LEFT, 0.6729, FILTERED),
-    tap(78.2914, RIGHT, 0.5238, FILTERED),
+    tap(78.2865, RIGHT, 0.5238, FILTERED),
     tap(78.5567, LEFT, -0.1164, FILTERED),
     tap(79.0328, LEFT, 0.4080, FILTERED),
     tap(79.5072, RIGHT, -0.1849, FILTERED),
@@ -141,12 +141,12 @@ const TAPS_LOW: [Tap; 71] = [
     tap(81.4365, RIGHT, -0.0453, FILTERED),
     tap(83.7494, LEFT, 0.5699, FILTERED),
     tap(85.4501, RIGHT, -0.3523, FILTERED),
-    tap(85.5249, LEFT, 0.6592, FILTERED),
-    tap(85.9172, LEFT, 0.1134, FILTERED),
+    tap(85.5201, LEFT, 0.6592, FILTERED),
+    tap(85.9196, LEFT, 0.1134, FILTERED),
     tap(87.1462, RIGHT, 0.5185, FILTERED),
-    tap(90.2415, LEFT, -0.7494, FILTERED),
-    tap(92.8106, RIGHT, 0.3672, FILTERED),
-    tap(94.0964, RIGHT, 0.4855, FILTERED),
+    tap(90.2367, LEFT, -0.7494, FILTERED),
+    tap(92.8130, RIGHT, 0.3672, FILTERED),
+    tap(94.0915, RIGHT, 0.4855, FILTERED),
     tap(94.1557, LEFT, 0.6641, FILTERED),
     tap(96.0396, LEFT, -0.5707, FILTERED),
     tap(98.8723, LEFT, -0.7425, FILTERED),
@@ -154,13 +154,13 @@ const TAPS_LOW: [Tap; 71] = [
     tap(101.2551, RIGHT, -1.0155, FILTERED),
     tap(101.7947, LEFT, 0.5313, FILTERED),
     tap(106.5113, LEFT, 0.6654, FILTERED),
-    tap(108.6156, RIGHT, 1.0143, FILTERED),
-    tap(108.7449, LEFT, 0.4033, FILTERED),
-    tap(113.4615, LEFT, 0.5671, FILTERED),
+    tap(108.6180, RIGHT, 1.0143, FILTERED),
+    tap(108.7400, LEFT, 0.4033, FILTERED),
+    tap(113.4566, LEFT, 0.5671, FILTERED),
     tap(115.9036, LEFT, 0.4828, FILTERED),
     tap(120.6202, LEFT, 0.3813, FILTERED),
-    tap(123.2641, LEFT, -0.4962, FILTERED),
-    tap(127.9807, LEFT, -0.3889, FILTERED),
+    tap(123.2665, LEFT, -0.4962, FILTERED),
+    tap(127.9831, LEFT, -0.3889, FILTERED),
 ];
 const TAPS_MID: [Tap; 90] = [
     tap(0.0011, RIGHT, 1.0000, DIRECT),
@@ -168,11 +168,11 @@ const TAPS_MID: [Tap; 90] = [
     tap(8.9580, RIGHT, -0.4317, FILTERED),
     tap(11.4138, LEFT, 1.0000, DIRECT),
     tap(16.3276, RIGHT, -0.1195, FILTERED),
-    tap(17.9059, RIGHT, -1.0000, DIRECT),
+    tap(17.9011, RIGHT, -1.0000, DIRECT),
     tap(20.3707, RIGHT, -0.3981, FILTERED),
     tap(21.7698, LEFT, 0.3106, FILTERED),
     tap(26.5367, LEFT, -1.0000, DIRECT),
-    tap(26.8628, RIGHT, 0.4319, FILTERED),
+    tap(26.8580, RIGHT, 0.4319, FILTERED),
     tap(28.4206, LEFT, 0.9999, DIRECT),
     tap(29.1394, LEFT, -0.6956, FILTERED),
     tap(30.2732, LEFT, 0.7252, FILTERED),
@@ -182,44 +182,44 @@ const TAPS_MID: [Tap; 90] = [
     tap(37.1666, RIGHT, 0.6484, FILTERED),
     tap(37.3775, RIGHT, -0.3047, FILTERED),
     tap(37.6428, LEFT, 0.4949, FILTERED),
-    tap(39.6746, LEFT, -0.3105, FILTERED),
-    tap(41.1259, LEFT, 1.0000, DIRECT),
+    tap(39.6698, LEFT, -0.3105, FILTERED),
+    tap(41.1210, LEFT, 1.0000, DIRECT),
     tap(41.6859, LEFT, -0.5185, FILTERED),
     tap(43.1326, RIGHT, 0.1194, FILTERED),
     tap(44.5362, RIGHT, -0.0709, FILTERED),
-    tap(48.1780, LEFT, -0.7250, FILTERED),
+    tap(48.1732, LEFT, -0.7250, FILTERED),
     tap(48.2846, RIGHT, 0.9999, DIRECT),
     tap(48.3054, LEFT, 0.0747, FILTERED),
     tap(48.5793, RIGHT, 0.2397, FILTERED),
-    tap(50.0828, RIGHT, 0.4944, FILTERED),
+    tap(50.0779, RIGHT, 0.4944, FILTERED),
     tap(50.1893, LEFT, 0.9352, FILTERED),
     tap(52.9716, RIGHT, -0.5899, FILTERED),
-    tap(55.0714, RIGHT, -0.6487, FILTERED),
-    tap(55.6451, RIGHT, 0.9999, DIRECT),
+    tap(55.0666, RIGHT, -0.6487, FILTERED),
+    tap(55.6475, RIGHT, 0.9999, DIRECT),
     tap(55.9444, LEFT, 0.6954, FILTERED),
     tap(56.5317, RIGHT, 0.1315, FILTERED),
     tap(56.8088, LEFT, -0.4603, FILTERED),
     tap(57.2415, RIGHT, 0.6194, FILTERED),
     tap(58.6927, LEFT, -0.3055, FILTERED),
     tap(60.3412, RIGHT, -0.1251, FILTERED),
-    tap(62.8946, LEFT, 0.4950, FILTERED),
+    tap(62.8897, LEFT, 0.4950, FILTERED),
     tap(63.7022, RIGHT, 0.2295, FILTERED),
     tap(63.9013, RIGHT, -0.4977, FILTERED),
     tap(64.3843, RIGHT, -0.7313, FILTERED),
     tap(64.4478, LEFT, -0.4949, FILTERED),
-    tap(64.6020, RIGHT, -0.0160, FILTERED),
+    tap(64.6044, RIGHT, -0.0160, FILTERED),
     tap(65.5861, RIGHT, -0.0302, FILTERED),
     tap(67.6201, LEFT, -0.0920, FILTERED),
     tap(67.9444, RIGHT, 0.4659, FILTERED),
     tap(70.0533, LEFT, 0.0161, FILTERED),
-    tap(70.8764, RIGHT, 0.5901, FILTERED),
+    tap(70.8716, RIGHT, 0.5901, FILTERED),
     tap(71.3412, RIGHT, 0.0709, FILTERED),
-    tap(71.3980, LEFT, 0.5126, FILTERED),
+    tap(71.3931, LEFT, 0.5126, FILTERED),
     tap(72.3367, LEFT, -0.5411, FILTERED),
-    tap(74.4365, RIGHT, -0.1319, FILTERED),
+    tap(74.4317, RIGHT, -0.1319, FILTERED),
     tap(74.9897, LEFT, 0.9311, FILTERED),
-    tap(77.4138, LEFT, -0.4359, FILTERED),
-    tap(78.2914, RIGHT, 0.4650, FILTERED),
+    tap(77.4162, LEFT, -0.4359, FILTERED),
+    tap(78.2865, RIGHT, 0.4650, FILTERED),
     tap(78.5567, LEFT, 0.3687, FILTERED),
     tap(79.0328, LEFT, 0.2723, FILTERED),
     tap(79.5072, RIGHT, -0.4578, FILTERED),
@@ -229,30 +229,30 @@ const TAPS_MID: [Tap; 90] = [
     tap(83.7494, LEFT, 0.7646, FILTERED),
     tap(84.9512, RIGHT, -0.8341, FILTERED),
     tap(85.4501, RIGHT, -0.1003, FILTERED),
-    tap(85.5249, LEFT, 0.0918, FILTERED),
-    tap(85.9172, LEFT, -0.3907, FILTERED),
+    tap(85.5201, LEFT, 0.0918, FILTERED),
+    tap(85.9196, LEFT, -0.3907, FILTERED),
     tap(87.1462, RIGHT, 0.1252, FILTERED),
-    tap(90.2415, LEFT, 0.5408, FILTERED),
+    tap(90.2367, LEFT, 0.5408, FILTERED),
     tap(90.7063, RIGHT, 0.4976, FILTERED),
-    tap(92.8106, RIGHT, 1.0641, FILTERED),
-    tap(94.0964, RIGHT, 0.5213, FILTERED),
+    tap(92.8130, RIGHT, 1.0641, FILTERED),
+    tap(94.0915, RIGHT, 0.5213, FILTERED),
     tap(94.1557, LEFT, 0.5024, FILTERED),
     tap(96.0396, LEFT, 0.3676, FILTERED),
-    tap(97.6565, RIGHT, 0.3885, FILTERED),
+    tap(97.6516, RIGHT, 0.3885, FILTERED),
     tap(98.8723, LEFT, -0.5835, FILTERED),
     tap(100.7562, LEFT, 0.0546, FILTERED),
     tap(101.2551, RIGHT, -0.6395, FILTERED),
     tap(101.7947, LEFT, -0.9311, FILTERED),
     tap(104.8152, RIGHT, -0.5687, FILTERED),
     tap(106.5113, LEFT, -0.1316, FILTERED),
-    tap(108.6156, RIGHT, 0.3267, FILTERED),
-    tap(108.7449, LEFT, 0.3900, FILTERED),
-    tap(112.1757, RIGHT, -0.4850, FILTERED),
-    tap(113.4615, LEFT, 0.5936, FILTERED),
+    tap(108.6180, RIGHT, 0.3267, FILTERED),
+    tap(108.7400, LEFT, 0.3900, FILTERED),
+    tap(112.1781, RIGHT, -0.4850, FILTERED),
+    tap(113.4566, LEFT, 0.5936, FILTERED),
     tap(115.9036, LEFT, -0.5791, FILTERED),
     tap(120.6202, LEFT, 0.5456, FILTERED),
-    tap(123.2641, LEFT, -0.2662, FILTERED),
-    tap(127.9807, LEFT, 0.0858, FILTERED),
+    tap(123.2665, LEFT, -0.2662, FILTERED),
+    tap(127.9831, LEFT, 0.0858, FILTERED),
 ];
 const TAPS_HIGH: [Tap; 108] = [
     tap(0.0011, RIGHT, 1.0000, DIRECT),
@@ -260,11 +260,11 @@ const TAPS_HIGH: [Tap; 108] = [
     tap(8.9580, RIGHT, -0.6668, FILTERED),
     tap(11.4138, LEFT, 1.0000, DIRECT),
     tap(16.3276, RIGHT, -0.1437, FILTERED),
-    tap(17.9059, LEFT, -1.0002, DIRECT),
+    tap(17.9011, LEFT, -1.0002, DIRECT),
     tap(20.3707, RIGHT, -0.0629, FILTERED),
     tap(21.7698, LEFT, 0.6719, FILTERED),
     tap(26.5367, LEFT, -1.0000, DIRECT),
-    tap(26.8628, RIGHT, 0.8160, FILTERED),
+    tap(26.8580, RIGHT, 0.8160, FILTERED),
     tap(28.4206, LEFT, 0.9998, DIRECT),
     tap(29.1394, LEFT, -0.2095, FILTERED),
     tap(30.2732, LEFT, 0.0201, FILTERED),
@@ -274,23 +274,23 @@ const TAPS_HIGH: [Tap; 108] = [
     tap(37.1666, RIGHT, -0.4857, FILTERED),
     tap(37.3775, RIGHT, -0.0838, FILTERED),
     tap(37.6428, LEFT, -0.7228, FILTERED),
-    tap(39.6746, LEFT, 0.3561, FILTERED),
-    tap(41.1259, LEFT, 1.0000, DIRECT),
+    tap(39.6698, LEFT, 0.3561, FILTERED),
+    tap(41.1210, LEFT, 1.0000, DIRECT),
     tap(41.6859, LEFT, -0.3483, FILTERED),
     tap(43.1326, RIGHT, -0.1165, FILTERED),
     tap(44.5362, RIGHT, 0.1872, FILTERED),
     tap(46.9626, RIGHT, -0.0427, FILTERED),
-    tap(48.1780, LEFT, 0.5178, FILTERED),
+    tap(48.1732, LEFT, 0.5178, FILTERED),
     tap(48.2846, RIGHT, 1.0000, DIRECT),
     tap(48.3054, LEFT, -0.6232, FILTERED),
     tap(48.5793, RIGHT, -0.2408, FILTERED),
-    tap(50.0828, RIGHT, 0.2255, FILTERED),
+    tap(50.0779, RIGHT, 0.2255, FILTERED),
     tap(50.1893, LEFT, 0.3210, FILTERED),
     tap(52.9716, RIGHT, 0.3623, FILTERED),
     tap(54.2415, LEFT, -0.4708, FILTERED),
     tap(54.3322, RIGHT, -0.4897, FILTERED),
-    tap(55.0714, RIGHT, -0.3882, FILTERED),
-    tap(55.6451, RIGHT, 1.0000, DIRECT),
+    tap(55.0666, RIGHT, -0.3882, FILTERED),
+    tap(55.6475, RIGHT, 1.0000, DIRECT),
     tap(55.9444, LEFT, -0.3266, FILTERED),
     tap(56.5317, RIGHT, -0.5626, FILTERED),
     tap(56.8088, LEFT, 0.5493, FILTERED),
@@ -299,29 +299,29 @@ const TAPS_HIGH: [Tap; 108] = [
     tap(58.6927, LEFT, -0.1218, FILTERED),
     tap(60.3412, RIGHT, -0.2285, FILTERED),
     tap(61.6111, LEFT, -0.5851, FILTERED),
-    tap(62.8946, LEFT, -0.2049, FILTERED),
+    tap(62.8897, LEFT, -0.2049, FILTERED),
     tap(63.7022, RIGHT, -0.1026, FILTERED),
     tap(63.9013, RIGHT, -0.2564, FILTERED),
     tap(64.3843, RIGHT, 0.7793, FILTERED),
     tap(64.4478, LEFT, 0.5763, FILTERED),
-    tap(64.6020, RIGHT, 0.4120, FILTERED),
-    tap(64.8674, RIGHT, -0.3442, FILTERED),
+    tap(64.6044, RIGHT, 0.4120, FILTERED),
+    tap(64.8626, RIGHT, -0.3442, FILTERED),
     tap(65.5861, RIGHT, 0.6148, FILTERED),
     tap(65.6542, LEFT, -0.3286, FILTERED),
     tap(67.6201, LEFT, -0.0314, FILTERED),
     tap(67.9444, RIGHT, 0.3512, FILTERED),
     tap(70.0533, LEFT, 0.0252, FILTERED),
-    tap(70.8764, RIGHT, 0.3540, FILTERED),
+    tap(70.8716, RIGHT, 0.3540, FILTERED),
     tap(71.3412, RIGHT, 0.4628, FILTERED),
-    tap(71.3980, LEFT, 0.3938, FILTERED),
-    tap(72.1463, LEFT, -0.1239, FILTERED),
+    tap(71.3931, LEFT, 0.3938, FILTERED),
+    tap(72.1415, LEFT, -0.1239, FILTERED),
     tap(72.3367, LEFT, 0.3059, FILTERED),
     tap(73.4982, RIGHT, -0.4179, FILTERED),
-    tap(74.4365, RIGHT, -0.1747, FILTERED),
+    tap(74.4317, RIGHT, -0.1747, FILTERED),
     tap(74.9897, LEFT, -0.2769, FILTERED),
     tap(75.3821, RIGHT, 0.6754, FILTERED),
-    tap(77.4138, LEFT, -0.6771, FILTERED),
-    tap(78.2914, RIGHT, 0.4663, FILTERED),
+    tap(77.4162, LEFT, -0.6771, FILTERED),
+    tap(78.2865, RIGHT, 0.4663, FILTERED),
     tap(78.5567, LEFT, -0.3523, FILTERED),
     tap(79.0328, LEFT, 0.6985, FILTERED),
     tap(79.5072, RIGHT, 0.4578, FILTERED),
@@ -333,36 +333,36 @@ const TAPS_HIGH: [Tap; 108] = [
     tap(83.7494, LEFT, -0.2268, FILTERED),
     tap(84.9512, RIGHT, -0.5390, FILTERED),
     tap(85.4501, RIGHT, 0.5408, FILTERED),
-    tap(85.5249, LEFT, 0.0384, FILTERED),
-    tap(85.9172, LEFT, -0.2411, FILTERED),
+    tap(85.5201, LEFT, 0.0384, FILTERED),
+    tap(85.9196, LEFT, -0.2411, FILTERED),
     tap(87.1462, RIGHT, -0.3262, FILTERED),
-    tap(88.0874, RIGHT, 0.3630, FILTERED),
+    tap(88.0825, RIGHT, 0.3630, FILTERED),
     tap(88.4161, LEFT, -0.3302, FILTERED),
-    tap(90.2415, LEFT, -0.6291, FILTERED),
+    tap(90.2367, LEFT, -0.6291, FILTERED),
     tap(90.7063, RIGHT, -0.6032, FILTERED),
-    tap(92.8106, RIGHT, -0.5526, FILTERED),
-    tap(94.0964, RIGHT, 0.3103, FILTERED),
+    tap(92.8130, RIGHT, -0.5526, FILTERED),
+    tap(94.0915, RIGHT, 0.3103, FILTERED),
     tap(94.1557, LEFT, -0.3848, FILTERED),
     tap(95.2461, RIGHT, -0.7236, FILTERED),
-    tap(95.3663, LEFT, -0.8169, FILTERED),
+    tap(95.3614, LEFT, -0.8169, FILTERED),
     tap(96.0396, LEFT, -0.1344, FILTERED),
-    tap(97.6565, RIGHT, 0.1400, FILTERED),
+    tap(97.6516, RIGHT, 0.1400, FILTERED),
     tap(98.8723, LEFT, -0.2988, FILTERED),
     tap(100.7562, LEFT, -0.5208, FILTERED),
     tap(101.2551, RIGHT, 0.6584, FILTERED),
     tap(101.7947, LEFT, 0.8028, FILTERED),
     tap(102.5250, LEFT, 0.2067, FILTERED),
-    tap(102.6066, RIGHT, 0.2912, FILTERED),
+    tap(102.6090, RIGHT, 0.2912, FILTERED),
     tap(104.8152, RIGHT, -0.2000, FILTERED),
-    tap(108.6156, RIGHT, -0.0275, FILTERED),
-    tap(108.7449, LEFT, -0.6665, FILTERED),
-    tap(109.8855, LEFT, 0.1370, FILTERED),
-    tap(112.1757, RIGHT, -0.8052, FILTERED),
-    tap(113.4615, LEFT, 0.2707, FILTERED),
+    tap(108.6180, RIGHT, -0.0275, FILTERED),
+    tap(108.7400, LEFT, -0.6665, FILTERED),
+    tap(109.8879, LEFT, 0.1370, FILTERED),
+    tap(112.1781, RIGHT, -0.8052, FILTERED),
+    tap(113.4566, LEFT, 0.2707, FILTERED),
     tap(115.9036, LEFT, 0.1176, FILTERED),
     tap(120.6202, LEFT, 0.5770, FILTERED),
-    tap(123.2641, LEFT, -0.2507, FILTERED),
-    tap(127.9807, LEFT, 0.3007, FILTERED),
+    tap(123.2665, LEFT, -0.2507, FILTERED),
+    tap(127.9831, LEFT, 0.3007, FILTERED),
 ];
 
 /// The tap tables in Density order.
@@ -370,12 +370,16 @@ const TAP_TABLES: [&[Tap]; 4] = [&TAPS_SPARSE, &TAPS_LOW, &TAPS_MID, &TAPS_HIGH]
 /// The most taps a table has.
 const MAX_TAPS: usize = 108;
 /// The reflections are read this long after the predelay (seconds): one frame before it, as
-/// Live's are with High Cut off (`reverb-network-exact`); High Cut adds [`HIGH_CUT_DELAY_SECONDS`].
+/// Live's are at Stereo 120 (`reverb-network-exact`); below 120 Stereo delays them
+/// ([`stereo_delay`]).
 const TAP_OFFSET_SECONDS: f64 = -1.0 / 44_100.0;
-/// Live's High Cut delays the input this much more than its low-pass alone does: with it on,
-/// every reflection and the whole tail come 8.0 frames later than the same filter would put
-/// them, at every frequency from 500 Hz to 12 kHz (reflections alone, Hi Cut on against off).
-const HIGH_CUT_DELAY_SECONDS: f64 = 8.0 / 44_100.0;
+/// Below Stereo 120 the reflections, not the tail, come later: under Smooth Fast and Slow
+/// `floor(STEREO_DELAY_FRAMES × (1 − Stereo / 120))` frames, under None that rounded up to whole
+/// 8-frame blocks (`reverb-er-stereo`: 27 and 32 frames at Stereo 0, 4 and 8 at 100). Read at
+/// 44.1 kHz; 0.625 ms.
+const STEREO_DELAY_FRAMES: f64 = 27.5625;
+/// The blocks Live rounds Stereo's delay up to under Smooth None (frames at 44.1 kHz).
+const STEREO_DELAY_BLOCK: f64 = 8.0;
 /// Level of the first reflection against the input, before the predelay's fade.
 const TAP_GAIN: f64 = 0.0942;
 /// How fast the reflections fade, in dB per ms of their delay, times the Decay setting in
@@ -446,29 +450,8 @@ const FILTERED_OFFSETS: [(usize, usize); 20] = [
 /// frames after theirs.
 const FILTERED_LATE: [f64; 20] =
     [5.0, 5.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 2.0, 2.0, 2.0, 2.0];
-/// The measured network's family whose peak each pair of [`FILTERED_OFFSETS`] lies about.
-const FILTERED_FAMILIES: [Option<usize>; 20] = [
-    Some(0),
-    Some(0),
-    None,
-    None,
-    Some(3),
-    Some(3),
-    Some(2),
-    Some(2),
-    None,
-    None,
-    Some(5),
-    Some(5),
-    None,
-    None,
-    None,
-    None,
-    Some(4),
-    Some(4),
-    Some(1),
-    Some(1),
-];
+/// The family ([`measured::FAMILY_COUNT`]) whose peak each pair of [`FILTERED_OFFSETS`] lies about.
+const FILTERED_FAMILIES: [usize; 20] = [0, 0, 6, 6, 3, 3, 2, 2, 7, 7, 5, 5, 8, 8, 9, 9, 4, 4, 1, 1];
 /// Longest delay a filtered offset reaches, at the largest Size (seconds).
 const OFFSET_LINE_SECONDS: f64 = 0.13;
 /// Longest delay from a direct reflection to the measured network, [`measured::ENTRY_MS`] at Shape
@@ -921,6 +904,8 @@ ramps! {
     mix,
     /// Stereo's mixing angle (radians).
     angle,
+    /// Stereo's delay of the reflections (frames, [`stereo_delay`]).
+    stereo_delay,
     /// Gain of the input into the network (0 while frozen with Cut on).
     feed,
     /// How much of Low Cut is heard (0 off, 1 on).
@@ -1002,8 +987,8 @@ pub struct Reverb {
     top_cut: Biquad,
     /// The reflections' low-pass, for the filtered taps of each side.
     reflection_filters: [Biquad; 2],
-    /// High Cut's own delay ([`HIGH_CUT_DELAY_SECONDS`]).
-    high_cut_delay: DelayLine,
+    /// The reflections of each side, for Stereo's delay of them ([`stereo_delay`]).
+    stereo_lines: [DelayLine; 2],
     /// The early reflections of the Density setting.
     taps: &'static [Tap],
     /// The Density whose reflections [`taps`](Self::taps) are.
@@ -1054,6 +1039,14 @@ impl Default for Reverb {
 /// A level in decibels as a linear gain.
 fn db_to_gain(db: f64) -> f64 {
     10.0f64.powf(db / 20.0)
+}
+
+/// How much later than at Stereo 120 the reflections are heard at `stereo` (frames at
+/// `sample_rate`), under Smooth Fast or Slow when `fast` ([`STEREO_DELAY_FRAMES`]).
+fn stereo_delay(stereo: f64, fast: bool, sample_rate: f64) -> f64 {
+    let frames = (STEREO_DELAY_FRAMES * (1.0 - stereo / 120.0)).max(0.0).floor();
+    let frames = if fast { frames } else { STEREO_DELAY_BLOCK * (frames / STEREO_DELAY_BLOCK).ceil() };
+    frames * sample_rate / REFERENCE_RATE
 }
 
 /// How far Spin reaches with `predelay_ms` of predelay, as a share of [`SPIN_FRACTION`]: all of
@@ -1145,7 +1138,7 @@ impl Reverb {
             rumble: FirstOrder::default(),
             subsonic: FirstOrder::default(),
             high_cut: Biquad::default(),
-            high_cut_delay: DelayLine::default(),
+            stereo_lines: Default::default(),
             top_cut: Biquad::default(),
             reflection_filters: Default::default(),
             taps: &TAPS_LOW,
@@ -1176,7 +1169,8 @@ impl Reverb {
     fn allocate(&mut self) {
         let sr = self.sample_rate;
         self.input = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
-        self.high_cut_delay = DelayLine::for_seconds(4.0 * HIGH_CUT_DELAY_SECONDS, sr);
+        self.stereo_lines =
+            std::array::from_fn(|_| DelayLine::for_seconds(2.0 * STEREO_DELAY_FRAMES / REFERENCE_RATE, sr));
         self.group_lines = std::array::from_fn(|_| DelayLine::for_seconds(ENTRY_LINE_SECONDS, sr));
         self.offset_lines = std::array::from_fn(|_| DelayLine::for_seconds(OFFSET_LINE_SECONDS, sr));
         self.measured = measured::Network::new(sr);
@@ -1211,6 +1205,8 @@ impl Reverb {
             diffuse: db_to_gain(self.value(param::DIFFUSE)),
             mix: self.value(param::MIX),
             angle: std::f64::consts::FRAC_PI_4 * (1.0 - self.value(param::STEREO) / 120.0),
+            // Smooth Slow renders as Fast (`reverb-network-fast`).
+            stereo_delay: stereo_delay(self.value(param::STEREO), self.value(param::SMOOTH) as usize != 0, sr),
             feed: if self.frozen() && self.on(param::CUT) { 0.0 } else { 1.0 },
             low_cut: flag(param::LOW_CUT),
             high_cut: flag(param::HIGH_CUT),
@@ -1250,7 +1246,9 @@ impl Reverb {
         self.rumble = FirstOrder::new(FirstOrderCoefficients::highpass(self.sample_rate, RUMBLE_FREQUENCY));
         self.subsonic = FirstOrder::new(FirstOrderCoefficients::highpass(self.sample_rate, SUBSONIC_FREQUENCY));
         self.high_cut.reset();
-        self.high_cut_delay.clear();
+        for line in &mut self.stereo_lines {
+            line.clear();
+        }
         self.top_cut = Biquad::new(Coefficients::lowpass(self.sample_rate, TOP_CUT, BUTTERWORTH_Q));
         if TOP_CUT >= 0.45 * self.sample_rate {
             self.top_cut.set(Coefficients::IDENTITY);
@@ -1375,13 +1373,13 @@ impl Reverb {
         {
             let frames = frames as f64 + late;
             // A family's pair keeps its place about the family's peak, which moves in Live's
-            // 8-frame blocks (`reverb-network-small`); the others, which only Mid and High play,
-            // are whole blocks too.
-            let frames = match family {
-                Some(k) => frames - measured::peak(k, 1.0, true) + measured::peak(k, room, settled),
-                None => measured::copy_front(frames, room, settled),
-            } * sr
-                / REFERENCE_RATE;
+            // 8-frame blocks (`reverb-network-small`), or under Smooth Fast in whole frames to
+            // where the network hears its copy, at every Density (Live's reflections at Size 100
+            // peak 396 and 1336 frames after their direct ones, against 401 and 1337 under None:
+            // `reverb-impulse` reverb-decay; `reverb-network-density-size`).
+            let frames =
+                (frames - measured::peak(family, 1.0, true, false) + measured::peak(family, room, settled, fast)) * sr
+                    / REFERENCE_RATE;
             *offset = if settled { frames.round() } else { frames }.max(2.0);
         }
         let gain = |seconds: f64| {
@@ -1554,12 +1552,26 @@ impl Device for Reverb {
                 self.now.between(&self.from, &self.to, (step + 1) as f64 / CONTROL_FRAMES as f64);
             }
             let r = &mut self.ramps;
-            let [predelay, reflect, diffuse, mix, angle, feed, low_cut, high_cut, spin_swing, chorus_swing] = [
+            let stereo_settled = r.stereo_delay.is_settled();
+            let [
+                predelay,
+                reflect,
+                diffuse,
+                mix,
+                angle,
+                stereo_delay,
+                feed,
+                low_cut,
+                high_cut,
+                spin_swing,
+                chorus_swing,
+            ] = [
                 &mut r.predelay,
                 &mut r.reflect,
                 &mut r.diffuse,
                 &mut r.mix,
                 &mut r.angle,
+                &mut r.stereo_delay,
                 &mut r.feed,
                 &mut r.low_cut,
                 &mut r.high_cut,
@@ -1594,8 +1606,7 @@ impl Device for Reverb {
             let cut = self.low_cut.iter_mut().fold(x, |y, section| section.process(y));
             x += (cut - x) * low_cut;
             let top = self.top_cut.process(x);
-            let cut = f64::from(self.high_cut_delay.read_hermite(HIGH_CUT_DELAY_SECONDS * self.sample_rate));
-            self.high_cut_delay.push(self.high_cut.process(x) as f32);
+            let cut = self.high_cut.process(x);
             x = top + (cut - top) * high_cut;
             let t = if self.moving { &self.now } else { &self.to };
 
@@ -1690,6 +1701,17 @@ impl Device for Reverb {
             }
             let [left_filter, right_filter] = &mut self.reflection_filters;
             let early = [direct[0] + left_filter.process(filtered[0]), direct[1] + right_filter.process(filtered[1])];
+            // Stereo's delay, on the reflections heard; the network took them as they were read.
+            let mut delayed = [0.0f64; 2];
+            for ((out, line), x) in delayed.iter_mut().zip(&mut self.stereo_lines).zip(early) {
+                line.push(x as f32);
+                *out = f64::from(if stereo_settled {
+                    line.read(stereo_delay.round() as usize + 1)
+                } else {
+                    line.read_linear(stereo_delay + 1.0)
+                });
+            }
+            let early = delayed;
             for (group, line) in groups.iter_mut().zip(&mut self.group_lines) {
                 let late = if whole { line.read(group_whole as usize) } else { line.read_hermite(group_delay) };
                 line.push(*group as f32);
