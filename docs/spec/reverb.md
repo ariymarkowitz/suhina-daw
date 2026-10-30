@@ -122,7 +122,8 @@ Scale move, a length follows the straight line through the middle of its steps.
   side, and each Density has a table of how loud each family repeats each direct tap: Low has the
   first six families, Sparse four of them, Mid all but the 2073 and 2393 families, High all ten.
   So the reflections are played as one mix of the direct taps per family, delayed, and fading over
-  the family's delay as the taps do. The network hears the same families (Late reverb).
+  the family's delay as the taps do. The network hears the same family lines, an entry later (Late
+  reverb).
 - **The low-pass** is a cookbook low-pass of Q 0.5 per side. Its double pole is that of 11.98 kHz
   plus `1.115 × (1 − exp(−t × size factor / decay))`, with `t` 0.0512 s at Low, 0.2092 at Sparse,
   0.3200 at Mid and 0.2657 at High: the corner falls with a shorter Decay, faster the denser the
@@ -163,9 +164,11 @@ mixed after every trip by one matrix, orthogonal between the lines as they are h
   *Size level* the reflections' law above and *Network level*
   `0.935054 + 0.000751857 × Size − 0.000000350508 × Size²`: close to the reflections' law up to Size
   100, 0.45 dB below it at 500.
-- **Families.** Each line has a family. Its filtered reflections, 1.70 times quieter than they are
-  heard, join that line's output in the mix: Live's reflections and the network's copies are one
-  signal at a fixed ratio of 1.69 to 1.71 at every Density. At Low a line's input is its own family.
+- **Families.** Each line has a family. Its filtered reflections, read from the same family line a
+  Shape entry later, through the same low-pass and 1.70 times quieter than they are heard (at the
+  network's level), join that line's output in the mix: Live's reflections and the network's copies
+  are one signal at a fixed ratio of 1.69 to 1.71 at every Density. At Low a line's input is its own
+  family.
 - **Line levels.** Sparse's, Mid's and High's lines are heard at levels up to 1 % apart (Low's at
   one level). The device sums every line at one level and runs the mix between them as
   `level_i × mix_ij / level_j`, so it stays orthogonal between the lines taken at their levels.
@@ -282,8 +285,10 @@ Why the device is built as it is. Where each constant was read is in its doc com
   tap delayed again by the family's delay, through the same low-pass, at a fixed ratio of 1.70. So
   each Density keeps one table of family levels and derives the copies from it. Sparse's, Mid's and
   High's tables are their reflections read tap by tap; Low's are its line inputs, which match Live's
-  reflections and tail more closely than its own read taps. Played as one mix per family, the
-  reflections cost a delay line per family instead of one read per tap.
+  reflections and tail more closely than its own read taps. One delay line per family serves both:
+  the reflections read it at the family's delay, the network an entry later, which renders the same
+  as separate copy lines in every comparison set, and costs a delay line per family instead of one
+  read per tap and a second set of lines.
 - **Tap times keep Live's fraction of a frame.** Live steps each tap to the next frame at its own
   fraction as the predelay moves; without it four taps were a frame late at most predelays. Two
   direct taps (17.90 and 41.12 ms) sit at 0.59 of a frame rather than the 0.65 their predelay steps
@@ -379,9 +384,9 @@ network's level within 0.05 dB from Size 0.222 to 500.
 
 ## Cost
 
-One instance at its defaults: 2.0 % of one core at 48 kHz (60 s rendered in 1.19 s, release build,
+One instance at its defaults: 1.9 % of one core at 48 kHz (60 s rendered in 1.13 s, release build,
 Apple M-series, 2026-10-31), over the 1 % budget as the device notes allow for reverbs: ten direct
-taps, up to ten family lines, and 4 to 10 modulated lines with one allpass (two at Mid and High) and
+taps, up to ten family lines (heard and fed to the network), and 4 to 10 modulated lines with one allpass (two at Mid and High) and
 damping each, every frame. Run `cargo test --release -p suhina-device-reverb cost -- --ignored
 --nocapture` to measure it.
 

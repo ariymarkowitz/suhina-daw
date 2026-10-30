@@ -93,7 +93,7 @@ const TAPS_LOW: [Tap; 10] = [
     tap(48.2846, RIGHT, -0.9966),
     tap(55.6475, RIGHT, 0.9951),
 ];
-// Low's filtered reflections are its network's line inputs as heard (`network::HEARD_COPY`), not
+// Low's filtered reflections are its network's line inputs as heard ([`HEARD_COPY`]), not
 // its own read taps: they match Live's reflections and tail more closely.
 const FILTERED_LOW: [[f64; DIRECT_TAPS]; FAMILY_COUNT] = [
     [1.0046, -1.0055, 0.6008, 0.0880, 0.0876, -0.3697, -0.2277, 0.5996, 0.5789, -0.5780],
@@ -212,9 +212,9 @@ const SPIN_VOICES: [(f64, f64, f64); 10] = [
 ];
 /// The rate the tap tables' frames count at.
 const REFERENCE_RATE: f64 = 44_100.0;
-/// Longest delay from a direct reflection to its family's filtered reflection, at the largest Size
-/// (seconds).
-const FAMILY_LINE_SECONDS: f64 = 0.13;
+/// Longest delay from a direct reflection to its family's copy in the network: its filtered
+/// reflection at the largest Size (0.13 s) and the Shape entry after it (seconds).
+const FAMILY_LINE_SECONDS: f64 = 0.2;
 /// Longest delay from a direct reflection to the network, [`network::entry`] at Shape 1
 /// (seconds).
 const ENTRY_LINE_SECONDS: f64 = 0.06;
@@ -250,6 +250,10 @@ const TOP_CUT: f64 = 18_000.0;
 
 /// Density Low: what an unknown Density plays.
 const LOW: usize = 1;
+/// A family's copy in the network is its filtered reflections, heard this many times as loud: read
+/// tap by tap against the copies fitted to the tails, the ratio is 1.69 to 1.71 at every Density
+/// (within 1.5 % for all but the faintest taps).
+const HEARD_COPY: f64 = 1.70;
 /// Level of the network's input against the input, before the predelay's fade: with it, each
 /// line's first pass is [`network`]'s gain times the direct reflection it comes from, as Live's
 /// is (`reverb-network-exact`).
@@ -489,6 +493,8 @@ struct Tuning {
     entry: f64,
     /// Gain of the input into the network.
     network_feed: f64,
+    /// Gain of the families' filtered reflections into the network.
+    copy_gain: f64,
 }
 
 impl Default for Tuning {
@@ -504,6 +510,7 @@ impl Default for Tuning {
             network: network::Lengths::default(),
             entry: 2.0,
             network_feed: 0.0,
+            copy_gain: 0.0,
         }
     }
 }
@@ -520,6 +527,7 @@ impl Tuning {
         self.network.between(&from.network, &to.network, t);
         self.entry = from.entry + (to.entry - from.entry) * t;
         self.network_feed = from.network_feed + (to.network_feed - from.network_feed) * t;
+        self.copy_gain = from.copy_gain + (to.copy_gain - from.copy_gain) * t;
     }
 }
 
@@ -1004,7 +1012,7 @@ impl Reverb {
             line.clear();
         }
         self.set_reflections();
-        self.set_network();
+        self.network.set_design(network::design(self.value(param::DENSITY) as usize));
         self.network.clear();
         self.room = self.room_target();
         self.spin_phases = spin_start();
@@ -1033,16 +1041,6 @@ impl Reverb {
             }
         }
         self.families_used = used;
-    }
-
-    /// Runs the Density setting's network, its copies those of the reflections played.
-    fn set_network(&mut self) {
-        let mut gains = [0.0; DIRECT_TAPS];
-        for (gain, tap) in gains.iter_mut().zip(self.taps) {
-            *gain = tap.gain;
-        }
-        let design = network::design(self.value(param::DENSITY) as usize);
-        self.network.set_design(design, self.filtered, &gains[..self.taps.len()]);
     }
 
     /// The input filters from the band's (ramped) centre and width.
@@ -1134,13 +1132,15 @@ impl Reverb {
         };
         let design = network::design(density);
         t.network.tune(design, room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
-        t.network.fade(design, room, fade);
         t.entry = network::entry(shape, settled, fast) * sr / REFERENCE_RATE;
         // The network's lines scale with the room's own size factor, small rooms too, and its input
         // with the reflections' level and its own ([`NETWORK_SIZE_LEVEL`]). Every path through it
         // fades with its whole time, so it needs no cut for short decays.
         let (a, b, c) = NETWORK_SIZE_LEVEL;
-        t.network_feed = NETWORK_GAIN * predelay_gain * size_level * (a + b * size + c * size * size);
+        let network_level = a + b * size + c * size * size;
+        t.network_feed = NETWORK_GAIN * predelay_gain * size_level * network_level;
+        // The families' copies are their filtered reflections at the network's level.
+        t.copy_gain = NETWORK_GAIN * network_level / (HEARD_COPY * TAP_GAIN);
         let corner = reflection_corner(setting, density, room).clamp(20.0, 0.45 * sr);
         let reflection = Coefficients::lowpass(sr, corner, REFLECTION_Q);
         for filter in &mut self.reflection_filters {
@@ -1260,9 +1260,9 @@ impl Device for Reverb {
         if self.reflections != self.value(param::DENSITY) as usize {
             self.set_reflections();
         }
-        // A network that takes over from another starts silent.
-        self.set_network();
         let design = network::design(self.value(param::DENSITY) as usize);
+        // A network that takes over from another starts silent.
+        self.network.set_design(design);
         let (spin_step, chorus_step) =
             (self.value(param::SPIN_RATE) * SPIN_RATE_SCALE / sr, self.value(param::CHORUS_RATE) / sr);
         // How far ahead of their phases Spin's LFOs are read, in cycles at Spin Rate.
@@ -1391,16 +1391,24 @@ impl Device for Reverb {
                     *group += u;
                 }
             }
+            // Each family line is heard twice: as the family's filtered reflections, and an entry
+            // later as its copy in the network.
             let mut filtered = [0.0f64; 2];
+            let mut copies = [0.0f64; FAMILY_COUNT];
             for (family, line) in self.family_lines.iter_mut().enumerate() {
                 if !self.families_used[family] {
                     continue;
                 }
+                let read = |delay: f64| {
+                    f64::from(if self.moving { line.read_hermite(delay) } else { line.read(delay.round() as usize) })
+                };
                 let delay = t.family_delays[family];
-                let y = if self.moving { line.read_hermite(delay) } else { line.read(delay.round() as usize) };
-                filtered[FAMILY_SIDES[family]] += f64::from(y);
+                filtered[FAMILY_SIDES[family]] += read(delay);
+                copies[family] = read(delay + t.entry) * t.copy_gain;
                 let mix: f64 = self.filtered[family].iter().zip(&reads).map(|(g, r)| g * r).sum();
-                line.push((mix * t.family_gains[family]) as f32);
+                // Cut keeps new input out here, so what is on its way into the network still gets there
+                // (the reflections heard are cut at the output).
+                line.push((mix * t.family_gains[family] * feed) as f32);
             }
             let [left_filter, right_filter] = &mut self.reflection_filters;
             let early = [direct[0] + left_filter.process(filtered[0]), direct[1] + right_filter.process(filtered[1])];
@@ -1426,7 +1434,7 @@ impl Device for Reverb {
                 if chorus_swing > 0.0 { (std::f64::consts::TAU * self.chorus_phase).sin_cos() } else { (0.0, 0.0) };
             let swing =
                 |(c, s): (f64, f64), length: f64| chorus_swing.min(0.5 * length) * (chorus_sin * c + chorus_cos * s);
-            let tail = self.network.process(&groups, &t.network, diffusion, &damping, swing, frozen);
+            let tail = self.network.process(&groups, &copies, &t.network, diffusion, &damping, swing, frozen);
             self.input.push(x as f32);
 
             // Output: the two parts, Stereo's rotation, then the mix.

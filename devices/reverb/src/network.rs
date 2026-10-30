@@ -8,13 +8,13 @@
 //! as groups: Sparse 4, Low 6, Mid 8, High 10 ([`design`]).
 //!
 //! ```text
-//! direct taps -> groups -> each line's input -------------------------------> own line
-//!                       -> each line's family -> offset -> low-pass (copy) --+
-//! line outputs -------------------------------------------------------------+-> MIX -> lines
+//! direct taps -> groups -> each line's input ------------------------> own line
+//! family lines (from the reflections, an entry later) -> low-pass ---+
+//! line outputs ------------------------------------------------------+-> MIX -> lines
 //! ```
 //!
-//! At Low a line's family is its input. A family's copy is its filtered reflections as heard
-//! ([`HEARD_COPY`]). Times are frames at 44.1 kHz. A line is a delay and an
+//! At Low a line's family is its input. A family's copy is its filtered reflections, an entry
+//! later (the reverb's family lines hold both). Times are frames at 44.1 kHz. A line is a delay and an
 //! allpass (two in series at Mid and High), each a whole number of 8-frame blocks and one frame
 //! with Smooth None, whole frames under Fast ([`length`]). The input reaches the lines [`entry`]
 //! after each direct reflection, whatever the Size. Every value was read from Live's impulse
@@ -26,12 +26,6 @@ use suhina_dsp::{Allpass, Biquad, Coefficients, DelayLine};
 
 use crate::{Damper, Damping, Line};
 
-/// A family's copy into the mix is its filtered reflections, heard this many times as loud: read
-/// tap by tap against the copies fitted to the tails, the ratio is 1.69 to 1.71 at every Density
-/// (within 1.5 % for all but the faintest taps). So each Density keeps one table, the reflections'
-/// (Low's from its line inputs, which match Live's reflections more closely than its own read
-/// taps), and the copies come from it ([`Network::set_design`]).
-const HEARD_COPY: f64 = 1.70;
 /// Lines in Low's loop: A, B, C, D, F and R.
 const LOOP: usize = 6;
 /// Groups of Low's direct reflections the families are made of.
@@ -199,8 +193,6 @@ const LINE_SECONDS: f64 = 0.65;
 /// Longest allpass a line needs (seconds, with room for Size 500): Mid's and High's longest
 /// line's Scale part.
 const ALLPASS_SECONDS: f64 = 0.45;
-/// Longest family offset (seconds, with room for Size 500).
-pub(crate) const FRONT_SECONDS: f64 = 0.2;
 
 /// The family each of Sparse's lines takes its delay from: its own, but the last's (family C), which
 /// has A's (`reverb-network-density-size`).
@@ -500,10 +492,6 @@ pub(crate) struct Lengths {
     pub second_losses: [f64; MAX_LINES],
     /// Each line's share of a damping trip.
     pub trips: [f64; MAX_LINES],
-    /// Each family's delay to its copy's low-pass (frames).
-    pub fronts: [f64; MAX_LINES],
-    /// Each copy's level: a filtered reflection fades as the reflections do over its own offset.
-    pub copy_gains: [f64; MAX_LINES],
 }
 
 impl Default for Lengths {
@@ -517,8 +505,6 @@ impl Default for Lengths {
             losses: [0.0; MAX_LINES],
             second_losses: [0.0; MAX_LINES],
             trips: [0.0; MAX_LINES],
-            fronts: [1.0; MAX_LINES],
-            copy_gains: [0.0; MAX_LINES],
         }
     }
 }
@@ -535,8 +521,6 @@ impl Lengths {
         lerp(&mut self.losses, &from.losses, &to.losses, t);
         lerp(&mut self.second_losses, &from.second_losses, &to.second_losses, t);
         lerp(&mut self.trips, &from.trips, &to.trips, t);
-        lerp(&mut self.fronts, &from.fronts, &to.fronts, t);
-        lerp(&mut self.copy_gains, &from.copy_gains, &to.copy_gains, t);
     }
 
     /// `design`'s lengths for size factor `room`, Scale `scale` (0..1) at `sample_rate`, under
@@ -579,16 +563,6 @@ impl Lengths {
             self.gains[k] = gain(line / sample_rate);
             self.losses[k] = gain(allpass / sample_rate);
             self.trips[k] = design.trip_scale * (line + allpass + second) / sample_rate / trip_seconds;
-            self.fronts[k] = whole(front(family, room, settled, fast) * frames);
-        }
-    }
-
-    /// Each of `design`'s copies' level for size factor `room`, as the reflections fade by `fade`
-    /// (dB per ms of their delay) over its family's offset.
-    pub fn fade(&mut self, design: &Design, room: f64, fade: f64) {
-        for (gain, &family) in self.copy_gains.iter_mut().zip(&design.families).take(design.lines) {
-            let peak = peak(family, room, false, false);
-            *gain = 10f64.powf(-fade * peak * 1_000.0 / RATE / 20.0);
         }
     }
 
@@ -608,8 +582,6 @@ impl Lengths {
 pub(crate) struct Network {
     /// The lines, each with its allpass and damping; the design's first ones run.
     pub lines: [Line; MAX_LINES],
-    /// Each family on its way to its copy.
-    fronts: [DelayLine; MAX_LINES],
     /// The copies' low-pass, the reflections' own.
     copy_filters: [Biquad; MAX_LINES],
     /// The network running.
@@ -618,23 +590,16 @@ pub(crate) struct Network {
     mix: [[f64; MAX_LINES]; MAX_LINES],
     /// Cosine and sine of each line's Chorus phase.
     chorus_phases: [(f64, f64); MAX_LINES],
-    /// Each line's family's copy: its weight on each group.
-    copies: [[f64; MAX_GROUPS]; MAX_LINES],
-    /// Whether [`set_design`](Self::set_design) has run.
-    ready: bool,
 }
 
 impl Default for Network {
     fn default() -> Self {
         Self {
             lines: Default::default(),
-            fronts: Default::default(),
             copy_filters: Default::default(),
             design: &LOW,
             mix: loop_mix(&LOW),
             chorus_phases: chorus_phases(&LOW),
-            copies: [[0.0; MAX_GROUPS]; MAX_LINES],
-            ready: false,
         }
     }
 }
@@ -649,49 +614,24 @@ impl Network {
                 second: Allpass::for_seconds(ALLPASS_SECONDS, sample_rate),
                 damper: Damper::default(),
             }),
-            fronts: std::array::from_fn(|_| DelayLine::for_seconds(FRONT_SECONDS, sample_rate)),
             ..Self::default()
         }
     }
 
-    /// Runs `design`, silent from its start if it was not running. Its copies are the filtered
-    /// reflections heard, `filtered` (family by family, against the first direct reflection, with
-    /// `gains` the direct reflections' levels), [`HEARD_COPY`] times quieter.
-    pub fn set_design(
-        &mut self,
-        design: &'static Design,
-        filtered: &[[f64; DIRECT_TAPS]; FAMILY_COUNT],
-        gains: &[f64],
-    ) {
-        if self.ready && std::ptr::eq(self.design, design) {
-            return;
+    /// Runs `design`, silent from its start if it was not running.
+    pub fn set_design(&mut self, design: &'static Design) {
+        if !std::ptr::eq(self.design, design) {
+            self.design = design;
+            self.mix = loop_mix(design);
+            self.chorus_phases = chorus_phases(design);
+            self.clear();
         }
-        self.ready = true;
-        self.design = design;
-        self.mix = loop_mix(design);
-        self.chorus_phases = chorus_phases(design);
-        let norm = gains.iter().map(|g| g * g).sum::<f64>().sqrt().max(1e-9);
-        // A group of two direct reflections (Mid's) takes the mean of what each says.
-        let mut sums = [[(0.0, 0.0); MAX_GROUPS]; MAX_LINES];
-        for (row, &family) in sums.iter_mut().zip(&design.families).take(design.lines) {
-            for (&group, (&level, &gain)) in design.tap_groups.iter().zip(filtered[family].iter().zip(gains)) {
-                if let Some((sum, count)) = row.get_mut(group) {
-                    *sum += level * norm / (HEARD_COPY * gain);
-                    *count += 1.0;
-                }
-            }
-        }
-        self.copies = sums.map(|row| row.map(|(sum, count)| if count > 0.0 { sum / count } else { 0.0 }));
-        self.clear();
     }
 
     /// Silences every line.
     pub fn clear(&mut self) {
         for line in &mut self.lines {
             line.clear();
-        }
-        for front in &mut self.fronts {
-            front.clear();
         }
         for filter in &mut self.copy_filters {
             filter.reset();
@@ -705,13 +645,16 @@ impl Network {
         }
     }
 
-    /// One frame: `groups` is the input of each group of direct reflections, already delayed by
-    /// the entry; returns the tail of each side. `swing` gives each line's chorus swing (frames)
+    /// One frame: `groups` is the input of each group of direct reflections and `copies` each
+    /// family's filtered reflections, both already delayed by the entry; returns the tail of each
+    /// side. `swing` gives each line's chorus swing (frames)
     /// from the cosine and sine of its phase and its length.
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         groups: &[f64; MAX_GROUPS],
+        copies: &[f64; FAMILY_COUNT],
         n: &Lengths,
         diffusion: f32,
         damping: &Damping,
@@ -722,19 +665,9 @@ impl Network {
         let lines = d.lines;
         let weigh = |row: &[f64; MAX_GROUPS]| row.iter().zip(groups).map(|(w, g)| w * g).sum::<f64>();
         let families: [f64; MAX_LINES] = std::array::from_fn(|k| d.input_gains[k] * weigh(&d.inputs[k]));
-        let sources: [f64; MAX_LINES] = std::array::from_fn(|k| weigh(&self.copies[k]));
-        let mut copies = [0.0f64; MAX_LINES];
-        for ((((front, filter), copy), (&family, &delay)), &level) in self
-            .fronts
-            .iter_mut()
-            .zip(&mut self.copy_filters)
-            .zip(&mut copies)
-            .zip(sources.iter().zip(&n.fronts))
-            .zip(&n.copy_gains)
-            .take(lines)
-        {
-            *copy = level * filter.process(f64::from(front.read_hermite(delay.max(2.0))));
-            front.push(family as f32);
+        let mut heard = [0.0f64; MAX_LINES];
+        for ((copy, filter), &family) in heard.iter_mut().zip(&mut self.copy_filters).zip(&d.families).take(lines) {
+            *copy = filter.process(copies[family]);
         }
 
         let mut outs = [0.0f64; MAX_LINES];
@@ -753,7 +686,7 @@ impl Network {
             tail[d.side(k)] += *out;
         }
         // Into the mix: each line's output and its family's copy.
-        let into: [f64; MAX_LINES] = std::array::from_fn(|j| outs[j] + copies[j]);
+        let into: [f64; MAX_LINES] = std::array::from_fn(|j| outs[j] + heard[j]);
         for (k, line) in self.lines.iter_mut().enumerate().take(lines) {
             let mixed: f64 = self.mix[k][..lines].iter().zip(&into).map(|(m, y)| m * y).sum();
             let mut next = families[k] + mixed;
