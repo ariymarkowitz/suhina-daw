@@ -11,8 +11,8 @@
 //!                                                                      direct taps -> network -> Diffuse
 //! ```
 //!
-//! The early reflections are the measured tap pattern (docs/spec/reverb.md). At Density Low the
-//! late reverb is Live's own network, as measured (`measured.rs`). At the other Densities the
+//! The early reflections are the measured tap pattern (docs/spec/reverb.md). At Densities Low,
+//! Mid and High the late reverb is Live's own network, as measured (`measured.rs`). At Sparse the
 //! network takes the direct taps again after the Shape delay, each into a line of its own: a
 //! feedback delay network of 8, 12 or 16 lines (Density) mixed by a Householder reflection, the
 //! textbook design (Jot and Chaigne, 1991), with a Schroeder allpass (Diffusion) in every line;
@@ -666,8 +666,9 @@ const DENSITY_TRIM_DB: [f64; 4] = [-0.3, 0.0, 0.0, 1.0];
 const LARGE_ROOM_POWER: f64 = 0.75;
 /// Signs of the input into each line.
 const INPUT_SIGNS: [f64; 16] = [1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
-/// Density Low, whose late reverb is the measured network ([`measured`]); the others run the
-/// Householder network.
+/// Density Low, whose late reverb is the measured network read most closely ([`measured`]): its
+/// Size level and Smooth Fast are measured, Mid's and High's not. Sparse runs the Householder
+/// network.
 const LOW: usize = 1;
 /// Level of the measured network's input against the Householder network's (the same feed): with
 /// it, each line's first pass is [`measured`]'s gain times the direct reflection it comes from,
@@ -1250,14 +1251,15 @@ pub struct Reverb {
     feed_line: DelayLine,
     /// The measured network's input groups, each the sum of its direct reflections as they were
     /// read (Spin's shift included), delayed by the Shape entry before the network takes them.
-    group_lines: [DelayLine; measured::GROUPS],
+    group_lines: [DelayLine; measured::MAX_GROUPS],
     /// The damping in front of [`feed_line`](Self::feed_line).
     input_damper: Damper,
     /// The low-pass after [`input_damper`](Self::input_damper), at [`FEED_CUT`].
     feed_cut: FirstOrder,
     /// The network's lines; the first [`active`](Self::active) run.
     lines: [Line; 16],
-    /// The measured network, which Density Low runs instead of [`lines`](Self::lines).
+    /// The measured network, which Densities Low, Mid and High run instead of
+    /// [`lines`](Self::lines).
     measured: measured::Network,
     /// Whether the measured network ran in the last frame.
     measured_running: bool,
@@ -1545,8 +1547,10 @@ impl Reverb {
         for line in &mut self.lines {
             line.clear();
         }
+        let design = measured::design(self.value(param::DENSITY) as usize);
+        self.measured.set_design(design.unwrap_or(measured::low()));
         self.measured.clear();
-        self.measured_running = self.value(param::DENSITY) as usize == LOW;
+        self.measured_running = design.is_some();
         self.set_active(self.density_lines());
         self.room = self.room_target();
         self.spin_phases = spin_start();
@@ -1686,21 +1690,25 @@ impl Reverb {
                 db_to_gain(-60.0 * seconds / decay)
             }
         };
-        t.measured.tune(room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
-        t.measured.fade(room, fade);
+        let design = measured::design(density_index).unwrap_or(measured::low());
+        t.measured.tune(design, room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
+        t.measured.fade(design, room, fade);
         let (entry, below, above) = measured::ENTRY_MS;
         let per_shape = if shape < 0.5 { below } else { above };
         t.entry = (entry + per_shape * (shape - 0.5) * room) * ms;
-        if fast {
+        // Only Low's network is measured under Fast: Mid's and High's run as with None.
+        if fast && low {
             t.entry -= measured::FAST_EARLIER * sr / REFERENCE_RATE;
         }
         let short = 60.0 * TAIL_FADE_SECONDS / setting + TAIL_SHORT_DB / (setting * setting) + fade * TAIL_LAG_MS;
-        t.feed = TAIL_GAIN * predelay_gain * db_to_gain(density);
+        let tail_gain = TAIL_GAIN * predelay_gain;
+        t.feed = tail_gain * db_to_gain(density);
         // The measured network's lines scale with the room's own size factor, small rooms too, and
         // its input with the reflections' level, twice. Every path through it fades with its
         // whole time, so it needs no cut for short decays, and its first passes are as loud at
-        // every Shape as Live's (`reverb-network-exact`).
-        t.measured_feed = t.feed * MEASURED_GAIN * size_level * size_level;
+        // every Shape as Live's (`reverb-network-exact`, `reverb-network-density`), with no trim
+        // for the Density.
+        t.measured_feed = tail_gain * MEASURED_GAIN * size_level * size_level;
         t.feed *= room.max(1.0).powf(LARGE_ROOM_POWER);
         t.feed *= db_to_gain(-short);
         t.feed *= (line_room / room).sqrt().min(SMALL_ROOM_GAIN_LIMIT);
@@ -1762,7 +1770,8 @@ impl Reverb {
         }
         // Density Low's input passes no damping: in Live's bare network each line has its own,
         // and the input none (`reverb-network-small hi-shelf-4k`, `reverb-network-filters`).
-        let low = self.value(param::DENSITY) as usize == LOW;
+        // Mid's and High's networks are taken to be the same.
+        let low = measured::design(self.value(param::DENSITY) as usize).is_some();
         let (input_trips, input_pass_trips) = if low { (0.0, 0.0) } else { (INPUT_TRIPS, INPUT_PASS_TRIPS) };
         tune(
             &mut self.input_damper,
@@ -1780,10 +1789,9 @@ impl Reverb {
         let line = LINES.iter().copied().fold(0.0, f64::max) * stretch * line_room(room);
         let tap = self.taps.iter().map(|tap| tap.ms).fold(0.0, f64::max) * room;
         let longest = line.max(tap) * self.sample_rate / 1_000.0;
-        if self.value(param::DENSITY) as usize == LOW {
-            longest.max(measured::Lengths::longest(room, self.sample_rate))
-        } else {
-            longest
+        match measured::design(self.value(param::DENSITY) as usize) {
+            Some(design) => longest.max(measured::Lengths::longest(design, room, self.sample_rate)),
+            None => longest,
         }
     }
 
@@ -1880,7 +1888,14 @@ impl Device for Reverb {
         }
         let active = self.active;
         let density_index = self.value(param::DENSITY) as usize;
-        let measured = density_index == LOW;
+        let design = measured::design(density_index);
+        let measured = design.is_some();
+        // The groups each direct reflection feeds (none without a measured network).
+        let tap_groups: &[usize] = design.map_or(&[], |d| &d.tap_groups);
+        if let Some(design) = design {
+            // A network that takes over from another starts silent.
+            self.measured.set_design(design);
+        }
         if measured != self.measured_running {
             // The network that takes over starts silent.
             if measured {
@@ -1980,7 +1995,7 @@ impl Device for Reverb {
             // of its own, in turn, after the Shape delay, and the first feeds a few.
             let (mut direct, mut filtered) = ([0.0f64; 2], [0.0f64; 2]);
             let mut inputs = [0.0f64; 16];
-            let mut groups = [0.0f64; measured::GROUPS];
+            let mut groups = [0.0f64; measured::MAX_GROUPS];
             let mut direct_index = 0;
             let mut next_line = 0;
             let mut spread = FIRST_TAP_LINES.clamp(1, active);
@@ -2008,7 +2023,7 @@ impl Device for Reverb {
                     // the entry, as Live's are (`reverb-network-small`).
                     let from = at + if whole { t.entry.round() - group_whole } else { t.entry - group_delay };
                     let u = read_from(&self.feed_line, from) * share * feed * t.measured_feed;
-                    if let Some(group) = measured::TAP_GROUPS.get(direct_index).and_then(|&g| groups.get_mut(g)) {
+                    if let Some(group) = tap_groups.get(direct_index).and_then(|&g| groups.get_mut(g)) {
                         *group += u;
                     }
                     direct_index += 1;

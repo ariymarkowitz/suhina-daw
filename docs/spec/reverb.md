@@ -3,7 +3,7 @@ description: The built-in algorithmic reverb - its parameters, signal flow (inpu
 read_when: reverb, algorithmic reverb, room, decay, early reflections, predelay, feedback delay network, FDN, damping, freeze, diffusion, importing Live's Reverb, Reverb elements
 type: spec
 status: current
-last_verified: 2026-10-29
+last_verified: 2026-10-30
 covers:
   - devices/reverb/**
   - crates/dsp/src/first_order.rs
@@ -26,8 +26,8 @@ parameter for parameter ([`device-import.md`](device-import.md)).
 - **Sources:** Live 12 Reference Manual, 29.32 Reverb (what each control is for); the
   measurements above (how it sounds); the feedback delay network of Jot and Chaigne (1991) and
   the Schroeder allpass, textbook designs. The early reflections' tap pattern is read from Live's
-  renders (Decisions 12), and so is Density Low's network (Decisions 19); the other networks'
-  delay lengths and the other constants are this device's own, tuned to the measured laws below.
+  renders (Decisions 12), and so are the networks of Densities Low, Mid and High (Decisions 19 and
+  28); Sparse's delay lengths and the other constants are this device's own, tuned to the measured laws below.
 
 ## Parameters
 
@@ -170,8 +170,8 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   the left, all at one level. Damping and chorus are as below. Every path fades with
   its whole time from the input: each line's gain covers its delay, and its allpass loses its own
   delay's gain on every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`).
-- **Network, Density Sparse, Mid and High.** 8, 12 or 16 lines (Density Sparse, Mid, High), 18 to 77 ms long in the
-  reference room, 1.3 times that at Sparse. Each line's output passes a Schroeder allpass with the
+- **Network, Density Sparse.** (Density Mid and High run the measured network, Decision 28.) 8
+  lines, 18 to 77 ms long in the reference room, 1.3 times that. Each line's output passes a Schroeder allpass with the
   Diffusion as its gain (0.2 of it at Sparse) and a delay of its own,
   3.6 to 15.2 ms times Scale and the size factor, on every trip. The lines are mixed after every
   trip by a Householder reflection, `I − (2/N) 11ᵀ`, followed by a shift of one line: each line
@@ -197,6 +197,11 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   decays 0.3 to 0.4 dB/s faster than 1 kHz at Decay 3.46, 14.4 and 60 s, against 2 to 3.5 dB/s
   with Fast), which the measurements of the decay per band were made with. Lines and their allpasses are whole frames
   long once Size, Scale and Decay have settled, so a line without chorus is not interpolated.
+  In the measured network (Density Low) each line passes the Low-Pass type as one whole one-pole
+  at the set frequency on every pass, whatever the line's length, and its shelves are cookbook
+  shelves of Q 0.70, the High Shelf half way at 0.98 of its frequency and the Low Shelf at its
+  frequency over 0.98 (fitted: −32 to −36 dB from 4 to 8 s against −12 to −18 with Q 0.707 at the
+  frequency; Decision 13).
 - **Chorus.** Swings every line's delay either way by up to `1.8 ms × amount` (at most half the
   line), each with its own phase of one LFO at the Chorus rate; lines are read with cubic
   interpolation.
@@ -332,7 +337,8 @@ Each entry: what was chosen, what it costs, why.
    not a low-pass with its corner raised: that matches the one-pole's loss only below the corner
    and lost highs hundreds of dB/s too fast above it (at 1 kHz the 4 kHz third-octave lost 143
    dB/s more than undamped, Live's 76; now 69), and one shelf alone is up to 28 dB/s off below
-   1 kHz, two within 3 dB/s from 250 Hz up.
+   1 kHz, two within 3 dB/s from 250 Hz up. That is the Householder network's Low-Pass; Density
+   Low's is a whole one-pole in every line (Decision 13).
 7. **A fixed 90 Hz roll-off at the input,** first-order, the simplest that brings the lowest two
    octaves within about 2 dB of Live's in every case (they were 3 to 8 dB too loud without it).
 8. **The fixed loss of the highs** (an 8 kHz shelf, 0.96 dB a trip, less above 3.46 s) is there
@@ -444,9 +450,12 @@ Each entry: what was chosen, what it costs, why.
    had this device's 0.21 of a trip too dark from the start (2.9 dB at gain 0.2). Without it the
    High and Low Shelf cases are within 0.25 dB of Live's in every band while white noise plays.
    Live's Low-Pass is different: every line's first pass, A's as F's, carries exactly one one-pole
-   at the set frequency (250 Hz, 1 kHz and 4 kHz), so it is on the input, whole; its loop loses
-   far less than this device's (Known differences), and until that is read the input keeps its
-   0.8 of a trip.
+   at the set frequency (250 Hz, 1 kHz and 4 kHz). Read line by line from `reverb-network-filters`
+   (bare network, Size 1.53 to 100), each of Density Low's lines passes one whole one-pole at the
+   set frequency on every pass, however long the line, and the input none (the shelves' gain, not
+   the frequency, scales with the line). That alone matches Live's renders to −27 to −37 dB; the
+   Low-Pass cases were up to 25 dB dark with the per-trip law, and are now −28 to −39 dB. The
+   other Densities' input keeps its 0.8 of a trip.
 14. **Smooth's glide times (45 ms Slow, 15 ms Fast)** are what one point of Live's glide gives for
    an exponential glide (`reverb-smooth-glide`: 50 ms after a jump Fast has finished, Slow has 30
    to 40 % left); the curve itself was not measured.
@@ -488,8 +497,8 @@ Each entry: what was chosen, what it costs, why.
     still signal's 0.012). Only near-instant jumps across most of the range glide more slowly than
     Smooth says.
 19. **Density Low runs Live's own network, identified from its renders,** in place of the
-    Householder network (which Sparse, Mid and High keep: their networks are different and not
-    measured). Live's impulse responses at Diffusion 0.1 % (the allpasses then pass the signal on
+    Householder network (which Sparse keeps; Mid and High have their own measured networks,
+    Decision 28). Live's impulse responses at Diffusion 0.1 % (the allpasses then pass the signal on
     as plain delays) and Decay 60 s, at Size 100 and Scale 5 to 100 %, were read as sparse
     arrivals; each arrival moves with Scale by the allpass length on its path, which tells the
     lines apart, and the network (patterns, lines, plain delays, mixing, outputs) was fitted to
@@ -719,6 +728,25 @@ Each entry: what was chosen, what it costs, why.
     1.00 at 0.55 s and 0.51 at 4 s (−0.15 before); the small-room Fast cases, 0.5 to 1.2 dB loud,
     are within 0.3 dB. Over the `reverb-impulse` set 941 of 1,084 windows are within 0.5 dB
     (918), median 0.10 dB (0.13). Cost: none.
+28. **Densities Mid and High run measured networks of 8 and 10 lines,** read at Size 100 and
+    laid out as Low's, in place of the Householder network. Live's `reverb-network-density`
+    renders (Diffusion 0.1 %, Decay 60 s, Size 100, Scale 5 to 100 %) were read as Low's were:
+    first passes and the second passes through each pair of lines give each line's delay, and
+    its delay and allpass together at each Scale, in 8-frame blocks (a delay `8 n + 2` frames,
+    with the allpass `8 n + 3`), kept as read and joined linearly between the Scales. Mid has 8
+    lines, four heard on each side; its direct reflections reach them in 8 groups (the first and
+    fourth as one, with weights equal and opposite to their levels, and so the second and the
+    seventh). High has 10 lines, five on each side, each fed by one direct reflection. As Low's,
+    each line has a family of filtered reflections heard again, low-passed, one offset later
+    (Mid's peak 3193, 2985, 961, 1337, 2497, 1641, 2337 and 401 frames after their direct
+    reflections, High's 3193, 2393, 2985, 961, 1337, 2497, 1641, 2337, 401 and 2073), joining
+    that line's output in the mix, which is orthogonal (the fit's rows were orthogonal to 1 %).
+    Mid's lines are High's but the second and the last. The level has the Size law of Decision 25
+    and no trim for the Density, as `reverb-network-density` shows; the input passes no shelf
+    and the damping is Low's (Decision 13), taken to be the same, not read. Not measured: other
+    Sizes (both parts of a line take the size factor, as Low's do), Smooth Fast and Slow (Mid
+    and High run as with None, not Fast's lengths), and each line's own allpass. Cost: 8 and 10
+    lines against 12 and 16 for the Householder network; not remeasured at Mid and High.
 
 ## Known differences
 
@@ -773,12 +801,9 @@ What is further off, and why it is left:
   cases are 1 dB quiet to 0.15 s. The network Lowpass at 1 kHz is 1 to 1.7 dB quiet to 0.5 s; whether the network's input passes the
   damping once (Decision 13) was not read for this network and is kept. Below 100 Hz the
   simulation matches Live to only −24 dB. The other Densities run the Householder network.
-- **Density Low's Low-Pass** (Decision 13): Live's network input passes one whole one-pole at
-  the set frequency, and its loop then loses much less per second than this device's per-trip
-  one-pole (at 1 kHz, 16 kHz falls about 80 dB/s against this device's 110 to 130), unevenly
-  between the sides, so it sits in some lines and not others. With white noise the Low-Pass 1 kHz
-  case is 1.4 to 7.7 dB dark from 2.8 to 16 kHz. Neither a whole input pass with this device's
-  loop nor a fitted weaker loop matched; reading it needs bare-network Low-Pass renders.
+- **Density Mid and High** (Decision 28) are read at Size 100 only; at other Sizes their lines'
+  lengths, and under Smooth Fast and Slow their lengths and loss of the highs, are Low's laws
+  applied to lines not measured there, and their damping is Low's, not read.
 - **Smooth Fast beyond what was read** (Density Low, Decision 27). Fast's lengths were read at
   Size 1.53, 10.54 and 100, Scale 40 % (and 5 and 100 % at Size 1.53), so its constants are
   sure only there; its entry was read at Shape 0.5 only. With Hi Cut on Live's Fast moves the
@@ -866,8 +891,8 @@ What is further off, and why it is left:
 ## Cost
 
 One instance at its defaults: 2.8 to 3.2 % of one core at 48 kHz (60 s rendered in 1.7 to 1.9 s,
-release build, Apple M-series, 2026-10-30); 2.4 % with Spin off, 2.3 % at Density Sparse, 4.0 %
-at Mid and 4.7 % at High, measured with noise in; see Decision 16. Run `cargo test --release -p
+release build, Apple M-series, 2026-10-30); 2.4 % with Spin off, 2.3 % at Density Sparse, measured with noise in; see Decision 16 (Mid and High
+run the measured network since Decision 28 and have not been remeasured). Run `cargo test --release -p
 suhina-device-reverb cost -- --ignored --nocapture` to measure it.
 
 ## Tests
