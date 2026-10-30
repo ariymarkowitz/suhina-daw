@@ -849,15 +849,24 @@ Each entry: what was chosen, what it costs, why.
     loud at 8 kHz before, are within 0.17 dB from 0.15 to 1 s, and 16 kHz within 0.3 dB; Mid's 4
     kHz from 0.15 to 0.5 s went from within 0.1 dB to 0.3 to 0.5 dB quiet.
 
+34. **Sparse's filtered reflections are one low-passed copy each too,** solved as Mid's and High's
+    (Decision 32) from `reverb-er-decay sparse-decay-60s`: four families, 1640, 2336, 2984 and
+    3192 frames after the four direct taps, the copy's shape left free coming out as the
+    reflections' low-pass (0.535, 1, 0.402, −0.057), the direct taps at exactly the table's 1.5008
+    once the fade is taken out. No other family improves the fit, neither those of the other
+    Densities nor any found by searching the remainder, whose only copies are the first arrivals
+    of the network (4416, 5504 and 5851 frames) at Diffuse's minimum. The table had read each copy
+    as two taps two frames apart, as Mid's and High's had. Against Live's reflections alone the
+    first 140 ms went from −17 to −23 dB to −35 to −42 dB at every Decay, from 0.2 to 0.9 dB dark at
+    8 kHz to within 0.1 dB in every octave, and at Size 1.53 and 10.54 every window with
+    reflections in it to −36 to −42 dB.
+
 ## Known differences
 
 - **Hi Cut's delay under Smooth None.** In `reverb-er-decay`, Low's and Mid's reflections at 1.2 s
   with Hi Cut on come at the same frames as with it off, where this device adds Decision 24's 8.0
   frames; 8 frames later they match Live's to −39 and −43 dB. What sets Live's delay (Smooth, the
   band's settings) was not read.
-- **Sparse's filtered reflections** are still read as pairs two frames apart (as Mid's and High's
-  were before Decision 32): against `reverb-er-decay` they match to −17 to −23 dB from 0.83 s up,
-  0.2 to 0.9 dB dark at 8 kHz.
 
 Measured against Live's renders of the same sets imported and rendered by `suhina-cli render` at
 44.1 kHz: energy in five windows of the impulse response (0–0.15, 0.15–0.5, 0.5–1, 1–2, 2–4 s),
