@@ -1614,8 +1614,18 @@ impl Device for Reverb {
             // than that (Live's is a frame early at Shape 0) reads the feed line sooner instead.
             let group_delay = t.entry.max(2.0);
             let group_whole = group_delay.round();
+            // Spin's reflections are read between frames by linear interpolation, as Live's: on
+            // white noise Live's lose 0.4 dB at 6 kHz to 1.6 at 15 kHz as soon as Spin moves them,
+            // at any speed, which is linear's loss against a cubic read within 0.2 dB
+            // (`reverb-texture` spin-*, `reverb-spin-grid`; their static reflections match).
             let read_from = |line: &DelayLine, at: f64| {
-                f64::from(if whole { line.read(at.round() as usize) } else { line.read_hermite(at) })
+                f64::from(if whole {
+                    line.read(at.round() as usize)
+                } else if spin_swing > 0.0 {
+                    line.read_linear(at)
+                } else {
+                    line.read_hermite(at)
+                })
             };
             // Direct and filtered reflections, left and right; each direct one also feeds the
             // network's group it belongs to.

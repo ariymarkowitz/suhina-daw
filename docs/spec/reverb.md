@@ -310,8 +310,14 @@ Each entry: what was chosen, what it costs, why.
    trips. Hearing every other line on each side, the sides correlate by 0.24 (Live's 0.25; 0.29
    with every line on both sides) and the ripple is 2.6 dB instead of 3.1. Cost: 2N operations
    instead of N·log N, less.
-4. **Cubic interpolation for the taps, the lines and their allpasses.** Linear interpolation
-   would save about 0.8 % of a core but dulls and modulates the highs while Spin or Chorus moves.
+4. **Cubic interpolation for the lines and their allpasses, linear for Spin's taps.** Linear
+   interpolation would save about 0.8 % of a core but dulls and modulates the highs while Chorus
+   moves the lines. Live reads Spin's reflections linearly, though: on white noise its
+   reflections lose 0.4 dB at 6 kHz, 0.8 at 9, 1.1 at 11, 1.3 at 13 and 1.6 at 15 kHz as soon as
+   Spin moves them, slowly or fast (`reverb-texture` spin-*, `reverb-spin-grid`), against static
+   reflections that match within 0.2 dB; linear interpolation's loss against a cubic read is
+   0.47, 0.93, 1.23, 1.48 and 1.64 dB there (a B-spline's 1.0 to 5.4). With linear reads those
+   cases are within 0.1 to 0.3 dB of Live's in every band to 16 kHz.
    Without Spin, and with nothing moving, the taps are read at whole frames, and once settled the
    lines' allpasses are whole frames too (fractional ones in the loop cut the 8 kHz octave's decay
    time by 10 to 38 %).
@@ -935,15 +941,14 @@ What is further off, and why it is left:
   reflection, at every Size (`reverb-structure size-*-er` against `reverb-size size-*-er`); this
   device's Fast keeps None's times. At `reverb-decay decay-60s` the waveform drifts 2 frames
   from Live's over 4 s, and 16 to 20 kHz ends 1 to 3 dB dark from 5 s.
-- **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
-  the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
-  reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's
-  cubic reads do not reproduce. On white noise (`reverb-modulation-density`, reflections alone,
-  Hi Cut on) the highs from 6 to 12 kHz rise and fall at Spin's rate as Live's do (1.1 to 2.1 dB
-  at Amount 55 and 1.3 Hz), but above 12 kHz by 2.7 to 5.7 dB against Live's 0.7 to 1.6: at that
-  speed Live's reflections carry a flat floor of noise from 16 to 22 kHz (−27 to −30 dB against
-  1 kHz, none at Amount 17.5 and 0.3 Hz), which fills in the dips, and it rises and falls at twice
-  the rate (1.5 to 2.3 dB). A windowed-sinc read in place of the cubic one changes neither.
+- **Fast Spin's top octave.** Live's moving reflections carry a flat floor of noise from 16 to
+  22 kHz whose level follows Spin's speed (Amount times Rate 5.25, 16.5, 22.75 and 71.5 give −50.6,
+  −41.4, −38.5 and −29.0 dB against 1 kHz on white noise, within 0.8 dB of a level proportional to
+  the speed, and steady over the render), which this device's reads do not make. Above 12 kHz it
+  fills in the dips Spin's Doppler shift makes, so there Live's highs rise and fall at Spin's rate
+  by 0.4 to 1.3 dB at Amount 55 and 1.3 Hz against 2.3 to 4.7 here (`reverb-modulation-density`;
+  from 6 to 12 kHz both are 1.1 to 2.5 dB). Holding Spin's LFO for blocks of 64 to 1024 frames
+  makes a floor at slow speeds too, where Live has none; a windowed-sinc read changes nothing.
 - **The tail's echoes thicken differently from Live's:** its kurtosis is 26 from 100 to 150 ms,
   5.8 from 150 to 200 and 3.0 (noise) from 200 to 400 ms, Live's 15, 10.5 and 4; from 50 to 250
   ms it has about four fifths of Live's strong clicks per second, and from 150 to 900 ms a third
