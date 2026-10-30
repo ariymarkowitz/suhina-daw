@@ -749,9 +749,16 @@ What is further off, and why it is left:
   are now 0.5 to 1.2 dB loud from 1 s (0.3 to 0.9 before). Live's Fast also moves the
   reflections earlier than None's, by 4 frames on the left and by 4 or 9 to 10 on the right
   depending on the reflection, at every Size from 0.22 to 500 (`reverb-structure size-*-er`
-  against `reverb-size size-*-er`); this device's Fast keeps None's times. How Fast reads the
-  lines (whose delays already run up to 11 frames short, Decision 19) was not read sample by
-  sample.
+  against `reverb-size size-*-er`); this device's Fast keeps None's times. With Hi Cut off
+  (`reverb-network-fast`) Fast leaves the reflections alone, so those shifts come with Hi Cut on.
+  Read sample by sample there, Fast's first passes keep None's levels, but every line is 5 to 19
+  frames shorter, following the same constants without the 8-frame blocks; the allpasses are
+  whole frames, and A's and B's delays keep a fraction of a frame read by linear
+  interpolation. After the first passes Live's lengths keep moving (the strongest repeat
+  shortens by 4 frames over 8 s at Size 1.53 and wanders ±0.3 frame), so a fixed network with
+  those fractions loses the highs too fast (late 8 to 16 kHz −5.7 dB/s against the mids, Live
+  −2.0, at Size 1.53). Slow renders exactly as Fast. How the lengths move was not read, so this
+  device keeps its fitted loss for Fast.
 - **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
   the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
   reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's
