@@ -51,8 +51,8 @@ const BLOCK: f64 = 8.0;
 /// takes in its family's offset and R's A's delay and G's, each as one rounded length (the lengths
 /// read at Size 1.53 to 100, and at Size 0.222 C's 82 blocks and R's 160, where rounding the parts
 /// on their own gives 83 and 159). Smooth Fast is below. Each is the middle of what both laws'
-/// reads allow.
-const DELAYS: [f64; LOOP] = [287.0993, 340.0779, 628.7004, 459.9281, 846.6372, 1220.5399];
+/// reads allow; R's also with its 1854 blocks at Size 350 (`reverb-network-size-level`).
+const DELAYS: [f64; LOOP] = [287.0993, 340.0779, 628.7004, 459.9281, 846.6372, 1220.5524];
 /// Where a delay rounds up to its next block (blocks): every read fits 0.813 to 0.901.
 const DELAY_EDGE: f64 = 0.85;
 /// Each line's allpass, A, B, C, D, F and R, in blocks per % of Scale in the reference room, under
@@ -181,8 +181,11 @@ pub(crate) const FAMILY_COUNT: usize = 10;
 /// every Density (`reverb-network-small`, `reverb-network-density`, `reverb-network-density-size`):
 /// at Size 500 the 401, 3193, 961 and 2393 families peak 681, 5457, 1649 and 4097 frames after
 /// their direct reflections, a block before where rounding to the nearest block would put them.
+/// The 401 and 3193 families' also fit Low's reflections at Size 250 to 450
+/// (`reverb-network-size-level`): the 401 family 537 and 601 frames at 250 and 350, the 3193
+/// family 4337 and 4609 at 250 and 300, each a block from where the other reads alone put them.
 const FAMILY_LENGTHS: [f64; FAMILY_COUNT] =
-    [49.605, 398.8205, 205.0785, 167.0725, 372.9605, 292.1465, 120.18, 259.126, 299.2948, 311.8546];
+    [49.5665, 398.9223, 205.0785, 167.0725, 372.9605, 292.1465, 120.18, 259.126, 299.2948, 311.8546];
 /// Where a family rounds up to its next block under Smooth None (blocks): every read fits 0.5 to
 /// 0.9.
 const FAMILY_EDGE: f64 = 0.7;
@@ -254,17 +257,20 @@ const FRONT_SECONDS: f64 = 0.2;
 /// give 0.64), and matches Live's render to −39 dB over 0.07 to 0.3 s and −36 dB to 1 s. D's and
 /// the 2073 family's split between their two allpasses was read again at Size 10.54, Scale 40 and
 /// 100 %, Diffusion 30 and 60 % (`reverb-network-density-split`), where a block moved between them.
+/// The 3193, 2337, 961 and 2497 families' lines also fit Mid's and High's tails at Size 300 and
+/// 400 (`reverb-network-size-level`), where each is a block shorter at 400 than the other reads
+/// alone allow; each is the middle of what every read, None, Fast and Diffusion 60 %, allows.
 const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
     [1184.4905, 0.6886, 12.7517],
-    [442.6705, 1.1045, 3.7123],
+    [442.6705, 1.1039, 3.7124],
     [436.2265, 1.3804, 5.9511],
     [1026.769, 1.7356, 3.4461],
     [356.0745, 2.4623, 5.7064],
-    [560.7845, 0.7399, 8.3358],
-    [621.4635, 2.9624, 3.7537],
+    [560.7478, 0.7406, 8.3358],
+    [621.4635, 2.9617, 3.7544],
     [1983.288, 0.7584, 2.6925],
     [379.8665, 0.8037, 5.6726],
-    [501.207, 1.183, 3.8067],
+    [501.2132, 1.1817, 3.8076],
 ];
 
 /// The family each of Sparse's lines takes its delay from: its own, but the last's (family C), which
@@ -1188,6 +1194,26 @@ mod tests {
     }
 
     #[test]
+    fn r_at_size_350_is_its_measured_length() {
+        // Low's tail at Size 350 (`reverb-network-size-level`) has R 1854 blocks and a frame, a
+        // block longer than the reads at Size 0.222 to 100 and 500 alone put it.
+        let room = 3.5f64.cbrt();
+        assert_eq!(length_at(5, room, 40.0, true).0, 8.0 * 1854.0 + 1.0);
+    }
+
+    #[test]
+    fn mids_and_highs_lines_are_their_measured_lengths_at_size_400() {
+        // Live's first passes less the entry (frames) at Size 400, Scale 40 %, Smooth None
+        // (`reverb-network-size-level`), where the 3193, 2337, 961 and 2497 families' lines are a
+        // block shorter than the reads at the other Sizes alone put them.
+        let room = 4.0f64.cbrt();
+        for (family, want) in [(1, 8075.0), (5, 11739.0), (6, 11315.0), (9, 8907.0)] {
+            let (line, first, second) = shared_length_at(family, family, true, room, 40.0, true, false);
+            assert_eq!(line + first + second, want, "family {family}");
+        }
+    }
+
+    #[test]
     fn under_smooth_fast_a_line_is_its_measured_loop() {
         // Live's loops under Smooth Fast (frames: each line's first pass and 5), read at each
         // (Size, Scale %) of `reverb-network-fast`.
@@ -1272,6 +1298,13 @@ mod tests {
             // `reverb-size decay-3.46s-size-500`: A and B read, the rest where a block either way
             // fits Live's tail worse.
             (500.0, [681.0, 5457.0, 2809.0, 2289.0, 5105.0, 4001.0]),
+            // Low's reflections alone at Size 250 to 400 (`reverb-network-size-level`), where the
+            // 401 family is a block shorter at 250 and 350 and the 3193 family a block longer at
+            // 250 and 300 than the reads up to 100 and at 500 alone put them.
+            (250.0, [537.0, 4337.0, 2233.0, 1817.0, 4049.0, 3177.0]),
+            (300.0, [577.0, 4609.0, 2369.0, 1929.0, 4305.0, 3377.0]),
+            (350.0, [601.0, 4849.0, 2497.0, 2033.0, 4529.0, 3553.0]),
+            (400.0, [633.0, 5065.0, 2609.0, 2121.0, 4737.0, 3713.0]),
         ];
         for (size, peaks) in measured {
             let room = (size / 100.0f64).cbrt();

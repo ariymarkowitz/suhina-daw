@@ -246,6 +246,53 @@ fn the_dry_signal_is_not_delayed_and_the_mix_is_equal_power() {
 }
 
 #[test]
+fn two_direct_reflections_land_on_lives_frames_at_every_size() {
+    // Frames from the impulse at 44.1 kHz, Predelay 2.5 ms, Stereo 120, of Low's direct
+    // reflections at 17.90 and 41.12 ms (`reverb-network-small`, `reverb-network-size-level`
+    // and `reverb-impulse-sizes`, reflections alone). Placed to fit Size 500 alone, they came a
+    // frame early at 400 and 250; `reverb-tap-frac` reads both 0.65 of a frame past a frame, and
+    // 0.55 to 0.63 fits every Size.
+    let reads: [(f64, &[(f64, f64)]); 2] = [
+        (
+            17.90,
+            &[
+                (0.222, 212.0),
+                (1.53, 305.0),
+                (10.54, 482.0),
+                (50.0, 736.0),
+                (250.0, 1181.0),
+                (300.0, 1248.0),
+                (350.0, 1308.0),
+                (400.0, 1363.0),
+                (450.0, 1413.0),
+                (500.0, 1459.0),
+            ],
+        ),
+        (
+            41.12,
+            &[
+                (50.0, 1549.0),
+                (250.0, 2571.0),
+                (300.0, 2725.0),
+                (350.0, 2863.0),
+                (400.0, 2988.0),
+                (450.0, 3103.0),
+                (500.0, 3210.0),
+            ],
+        ),
+    ];
+    for (near, frames) in reads {
+        let tap =
+            TAPS_LOW.iter().find(|t| !t.filtered && (t.ms - near).abs() < 0.01).expect("a direct reflection there");
+        for &(size, want) in frames {
+            let room = (size / REFERENCE_SIZE).cbrt();
+            let at = 0.0025 * 44_100.0 + tap.ms * room * 44.1 + TAP_OFFSET_SECONDS * 44_100.0;
+            assert_eq!(at.round(), want, "{} ms at Size {size}", tap.ms);
+        }
+    }
+}
+
+#[test]
 fn the_first_reflection_arrives_after_the_predelay() {
     let sr = 48_000.0;
     for predelay in [0.0005, 0.01, 0.25] {

@@ -126,7 +126,8 @@ changes by more than half a frame a frame: faster, a line is read backwards and 
   frames, 9 to 72 ms), always on one side per pair. So they are played as one mix of the direct
   taps per offset, delayed by the offset. The ten pairs are ten *families*, the same at every
   Density (Sparse, Mid and High hear Low's six, and Mid and High four more). A family's peak is
-  `8 × floor(n × size factor + 0.7) + 1` frames after its direct tap under None, `floor(8 × n' ×
+  `8 × floor(n × size factor + 0.7) + 1` frames after its direct tap under None (read at Size 0.222
+  to 500, Low's every 50 from 250), `floor(8 × n' ×
   size factor) + 1` under Fast and Slow, with its own n and n' (blocks): under Fast it comes 0 to 6
   frames sooner.
 - **Spin** swings each direct tap's whole delay `T` (predelay included) by
@@ -178,7 +179,7 @@ orthogonal between the lines as they are heard, and each line has its own mix of
 - **Lengths.** A line's delay and allpass are whole numbers of 8-frame blocks plus a frame (Live
   builds them so). At Low: the delay is `8 × floor(y × size factor + 0.85) + 1` frames, the allpass
   `8 × floor(c × Scale × size factor + 0.9) + 1` (Scale in %), with y 287.0993, 340.0779, 628.7004,
-  459.9281, 846.6372 and 1220.5399 and c 0.63476, 1.22412, 0.87055, 3.97956, 2.18481 and 0.80455 for
+  459.9281, 846.6372 and 1220.5524 and c 0.63476, 1.22412, 0.87055, 3.97956, 2.18481 and 0.80455 for
   A, B, C, D, F and R, the same numbers as Smooth Fast's (below), rounded to blocks; each is the
   middle of what both settings' reads at Size 0.222 to 500 allow. C's delay is its family's offset
   and a plain delay, and R's is A's delay and a delay G, but each rounds as one length: at Size
@@ -190,10 +191,10 @@ orthogonal between the lines as they are heard, and each line has its own mix of
   rounded on its own at the same edges (0.85 and 0.9) and a frame. A Mid or High line of family f
   is f's delay and both of f's allpasses; High has all ten families, Mid all but 7 and 8. A Sparse
   line has one allpass, its family's shorter: F, B and R are their families', and the C line has A's
-  delay with C's allpass. y, c₁ and c₂ are A 1184.4905, 0.6886, 12.7517; B 442.6705, 1.1045, 3.7123;
-  C 436.2265, 1.3804, 5.9511; D 1026.769, 1.7356, 3.4461; F 356.0745, 2.4623, 5.7064; R 560.7845,
-  0.7399, 8.3358; and 6 to 9 621.4635, 2.9624, 3.7537; 1983.288, 0.7584, 2.6925; 379.8665, 0.8037,
-  5.6726; 501.207, 1.183, 3.8067: each fits every line's first pass at Size 0.222, 100 and 500 with
+  delay with C's allpass. y, c₁ and c₂ are A 1184.4905, 0.6886, 12.7517; B 442.6705, 1.1039, 3.7124;
+  C 436.2265, 1.3804, 5.9511; D 1026.769, 1.7356, 3.4461; F 356.0745, 2.4623, 5.7064; R 560.7478,
+  0.7406, 8.3358; and 6 to 9 621.4635, 2.9617, 3.7544; 1983.288, 0.7584, 2.6925; 379.8665, 0.8037,
+  5.6726; 501.2132, 1.1817, 3.8076: each fits every line's first pass at Size 0.222, 100, 300, 400 and 500 with
   Smooth None and Fast and at Scale 0 to 100 % at Size 100 (but Sparse's F line at Scale 0, read a
   block long). Which allpass is the shorter, and how a line's length splits between its two,
   shows only above Diffusion 0.1 % (Diffusion 30 and 60 %, where each first pass arrives as g² at
@@ -314,7 +315,10 @@ Why the device is built as it is.
   frame, either as it is or through one low-pass, and times scale with the cube root of Size. Used
   as read, the taps of the reflection-only cases land within 0.5 ms and 0.5 dB of Live's. The
   fraction of a frame is kept because Live steps each tap to the next frame at its own fraction as
-  the predelay moves; without it four taps were a frame late at most predelays.
+  the predelay moves; without it four taps were a frame late at most predelays. Two direct taps
+  (17.90 and 41.12 ms, and the filtered ones after them) sit at 0.59 of a frame rather than the
+  0.65 their predelay steps read, so that every direct tap lands on Live's frame at every Size
+  read, 0.222 to 500.
 - **Filtered taps are played as delayed mixes of the direct ones.** Reading all 178 taps of High
   on its own cost 6.9 % of a core; one mix per offset into twenty lines read at whole frames costs
   4.7 %, and is exactly what Live does (a filtered tap is its direct tap delayed again).
@@ -395,11 +399,13 @@ Measured against Live's renders of the same settings, imported and rendered by `
 
 - **Early reflections:** every tap within 0.5 ms and 0.5 dB at every Density, the first 140 ms of
   the reflections alone within −35 to −42 dB of Live's energy at Size 100 and −29 to −43 dB at
-  Size 0.222 and 500 (Low; every Density's first 200 ms at 500), −38 to −39 dB over the first
+  Size 0.222 and 500 (Low; every Density's first 200 ms at 500), −36 to −43 dB at Size 250 to 450
+  (Low), −38 to −39 dB over the first
   80 ms at Size 1.53 and 10.54 (Low, at Decay 0.2 and 1.2 s and every Diffusion and Scale), and the level within 0.1
   dB in every octave at every Decay.
 - **The network (Low):** waveform within −39 to −41 dB of Live's over the first 0.5 s and −35 dB
-  from 1 to 2 s at every Scale at Size 100, −33 to −38 dB at Sizes 1.53 to 50. Energy in windows to
+  from 1 to 2 s at every Scale at Size 100, −33 to −38 dB at Sizes 1.53 to 50, and −43 to −44 dB
+  from 0.08 to 3 s at Size 250 to 500. Energy in windows to
   4.8 s is within 0.5 dB in 941 of 1,084 cases (median 0.10 dB), and the decay time within 10 % in
   every band to 8 kHz.
 - **Sparse, Mid and High:** waveform within −37 to −41 dB of Live's at Size 100 from 0.08 to 3.5 s
@@ -408,7 +414,8 @@ Measured against Live's renders of the same settings, imported and rendered by `
   or a filter −31 to −36 dB). At Size 0.222 and
   500 under None (Diffusion 0.1 %, Decay 60 s) −36 to −40 dB to 8 s (the line levels add 0.2 to
   0.5 dB of that at Sparse and Mid, 1 to 1.3 at High); at Diffusion 60 % and Decay 0.83 s to 60 s
-  −34 to −39 dB to 3 s. The network's level is within 0.05 dB of Live's at every Density from
+  −34 to −39 dB to 3 s; Mid and High at Size 300 and 400 −36 to −40 dB to 3 s. The network's level
+  is within 0.05 dB of Live's at every Density from
   Size 0.222 to 500.
 
 ### What is further off
@@ -417,9 +424,9 @@ Measured against Live's renders of the same settings, imported and rendered by `
   where under None they do not: −29 dB by 3 s at Sparse at Size 0.222 (Mid −34, High −37), and
   −23 to −29 dB at every Density at Size 500. Their damping at Decay 1 s was not read either: at the default damping the 8 to
   16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
-- **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100, Diffusion 0.1
-  to 60 % and Decay 60 and 0.83 s; at Size 500 the waveform is within −43 dB under None, and
-  under Fast drifts to −28 dB by 3 s, not read. The Shape entry was read at Size 100 and Density
+- **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100 and 250 to
+  500 (every 50), Diffusion 0.1 to 60 % and Decay 60 and 0.83 s; between 100 and 250 only Size 200's
+  reflections were read. At Size 500 under Fast the waveform drifts to −28 dB by 3 s, not read. The Shape entry was read at Size 100 and Density
   Low only, at Shape 0, 0.25, 0.5, 0.75 and 1; that it holds at every Size is inferred from Shape
   0.5's being the same at every Size, as none of the entry is left for Size to scale.
 - **Stereo's delay** was read at 44.1 kHz only; whether it is 0.625 ms or 27.5625 frames at other
