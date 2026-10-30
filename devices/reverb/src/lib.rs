@@ -64,7 +64,7 @@ const fn tap(ms: f64, side: usize, gain: f64, filtered: bool) -> Tap {
 }
 
 // The early reflections of each Density, as measured at 44.1 kHz (docs/spec/reverb.md
-// › Decisions): times in the reference room, each a whole number of frames at 44.1 kHz plus the
+// › Early reflections): times in the reference room, each a whole number of frames at 44.1 kHz plus the
 // fraction by which Live rounds it to a frame (read from where it steps as the predelay moves by
 // tenths of a frame). A filtered reflection keeps the fraction of the direct one it follows.
 const TAPS_SPARSE: [Tap; 20] = [
@@ -387,7 +387,7 @@ const TAP_FADE_PER_SHAPE: f64 = 0.0668;
 /// (0.0565 dB per ms at 0.2 s, 0.0094 at 1.2 s).
 const PREDELAY_FADE: f64 = 0.0113;
 /// Spin swings every reflection's whole delay, predelay included, by this fraction of it per unit
-/// of Spin Amount, times [`spin_reach`] (docs/spec/reverb.md › Decisions).
+/// of Spin Amount, times [`spin_reach`] (docs/spec/reverb.md › Early reflections).
 const SPIN_FRACTION: f64 = 0.009_95;
 /// Above the knee, [`spin_reach`] is this many ms over the predelay less
 /// [`SPIN_REACH_OFFSET_MS`]: a long predelay swings by about the same 2 ms times the fraction
@@ -485,7 +485,7 @@ const REFLECTION_Q: f64 = 0.5;
 const REFLECTION_TOP: f64 = 11_980.0;
 /// ... its pole (at 44.1 kHz) above the top's by this much times `1 - exp(-t / Decay)` ...
 const REFLECTION_REACH: f64 = 1.115;
-/// ... with `t` (seconds) by Density, in Density order (`reverb-er-decay`, Decision 33).
+/// ... with `t` (seconds) by Density, in Density order (`reverb-er-decay`).
 const REFLECTION_SECONDS: [f64; 4] = [0.2092, 0.0512, 0.3200, 0.2657];
 
 /// The reflections' low-pass corner (Hz) for a Decay of `decay` seconds at Density `density`.
@@ -771,6 +771,8 @@ struct Line {
     delay: DelayLine,
     /// The allpass the line's output passes on every trip.
     diffuser: Allpass,
+    /// The second allpass after it (Mid's and High's lines).
+    second: Allpass,
     /// The line's damping.
     damper: Damper,
 }
@@ -831,6 +833,7 @@ impl Line {
     fn clear(&mut self) {
         self.delay.clear();
         self.diffuser.clear();
+        self.second.clear();
         self.damper.clear();
     }
 }

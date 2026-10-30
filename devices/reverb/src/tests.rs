@@ -74,7 +74,7 @@ fn the_tail_decays_in_the_decay_time_at_every_sample_rate() {
 #[test]
 fn the_measured_network_decays_in_the_decay_time_at_every_diffusion() {
     // Every path fades with its whole time: the allpasses' echoes and the plain delays too, so
-    // even the shortest decay falls as tuned once the first arrivals are out (Decision 20).
+    // even the shortest decay falls as tuned once the first arrivals are out.
     let sr = 44_100.0;
     for diffusion in [0.001, 0.6, 0.96] {
         let mut r = reverb(
@@ -117,6 +117,33 @@ fn the_smallest_room_still_decays_at_the_longest_decay() {
     let (early, late) = (energy(&ir, sr, 4.0, 6.0), energy(&ir, sr, 24.0, 26.0));
     let fall = 10.0 * (early / late).log10() / 20.0;
     assert!(fall > 0.8, "the tail falls {fall} dB/s from 5 to 25 s");
+}
+
+#[test]
+fn mids_lines_each_pass_two_allpasses() {
+    // At Diffusion 60 % a line's first pass keeps (1 - g²)² = 0.41 of its level at 0.1 %, as
+    // Live's does (`reverb-network-density-decay`); one allpass would keep 0.64. The left side's
+    // first arrival through the second line peaks 6684 frames after the impulse at Size 100.
+    let sr = 44_100.0;
+    let first_pass = |diffusion: f64| {
+        let mut r = reverb(
+            sr,
+            &[
+                (param::DENSITY, 2.0),
+                (param::DIFFUSION, diffusion),
+                (param::SMOOTH, 0.0),
+                (param::SIZE, 100.0),
+                (param::REFLECT, MIN_LEVEL_DB),
+                (param::STEREO, 120.0),
+                (param::HIGH_CUT, 0.0),
+                (param::HIGH_DAMPING, 0.0),
+                (param::LOW_DAMPING, 0.0),
+            ],
+        );
+        f64::from(impulse_response(&mut r, sr, 0.2)[6684][0])
+    };
+    let ratio = first_pass(0.6) / first_pass(0.001);
+    assert!((0.38..0.46).contains(&ratio), "{ratio}");
 }
 
 /// A 1 kHz sine burst, 0.2 s long, then silence, `seconds` in all.

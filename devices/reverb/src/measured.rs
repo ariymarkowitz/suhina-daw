@@ -1,8 +1,8 @@
 // Copyright (C) 2026 The Suhina contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The late reverb of Densities Low, Mid and High, as measured (docs/spec/reverb.md › Decisions
-//! 19, 24 and 27): lines mixed by one orthogonal matrix, each fed by its own mix of the direct
+//! The late reverb of Densities Low, Mid and High, as measured (docs/spec/reverb.md › Late reverb: the
+//! measured network): lines mixed by one orthogonal matrix, each fed by its own mix of the direct
 //! reflections, and each line's family of reflections heard again, low-passed, one offset later,
 //! joining that line's output in the mix. The direct reflections come in groups that reach the
 //! lines as one, and there are as many lines as groups: Low 6, Mid 8, High 10 ([`design`]).
@@ -163,13 +163,37 @@ fn front_of(offset: f64, room: f64, settled: bool) -> f64 {
 /// [`SPARSE_LENGTHS`], [`MID_LENGTHS`] or [`HIGH_LENGTHS`], for size factor `room` and Scale
 /// `percent`; the allpass is `extra` frames more than its blocks.
 fn read_length_at(row: &[f64; 7], extra: f64, room: f64, percent: f64, settled: bool) -> (f64, f64) {
-    // Blocks at the Scales read, linearly between them (and on past the last two).
+    let delay = row[0];
+    let n = read_blocks(row, percent);
+    (blocks(delay * room, 0.5, settled) + 2.0, blocks((n - delay).max(0.0) * room, 0.5, settled) + extra)
+}
+
+/// The blocks of `row` at Scale `percent`: as read at [`READ_SCALES`], linearly between them
+/// (and on past the last two).
+fn read_blocks(row: &[f64; 7], percent: f64) -> f64 {
     let at = |i: usize| (READ_SCALES[i], row[i]);
     let i = READ_SCALES.iter().rposition(|&s| s <= percent).unwrap_or(0).min(READ_SCALES.len() - 2);
     let ((s0, n0), (s1, n1)) = (at(i), at(i + 1));
-    let n = n0 + (n1 - n0) * (percent - s0) / (s1 - s0);
+    n0 + (n1 - n0) * (percent - s0) / (s1 - s0)
+}
+
+/// A line of Mid or High (frames at 44.1 kHz): its delay, then two allpasses in series, each a
+/// whole number of blocks and one frame, from its `row` of [`MID_LENGTHS`] or [`HIGH_LENGTHS`]
+/// and the shorter allpass's blocks at Scale 40 % (`shorter`), for size factor `room` and Scale
+/// `percent`. The shorter keeps its share of the Scale part at every Scale, which is not
+/// measured: only Scale 40 % was read above Diffusion 0.1 %.
+fn paired_length_at(row: &[f64; 7], shorter: f64, room: f64, percent: f64, settled: bool) -> (f64, f64, f64) {
     let delay = row[0];
-    (blocks(delay * room, 0.5, settled) + 2.0, blocks((n - delay).max(0.0) * room, 0.5, settled) + extra)
+    let part = (read_blocks(row, percent) - delay).max(0.0);
+    let first = shorter / (row[3] - delay) * part;
+    let round = |x: f64| blocks(x * room, 0.5, settled);
+    // The longer takes what the shorter leaves, so the line is as long as it was read.
+    (round(delay) + 1.0, round(first) + 1.0, round(part) - round(first) + 1.0)
+}
+
+/// A line's lengths with no second allpass.
+fn with_no_second((line, allpass): (f64, f64)) -> (f64, f64, f64) {
+    (line, allpass, 0.0)
 }
 
 /// Which group each direct reflection of Density Low belongs to, in table order.
@@ -206,7 +230,7 @@ pub(crate) const MIX: [[f64; LOOP]; LOOP] = [
 /// interpolation (0.99 of the frame and 0.01 of the next): a slight loss of the highs on every
 /// pass (0.18 dB at the top) and none of the lows. The other lines are whole. No line loses
 /// anything else on a pass: the whole tail falls with the decay's loss per second, at every Size
-/// (Decision 26). Under Smooth Fast A's and B's fractions are larger ([`FAST_DELAYS`]), and they
+/// (docs/spec/reverb.md › Design notes). Under Smooth Fast A's and B's fractions are larger ([`FAST_DELAYS`]), and they
 /// are all of Fast's loss of the highs.
 const FRACTION: [f64; LOOP] = [0.01, 0.01, 0.0, 0.0, 0.0, 0.0];
 /// The side each line is heard on (0 left, 1 right), all at one level before Stereo's rotation.
@@ -223,36 +247,50 @@ pub(crate) const ALLPASS_SECONDS: f64 = 0.45;
 /// Longest family offset (seconds, with room for Size 500).
 const FRONT_SECONDS: f64 = 0.2;
 
-/// Density Mid's and High's lines, in [`Design`] order: the delay (blocks, its length `8 n + 2`
-/// frames), then the delay and allpass together (blocks, `8 n + 3` frames) at each Scale of
-/// [`READ_SCALES`], read at Size 100 (`reverb-network-density`, first passes and the second passes
-/// through each pair of lines). The allpass is the part that grows with Scale; at other Sizes
-/// both parts take the size factor, as Low's do, which is not measured. The steps between Scales
-/// are not one rounding of a straight line (some 20 % steps are a block short), so the blocks are
-/// kept as read and joined linearly.
+/// Density Mid's and High's lines, in [`Design`] order: the delay (blocks, its length `8 n + 1`
+/// frames), then the delay and both allpasses together (blocks, `8 n + 3` frames) at each Scale
+/// of [`READ_SCALES`], read at Size 100 (`reverb-network-density`, first passes and the second
+/// passes through each pair of lines, at Diffusion 0.1 %). The allpasses are the part that grows
+/// with Scale; at other Sizes every part takes the size factor, as Low's do, which is not
+/// measured. The steps between Scales are not one rounding of a straight line (some 20 % steps
+/// are a block short), so the blocks are kept as read and joined linearly. Where the delay ends
+/// and the allpasses start shows only above Diffusion 0.1 % (`reverb-network-density-decay`,
+/// Diffusion 60 %, Scale 40 %): see [`MID_SHORTER`].
 const MID_LENGTHS: [[f64; 7]; 8] = [
-    [444.0, 468.0, 540.0, 637.0, 733.0, 829.0, 926.0],
-    [357.0, 398.0, 521.0, 684.0, 847.0, 1010.0, 1174.0],
-    [623.0, 656.0, 757.0, 892.0, 1026.0, 1160.0, 1295.0],
-    [1028.0, 1054.0, 1131.0, 1235.0, 1339.0, 1442.0, 1546.0],
-    [503.0, 527.0, 603.0, 703.0, 802.0, 902.0, 1002.0],
+    [443.0, 468.0, 540.0, 637.0, 733.0, 829.0, 926.0],
+    [356.0, 398.0, 521.0, 684.0, 847.0, 1010.0, 1174.0],
+    [622.0, 656.0, 757.0, 892.0, 1026.0, 1160.0, 1295.0],
+    [1027.0, 1054.0, 1131.0, 1235.0, 1339.0, 1442.0, 1546.0],
+    [502.0, 527.0, 603.0, 703.0, 802.0, 902.0, 1002.0],
     [437.0, 474.0, 584.0, 731.0, 877.0, 1024.0, 1171.0],
-    [562.0, 607.0, 743.0, 925.0, 1107.0, 1288.0, 1469.0],
+    [561.0, 607.0, 743.0, 925.0, 1107.0, 1288.0, 1469.0],
     [1185.0, 1253.0, 1454.0, 1723.0, 1993.0, 2261.0, 2530.0],
 ];
+/// Each Mid line's shorter allpass at Scale 40 % (blocks; the other takes the rest of the Scale
+/// part). A Mid or High line runs two allpasses in series, each with the Diffusion as its gain:
+/// at Diffusion 60 % each line's first pass comes as g² at its delay, −g(1 − g²) one allpass
+/// later and again the other allpass later, and (1 − g²)² where Diffusion 0.1 % has it (0.41 of
+/// that level; one allpass would give 0.64). Fitted line by line to Live's render
+/// (`reverb-network-density-decay mid-decay-default-diffusion-60-damping-off`): with these the
+/// network matches it to −39 dB over 0.07 to 0.3 s and −36 dB to 1 s, as close as Diffusion
+/// 0.1 % does; with one allpass a line it did not match at all (+2 dB).
+const MID_SHORTER: [f64; 8] = [45.0, 99.0, 119.0, 70.0, 48.0, 56.0, 30.0, 28.0];
 /// High's lines, as [`MID_LENGTHS`]: Mid's and two more, the second and the last.
 const HIGH_LENGTHS: [[f64; 7]; 10] = [
-    [444.0, 468.0, 540.0, 637.0, 733.0, 829.0, 926.0],
-    [381.0, 413.0, 510.0, 640.0, 770.0, 899.0, 1029.0],
-    [357.0, 398.0, 521.0, 684.0, 847.0, 1010.0, 1174.0],
-    [623.0, 656.0, 757.0, 892.0, 1026.0, 1160.0, 1295.0],
-    [1028.0, 1054.0, 1131.0, 1235.0, 1339.0, 1442.0, 1546.0],
-    [503.0, 527.0, 603.0, 703.0, 802.0, 902.0, 1002.0],
+    [443.0, 468.0, 540.0, 637.0, 733.0, 829.0, 926.0],
+    [380.0, 413.0, 510.0, 640.0, 770.0, 899.0, 1029.0],
+    [356.0, 398.0, 521.0, 684.0, 847.0, 1010.0, 1174.0],
+    [622.0, 656.0, 757.0, 892.0, 1026.0, 1160.0, 1295.0],
+    [1027.0, 1054.0, 1131.0, 1235.0, 1339.0, 1442.0, 1546.0],
+    [502.0, 527.0, 603.0, 703.0, 802.0, 902.0, 1002.0],
     [437.0, 474.0, 584.0, 731.0, 877.0, 1024.0, 1171.0],
-    [562.0, 607.0, 743.0, 925.0, 1107.0, 1288.0, 1469.0],
+    [561.0, 607.0, 743.0, 925.0, 1107.0, 1288.0, 1469.0],
     [1185.0, 1253.0, 1454.0, 1723.0, 1993.0, 2261.0, 2530.0],
-    [1985.0, 2002.0, 2054.0, 2123.0, 2192.0, 2261.0, 2330.0],
+    [1984.0, 2002.0, 2054.0, 2123.0, 2192.0, 2261.0, 2330.0],
 ];
+/// High's shorter allpasses, as [`MID_SHORTER`]: Mid's and the two more lines' (to −41 dB over
+/// 0.07 to 0.3 s and −34 to −38 dB to 1 s, `high-decay-default-diffusion-60-damping-off`).
+const HIGH_SHORTER: [f64; 10] = [45.0, 33.0, 99.0, 119.0, 70.0, 48.0, 56.0, 30.0, 28.0, 31.0];
 /// The Scales (%) of [`MID_LENGTHS`]' columns: 0 is the delay alone.
 const READ_SCALES: [f64; 7] = [0.0, 5.0, 20.0, 40.0, 60.0, 80.0, 100.0];
 
@@ -435,6 +473,9 @@ enum Laws {
     Low,
     /// Read at Size 100 at each Scale ([`read_length_at`]), the same under Smooth Fast.
     Read(&'static [[f64; 7]], f64),
+    /// The same with two allpasses a line, the shorter's blocks at Scale 40 % as given
+    /// ([`paired_length_at`]).
+    Paired(&'static [[f64; 7]], &'static [f64]),
 }
 
 /// One Density's measured network.
@@ -527,7 +568,7 @@ static SPARSE: Design = Design {
     sides: pad_sides(SPARSE_SIDES),
     fractions: [0.0; MAX_LINES],
     laws: Laws::Read(&SPARSE_LENGTHS, 0.0),
-    // The fifth that the Householder network took (Decision 17), not read from the measured one.
+    // A fifth of the Diffusion setting, not read from Live's network.
     diffusion: 0.2,
     // Fitted to the High and Low Shelves at 4 kHz, 1 kHz and 500 Hz and the default damping at
     // Size 1.53, 10.54 and 100 (`reverb-network-density-filters`); the exponent of the length came
@@ -545,7 +586,7 @@ static MID: Design = Design {
     mix: pad_rows(MID_MIX),
     sides: pad_sides(MID_SIDES),
     fractions: [0.0; MAX_LINES],
-    laws: Laws::Read(&MID_LENGTHS, 1.0),
+    laws: Laws::Paired(&MID_LENGTHS, &MID_SHORTER),
     diffusion: 1.0,
     trip_scale: 1.0,
 };
@@ -560,7 +601,7 @@ static HIGH: Design = Design {
     mix: pad_rows(HIGH_MIX),
     sides: pad_sides(HIGH_SIDES),
     fractions: [0.0; MAX_LINES],
-    laws: Laws::Read(&HIGH_LENGTHS, 1.0),
+    laws: Laws::Paired(&HIGH_LENGTHS, &HIGH_SHORTER),
     diffusion: 1.0,
     trip_scale: 1.0,
 };
@@ -622,10 +663,14 @@ pub(crate) struct Lengths {
     pub fractions: [f64; MAX_LINES],
     /// Each line's allpass (frames).
     pub allpasses: [f64; MAX_LINES],
+    /// Each line's second allpass, in series after the first (frames; 0 for none).
+    pub seconds: [f64; MAX_LINES],
     /// Each line's gain per trip through its delay.
     pub gains: [f64; MAX_LINES],
     /// Each line's allpass gain per pass through the allpass's delay.
     pub losses: [f64; MAX_LINES],
+    /// The same for the second allpass.
+    pub second_losses: [f64; MAX_LINES],
     /// Each line's share of a damping trip.
     pub trips: [f64; MAX_LINES],
     /// Each family's delay to its copy's low-pass (frames).
@@ -640,8 +685,10 @@ impl Default for Lengths {
             lines: [2.0; MAX_LINES],
             fractions: [0.0; MAX_LINES],
             allpasses: [2.0; MAX_LINES],
+            seconds: [0.0; MAX_LINES],
             gains: [0.0; MAX_LINES],
             losses: [0.0; MAX_LINES],
+            second_losses: [0.0; MAX_LINES],
             trips: [0.0; MAX_LINES],
             fronts: [1.0; MAX_LINES],
             copy_gains: [0.0; MAX_LINES],
@@ -660,8 +707,10 @@ impl Lengths {
         mix(&mut self.lines, &from.lines, &to.lines, t);
         mix(&mut self.fractions, &from.fractions, &to.fractions, t);
         mix(&mut self.allpasses, &from.allpasses, &to.allpasses, t);
+        mix(&mut self.seconds, &from.seconds, &to.seconds, t);
         mix(&mut self.gains, &from.gains, &to.gains, t);
         mix(&mut self.losses, &from.losses, &to.losses, t);
+        mix(&mut self.second_losses, &from.second_losses, &to.second_losses, t);
         mix(&mut self.trips, &from.trips, &to.trips, t);
         mix(&mut self.fronts, &from.fronts, &to.fronts, t);
         mix(&mut self.copy_gains, &from.copy_gains, &to.copy_gains, t);
@@ -689,12 +738,15 @@ impl Lengths {
         let low = design.laws == Laws::Low;
         let fast = fast && low;
         for k in 0..design.lines {
-            let (line, allpass) = match design.laws {
-                Laws::Low if fast => fast_length_at(k, room, percent, settled),
-                Laws::Low => length_at(k, room, percent, settled),
-                Laws::Read(rows, extra) => read_length_at(&rows[k], extra, room, percent, settled),
+            let (line, allpass, second) = match design.laws {
+                Laws::Low if fast => with_no_second(fast_length_at(k, room, percent, settled)),
+                Laws::Low => with_no_second(length_at(k, room, percent, settled)),
+                Laws::Read(rows, extra) => with_no_second(read_length_at(&rows[k], extra, room, percent, settled)),
+                Laws::Paired(rows, shorter) => paired_length_at(&rows[k], shorter[k], room, percent, settled),
             };
-            let (line, allpass) = (line * frames, allpass * frames);
+            let (line, allpass, second) = (line * frames, allpass * frames, second * frames);
+            self.seconds[k] = if second > 0.0 { whole(second) } else { 0.0 };
+            self.second_losses[k] = gain(second / sample_rate);
             if fast && k < 2 {
                 // Read between frames, linearly, moving or not.
                 self.lines[k] = line.floor().max(2.0);
@@ -708,7 +760,7 @@ impl Lengths {
             // as fast as the rest (as Live's tail does at every Diffusion).
             self.gains[k] = gain(line / sample_rate);
             self.losses[k] = gain(allpass / sample_rate);
-            self.trips[k] = design.trip_scale * (line + allpass) / sample_rate / trip_seconds;
+            self.trips[k] = design.trip_scale * (line + allpass + second) / sample_rate / trip_seconds;
             let front = if fast { fast_front(k, room, settled) } else { front_of(design.offsets[k], room, settled) };
             self.fronts[k] = whole(front * frames);
         }
@@ -728,6 +780,7 @@ impl Lengths {
         let line = |k: usize| match design.laws {
             Laws::Low => length_at(k, room, 100.0, false).0,
             Laws::Read(rows, extra) => read_length_at(&rows[k], extra, room, 100.0, false).0,
+            Laws::Paired(rows, shorter) => paired_length_at(&rows[k], shorter[k], room, 100.0, false).0,
         };
         (0..design.lines).map(line).fold(0.0, f64::max) * sample_rate / RATE
     }
@@ -770,6 +823,7 @@ impl Network {
             lines: std::array::from_fn(|_| Line {
                 delay: DelayLine::for_seconds(LINE_SECONDS, sample_rate),
                 diffuser: Allpass::for_seconds(ALLPASS_SECONDS, sample_rate),
+                second: Allpass::for_seconds(ALLPASS_SECONDS, sample_rate),
                 damper: Damper::default(),
             }),
             fronts: std::array::from_fn(|_| DelayLine::for_seconds(FRONT_SECONDS, sample_rate)),
@@ -850,7 +904,11 @@ impl Network {
             if n.fractions[k] != 0.0 {
                 read += n.fractions[k] * (f64::from(line.delay.read_hermite(length + 1.0)) - read);
             }
-            let y = f64::from(line.diffuser.process_lossy(read as f32, n.allpasses[k], diffusion, n.losses[k] as f32));
+            let mut y = line.diffuser.process_lossy(read as f32, n.allpasses[k], diffusion, n.losses[k] as f32);
+            if n.seconds[k] > 0.0 {
+                y = line.second.process_lossy(y, n.seconds[k], diffusion, n.second_losses[k] as f32);
+            }
+            let y = f64::from(y);
             *out = line.damper.damp(y, damping) * n.gains[k];
             if let Some(t) = tail.get_mut(d.sides[k]) {
                 *t += *out;
@@ -926,8 +984,8 @@ mod tests {
         ];
         for (k, (row, lengths)) in HIGH_LENGTHS.iter().zip(measured).enumerate() {
             for (percent, want) in [5.0, 20.0, 40.0, 60.0, 80.0, 100.0].into_iter().zip(lengths) {
-                let (line, allpass) = read_length_at(row, 1.0, 1.0, percent, true);
-                assert_eq!(line + allpass, want, "line {k} at Scale {percent} %");
+                let (line, first, second) = paired_length_at(row, HIGH_SHORTER[k], 1.0, percent, true);
+                assert_eq!(line + first + second, want, "line {k} at Scale {percent} %");
             }
         }
         // Mid's are High's but the second and the last.
