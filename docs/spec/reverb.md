@@ -142,8 +142,8 @@ changes by more than half a frame a frame: faster, a line is read backwards and 
 ### Late reverb: the measured network
 
 Live's network, identified from its renders, with a design per Density. A **line** is a delay and
-a Schroeder allpass (Diffusion as its gain), two in series at Mid and High; lines are mixed after every trip by one orthogonal
-matrix, and each line has its own mix of the direct taps as input.
+a Schroeder allpass (Diffusion as its gain), two in series at Mid and High; lines are mixed after every trip by one matrix,
+orthogonal between the lines as they are heard, and each line has its own mix of the direct taps as input.
 
 | Density | Lines | Direct taps feed | Sides (left/right) |
 |---|---|---|---|
@@ -169,6 +169,11 @@ matrix, and each line has its own mix of the direct taps as input.
 - **Families.** Each line's *family* of filtered reflections (a mix of the direct taps, one per
   line, 401 to 3193 frames after them) is heard again, low-passed like the reflections, as part of
   that line's output into the mix.
+- **Line levels.** Sparse's, Mid's and High's lines are heard at levels up to 1 % apart (the line
+  with A's delay, and High's 2073 family's, the quietest: 0.992 to 0.996 against the others' 0.999
+  to 1.004; Low's at one level). Their inputs and copies were read with these levels in them, so the device sums
+  every line at one level and runs the mix between them as `level_i × mix_ij / level_j`, orthogonal
+  between the lines taken at their levels.
 - **Lengths.** A line's delay and allpass are whole numbers of 8-frame blocks plus a frame (Live
   builds them so). At Low: the delay is `8 × floor(y × size factor + 0.85) + 1` frames, the allpass
   `8 × floor(c × Scale × size factor + 0.9) + 1` (Scale in %), with y 287.0993, 340.0779, 628.7004,
@@ -209,8 +214,9 @@ matrix, and each line has its own mix of the direct taps as input.
   (Mid's and High's A and B lines, and Sparse's B line), and the same entry.
 - **Decay.** The network is tuned to a T60 of 0.9 of the Decay setting. Every path fades with its
   whole time: each line's gain covers its delay, and its allpass loses its own delay's gain on every
-  pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`). The mix is made exactly orthogonal, so nothing
-  is lost on a pass but the decay: the late tail falls by the same dB per second at every Size.
+  pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`). The mix is made exactly orthogonal between the
+  lines at their levels, so nothing is lost on a pass but the decay: the late tail falls by the same
+  dB per second at every Size.
 - **Every Density's allpasses** take the Diffusion setting as their gain. (Sparse's once took a
   fifth of it, never read from Live: at Diffusion 0.1 % and 60 % the whole setting fits far better,
   and 0.55 or 0.65 of it worse.)
@@ -316,7 +322,7 @@ Why the device is built as it is.
 - **Nothing is lost on a pass but the decay.** Live's tail falls a fixed dB per second at every
   frequency the damping does not touch, at every Size. A loss per pass cannot be told apart from a
   loss per second at one Size, but at Size 0.222 it let the tail grow without end. The network's mix
-  is exactly orthogonal, every path fades with its whole time (an allpass holds echoes back for
+  is exactly orthogonal between the lines at their levels, every path fades with its whole time (an allpass holds echoes back for
   several of its delays, so it loses its own), and the one real loss of the highs is A's and B's
   hundredth of a frame, read by linear interpolation. This reproduces Live's tail in every band to
   within 0.1 dB per second from Size 1.53 to 100.
@@ -393,9 +399,10 @@ Measured against Live's renders of the same settings, imported and rendered by `
   from 1 to 2 s at every Scale at Size 100, −33 to −38 dB at Sizes 1.53 to 50. Energy in windows to
   4.8 s is within 0.5 dB in 941 of 1,084 cases (median 0.10 dB), and the decay time within 10 % in
   every band to 8 kHz.
-- **Sparse, Mid and High:** waveform within −37 to −39 dB of Live's at Size 100 from 0.3 to 8 s at
-  every Scale, and at Size 1.53 from 0.08 to 3 s, flat with time. At Size 0.222 and 500 under None
-  (Diffusion 0.1 %, Decay 60 s) −36 to −39 dB to 3 s; at Diffusion 60 % and Decay 0.83 s to 60 s
+- **Sparse, Mid and High:** waveform within −37 to −41 dB of Live's at Size 100 from 0.08 to 3.5 s
+  at Scale 5, 40 and 100 %, and at Size 1.53 from 0.08 to 3 s, flat with time. At Size 0.222 and
+  500 under None (Diffusion 0.1 %, Decay 60 s) −36 to −40 dB to 8 s (the line levels add 0.2 to
+  0.5 dB of that at Sparse and Mid, 1 to 1.3 at High); at Diffusion 60 % and Decay 0.83 s to 60 s
   −34 to −39 dB to 3 s. The network's level is within 0.05 dB of Live's at every Density from
   Size 0.222 to 500.
 
@@ -441,7 +448,8 @@ measure it.
 `devices/reverb/src/tests.rs`: the device contract (`device_api::conformance`); the decay time at 1
 and 3 s within 10 % at 44.1 and 96 kHz, and at 0.2 s for every Diffusion; the smallest room still
 decaying at the longest Decay; the same level at both rates; Stereo's correlation at 0, 100 and
-120; Reflect and Diffuse independent; the dry signal undelayed and the mix equal-power; Mid's lines passing two allpasses (a first pass at Diffusion 60 % keeps
+120; Reflect and Diffuse independent; the dry signal undelayed and the mix equal-power; the loop
+keeping its energy with each line at its level; Mid's lines passing two allpasses (a first pass at Diffusion 60 % keeps
 (1 − g²)² of its level); the first
 reflection after the predelay; the predelay lowering the wet signal in inverse proportion to Decay;
 the reflections' fade with Shape and Decay; Spin's reach, swing, restart and filtered taps following
