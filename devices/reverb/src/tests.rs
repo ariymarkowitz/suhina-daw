@@ -7,29 +7,6 @@ use super::*;
 
 suhina_device_api::conformance_test!(Reverb::new());
 
-#[test]
-fn the_mixing_matrix_is_orthogonal_for_every_density() {
-    for n in DENSITY_LINES {
-        for i in 0..n {
-            let mut column = [0.0f64; 16];
-            column[i] = 1.0;
-            mix_lines(&mut column, n);
-            let energy: f64 = column.iter().map(|x| x * x).sum();
-            assert!((energy - 1.0).abs() < 1e-12, "{n} lines, column {i}: {energy}");
-            assert!(column.iter().skip(n).all(|x| *x == 0.0));
-            // Every line feeds every other one.
-            assert!(column.iter().take(n).all(|x| x.abs() > 0.1), "{n}: {column:?}");
-            for j in 0..i {
-                let mut other = [0.0f64; 16];
-                other[j] = 1.0;
-                mix_lines(&mut other, n);
-                let dot: f64 = column.iter().zip(&other).map(|(a, b)| a * b).sum();
-                assert!(dot.abs() < 1e-12, "{n}: columns {i} and {j}");
-            }
-        }
-    }
-}
-
 /// A reverb at `sample_rate`, fully wet, no modulation, then `settings`.
 fn reverb(sample_rate: f64, settings: &[(usize, f64)]) -> Reverb {
     let mut r = Reverb::new();
@@ -365,7 +342,6 @@ fn every_filtered_reflection_follows_exactly_one_direct_one() {
 
 #[test]
 fn sparse_and_low_play_their_own_reflections() {
-    // Both run eight lines, so switching between them changes only the reflections.
     let mut r = reverb(44_100.0, &[(param::DENSITY, 0.0)]);
     let mut block = vec![0.0f32; 64];
     r.process(&ProcessContext::default(), &mut block);

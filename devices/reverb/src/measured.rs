@@ -442,6 +442,8 @@ pub(crate) struct Design {
     fractions: [f64; MAX_LINES],
     /// How the lines get their lengths.
     laws: Laws,
+    /// How much of the Diffusion setting the allpasses take.
+    pub diffusion: f32,
 }
 
 /// `row` padded with zeros to `M` values.
@@ -489,6 +491,7 @@ static LOW: Design = Design {
     sides: pad_sides(SIDES),
     fractions: pad(FRACTION),
     laws: Laws::Low,
+    diffusion: 1.0,
 };
 /// Sparse's network.
 static SPARSE: Design = Design {
@@ -502,6 +505,8 @@ static SPARSE: Design = Design {
     sides: pad_sides(SPARSE_SIDES),
     fractions: [0.0; MAX_LINES],
     laws: Laws::Read(&SPARSE_LENGTHS, 0.0),
+    // The fifth that the Householder network took (Decision 17), not read from the measured one.
+    diffusion: 0.2,
 };
 /// Mid's network.
 static MID: Design = Design {
@@ -515,6 +520,7 @@ static MID: Design = Design {
     sides: pad_sides(MID_SIDES),
     fractions: [0.0; MAX_LINES],
     laws: Laws::Read(&MID_LENGTHS, 1.0),
+    diffusion: 1.0,
 };
 /// High's network.
 static HIGH: Design = Design {
@@ -528,22 +534,17 @@ static HIGH: Design = Design {
     sides: pad_sides(HIGH_SIDES),
     fractions: [0.0; MAX_LINES],
     laws: Laws::Read(&HIGH_LENGTHS, 1.0),
+    diffusion: 1.0,
 };
 
-/// The measured network of Density `density` (0 Sparse to 3 High), if it has one.
-pub(crate) fn design(density: usize) -> Option<&'static Design> {
+/// The measured network of Density `density` (0 Sparse to 3 High); an unknown one runs Low's.
+pub(crate) fn design(density: usize) -> &'static Design {
     match density {
-        0 => Some(&SPARSE),
-        1 => Some(&LOW),
-        2 => Some(&MID),
-        3 => Some(&HIGH),
-        _ => None,
+        0 => &SPARSE,
+        2 => &MID,
+        3 => &HIGH,
+        _ => &LOW,
     }
-}
-
-/// Low's network, the one a [`Network`] starts with.
-pub(crate) fn low() -> &'static Design {
-    &LOW
 }
 
 /// `design`'s mixing with its rows made exactly orthonormal (Gram-Schmidt), so the loop neither

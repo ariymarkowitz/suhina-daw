@@ -171,7 +171,7 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   the left, all at one level. Damping and chorus are as below. Every path fades with
   its whole time from the input: each line's gain covers its delay, and its allpass loses its own
   delay's gain on every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`).
-- **Network, Density Sparse.** (No longer run: every Density runs a measured network, Decisions 19, 28 and 29.) 8
+- **Network, Density Sparse.** (Removed from the code: every Density runs a measured network, Decisions 19, 28 and 29; Sparse keeps its fifth of the Diffusion, which was not re-read.) 8
   lines, 18 to 77 ms long in the reference room, 1.3 times that. Each line's output passes a Schroeder allpass with the
   Diffusion as its gain (0.2 of it at Sparse) and a delay of its own,
   3.6 to 15.2 ms times Scale and the size factor, on every trip. The lines are mixed after every
