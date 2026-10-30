@@ -5,14 +5,14 @@
 //! `docs/spec/reverb.md`.
 //!
 //! ```text
-//! in -> mono sum -> roll-off, Low Cut, High Cut -> predelay line -+-> reflection taps (Spin) -> Reflect -+
-//!                                                                  |                                    +-> Stereo -> Dry/Wet
-//!                                                                  +-> direct taps -> network -> Diffuse
+//! in -> mono sum -> roll-off, Low Cut, High Cut -> predelay line -+-> direct taps (Spin) -+-> families -> Reflect -+
+//!                                                                  |                       +-------------------------+-> Stereo -> Dry/Wet
+//!                                                                  +-> direct taps -> network -> Diffuse ----------+
 //! ```
 //!
-//! The early reflections are the measured tap pattern (docs/spec/reverb.md). At every Density the
-//! late reverb is Live's own network, as measured (`measured.rs`): the direct taps feed its lines
-//! after the Shape entry.
+//! The early reflections are Live's measured direct taps, each followed by its filtered copies,
+//! one per family of the Density. The late reverb is Live's own network, as measured
+//! ([`network`]): the direct taps feed its lines after the Shape entry.
 
 use suhina_device_api::{
     DEFAULT_SAMPLE_RATE, Device, DeviceError, DeviceInfo, ParamBank, ParamInfo, ProcessContext, Role, Scale, Unit,
@@ -21,7 +21,9 @@ use suhina_device_api::{
 use suhina_dsp::biquad::BUTTERWORTH_Q;
 use suhina_dsp::{Allpass, Biquad, Coefficients, DelayLine, FirstOrder, FirstOrderCoefficients, Smoother};
 
-mod measured;
+mod network;
+
+use network::{DIRECT_TAPS, FAMILY_COUNT, FAMILY_SIDES};
 
 /// Ramp for levels, mix, stereo and most other changes.
 pub const RAMP_SECONDS: f64 = 0.02;
@@ -43,345 +45,130 @@ const REFERENCE_SIZE: f64 = 100.0;
 const LEFT: usize = 0;
 /// See [`LEFT`].
 const RIGHT: usize = 1;
-/// A reflection heard as it is read.
-const DIRECT: bool = false;
-/// A reflection heard through the reflections' low-pass ([`Reverb::reflection_filters`]).
-const FILTERED: bool = true;
 
-/// One early reflection: its time after the predelay in the reference room (ms), its side, its
-/// level against the first (before the fade) and whether it passes the reflections' low-pass.
+/// One direct reflection: its time after the predelay in the reference room (ms), its side and
+/// its level against the first (before the fade).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Tap {
     ms: f64,
     side: usize,
     gain: f64,
-    filtered: bool,
 }
 
 /// A [`Tap`].
-const fn tap(ms: f64, side: usize, gain: f64, filtered: bool) -> Tap {
-    Tap { ms, side, gain, filtered }
+const fn tap(ms: f64, side: usize, gain: f64) -> Tap {
+    Tap { ms, side, gain }
 }
 
-// The early reflections of each Density, as measured at 44.1 kHz (docs/spec/reverb.md
-// › Early reflections): times in the reference room, each a whole number of frames at 44.1 kHz plus the
-// fraction by which Live rounds it to a frame (read from where it steps as the predelay moves by
-// tenths of a frame). A filtered reflection keeps the fraction of the direct one it follows.
-// The direct reflections at 17.90 and 41.12 ms, and those that follow them, sit 0.59 of a frame
-// past a frame: between that read (0.65) and what their frames at Size 0.222 to 500 allow.
-const TAPS_SPARSE: [Tap; 20] = [
-    tap(0.0011, RIGHT, 1.5008, DIRECT),
-    tap(26.5367, LEFT, -1.5008, DIRECT),
-    tap(37.1666, RIGHT, 0.8118, FILTERED),
-    tap(41.1244, LEFT, 1.5007, DIRECT),
-    tap(52.9716, RIGHT, 1.4018, FILTERED),
-    tap(55.6475, RIGHT, 1.5007, DIRECT),
-    tap(63.7022, RIGHT, 0.0871, FILTERED),
-    tap(67.6201, LEFT, -1.2085, FILTERED),
-    tap(72.3367, LEFT, 0.5231, FILTERED),
-    tap(78.2899, RIGHT, 1.8241, FILTERED),
-    tap(79.5072, RIGHT, -0.8461, FILTERED),
-    tap(92.8130, RIGHT, 0.6035, FILTERED),
-    tap(94.0949, RIGHT, -0.1582, FILTERED),
-    tap(94.1557, LEFT, -0.0990, FILTERED),
-    tap(98.8723, LEFT, 1.9045, FILTERED),
-    tap(108.6180, RIGHT, -1.2853, FILTERED),
-    tap(108.7434, LEFT, 0.9975, FILTERED),
-    tap(113.4600, LEFT, -0.1019, FILTERED),
-    tap(123.2665, LEFT, -1.3755, FILTERED),
-    tap(127.9831, LEFT, -0.6703, FILTERED),
+// The direct reflections of each Density, and the level of each family's filtered reflection of
+// each of them (family by family, against the first direct reflection; zero where a family has
+// none), as measured at 44.1 kHz (docs/spec/reverb.md › Early reflections). Times are in the
+// reference room, each a whole number of frames at 44.1 kHz plus the fraction by which Live
+// rounds it to a frame (read from where it steps as the predelay moves by tenths of a frame). The
+// reflections at 17.90 and 41.12 ms sit 0.59 of a frame past a frame: between that read (0.65)
+// and what their frames at Size 0.222 to 500 allow.
+const TAPS_SPARSE: [Tap; 4] =
+    [tap(0.0011, RIGHT, 1.5008), tap(26.5367, LEFT, -1.5008), tap(41.1244, LEFT, 1.5007), tap(55.6475, RIGHT, 1.5007)];
+const FILTERED_SPARSE: [[f64; DIRECT_TAPS]; FAMILY_COUNT] = [
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.5231, 1.9045, -0.1019, -0.6703, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.8118, 0.0871, 1.8241, 0.6035, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [-1.2085, -0.0990, 0.9975, -1.3755, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [1.4018, -0.8461, -0.1582, -1.2853, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
 ];
-const TAPS_LOW: [Tap; 71] = [
-    tap(0.0011, RIGHT, 1.0006, DIRECT),
-    tap(7.3707, RIGHT, -1.0015, DIRECT),
-    tap(8.9580, RIGHT, 1.0133, FILTERED),
-    tap(11.4138, LEFT, 0.9997, DIRECT),
-    tap(16.3276, RIGHT, -1.0113, FILTERED),
-    tap(17.9045, LEFT, -1.0005, DIRECT),
-    tap(20.3707, RIGHT, 0.6052, FILTERED),
-    tap(26.5367, LEFT, -0.9953, DIRECT),
-    tap(26.8614, RIGHT, 0.0851, FILTERED),
-    tap(28.4206, LEFT, 0.9985, DIRECT),
-    tap(30.2732, LEFT, -0.6020, FILTERED),
-    tap(34.1757, RIGHT, -0.9989, DIRECT),
-    tap(35.4936, RIGHT, 0.0836, FILTERED),
-    tap(37.1666, RIGHT, 0.1205, FILTERED),
-    tap(37.3775, RIGHT, -0.3660, FILTERED),
-    tap(37.6428, LEFT, 0.6036, FILTERED),
-    tap(41.1244, LEFT, 0.9976, DIRECT),
-    tap(41.6859, LEFT, 0.7245, FILTERED),
-    tap(43.1326, RIGHT, -0.2250, FILTERED),
-    tap(44.5362, RIGHT, -0.1168, FILTERED),
-    tap(48.1766, LEFT, -0.3636, FILTERED),
-    tap(48.2846, RIGHT, -0.9966, DIRECT),
-    tap(48.5793, RIGHT, 0.5363, FILTERED),
-    tap(50.0813, RIGHT, 0.6059, FILTERED),
-    tap(52.9716, RIGHT, 0.2329, FILTERED),
-    tap(55.0700, RIGHT, 0.8618, FILTERED),
-    tap(55.6475, RIGHT, 0.9951, DIRECT),
-    tap(56.8088, LEFT, -0.3581, FILTERED),
-    tap(57.2415, RIGHT, 0.5709, FILTERED),
-    tap(58.6927, LEFT, -0.1423, FILTERED),
-    tap(60.3412, RIGHT, -0.2308, FILTERED),
-    tap(63.7022, RIGHT, 0.8558, FILTERED),
-    tap(64.3843, RIGHT, 0.4778, FILTERED),
-    tap(64.4478, LEFT, -0.9218, FILTERED),
-    tap(64.6044, RIGHT, -0.5960, FILTERED),
-    tap(65.5861, RIGHT, 0.8453, FILTERED),
-    tap(67.6201, LEFT, -0.6661, FILTERED),
-    tap(70.8750, RIGHT, -0.1846, FILTERED),
-    tap(71.3412, RIGHT, -0.0805, FILTERED),
-    tap(71.3965, LEFT, 0.7380, FILTERED),
-    tap(72.3367, LEFT, -0.1142, FILTERED),
-    tap(74.9897, LEFT, 0.6729, FILTERED),
-    tap(78.2899, RIGHT, 0.5238, FILTERED),
-    tap(78.5567, LEFT, -0.1164, FILTERED),
-    tap(79.0328, LEFT, 0.4080, FILTERED),
-    tap(79.5072, RIGHT, -0.1849, FILTERED),
-    tap(79.7063, LEFT, 0.1119, FILTERED),
-    tap(81.3911, RIGHT, -0.5148, FILTERED),
-    tap(81.4365, RIGHT, -0.0453, FILTERED),
-    tap(83.7494, LEFT, 0.5699, FILTERED),
-    tap(85.4501, RIGHT, -0.3523, FILTERED),
-    tap(85.5235, LEFT, 0.6592, FILTERED),
-    tap(85.9196, LEFT, 0.1134, FILTERED),
-    tap(87.1462, RIGHT, 0.5185, FILTERED),
-    tap(90.2401, LEFT, -0.7494, FILTERED),
-    tap(92.8130, RIGHT, 0.3672, FILTERED),
-    tap(94.0949, RIGHT, 0.4855, FILTERED),
-    tap(94.1557, LEFT, 0.6641, FILTERED),
-    tap(96.0396, LEFT, -0.5707, FILTERED),
-    tap(98.8723, LEFT, -0.7425, FILTERED),
-    tap(100.7562, LEFT, 0.6469, FILTERED),
-    tap(101.2551, RIGHT, -1.0155, FILTERED),
-    tap(101.7947, LEFT, 0.5313, FILTERED),
-    tap(106.5113, LEFT, 0.6654, FILTERED),
-    tap(108.6180, RIGHT, 1.0143, FILTERED),
-    tap(108.7434, LEFT, 0.4033, FILTERED),
-    tap(113.4600, LEFT, 0.5671, FILTERED),
-    tap(115.9036, LEFT, 0.4828, FILTERED),
-    tap(120.6202, LEFT, 0.3813, FILTERED),
-    tap(123.2665, LEFT, -0.4962, FILTERED),
-    tap(127.9831, LEFT, -0.3889, FILTERED),
+const TAPS_LOW: [Tap; 10] = [
+    tap(0.0011, RIGHT, 1.0006),
+    tap(7.3707, RIGHT, -1.0015),
+    tap(11.4138, LEFT, 0.9997),
+    tap(17.9045, LEFT, -1.0005),
+    tap(26.5367, LEFT, -0.9953),
+    tap(28.4206, LEFT, 0.9985),
+    tap(34.1757, RIGHT, -0.9989),
+    tap(41.1244, LEFT, 0.9976),
+    tap(48.2846, RIGHT, -0.9966),
+    tap(55.6475, RIGHT, 0.9951),
 ];
-const TAPS_MID: [Tap; 90] = [
-    tap(0.0011, RIGHT, 1.0000, DIRECT),
-    tap(7.3707, RIGHT, 1.0000, DIRECT),
-    tap(8.9580, RIGHT, -0.4317, FILTERED),
-    tap(11.4138, LEFT, 1.0000, DIRECT),
-    tap(16.3276, RIGHT, -0.1195, FILTERED),
-    tap(17.9045, RIGHT, -1.0000, DIRECT),
-    tap(20.3707, RIGHT, -0.3981, FILTERED),
-    tap(21.7698, LEFT, 0.3106, FILTERED),
-    tap(26.5367, LEFT, -1.0000, DIRECT),
-    tap(26.8614, RIGHT, 0.4319, FILTERED),
-    tap(28.4206, LEFT, 0.9999, DIRECT),
-    tap(29.1394, LEFT, -0.6956, FILTERED),
-    tap(30.2732, LEFT, 0.7252, FILTERED),
-    tap(33.1825, LEFT, -0.0172, FILTERED),
-    tap(34.1757, RIGHT, -1.0000, DIRECT),
-    tap(35.4936, RIGHT, 0.9028, FILTERED),
-    tap(37.1666, RIGHT, 0.6484, FILTERED),
-    tap(37.3775, RIGHT, -0.3047, FILTERED),
-    tap(37.6428, LEFT, 0.4949, FILTERED),
-    tap(39.6732, LEFT, -0.3105, FILTERED),
-    tap(41.1244, LEFT, 1.0000, DIRECT),
-    tap(41.6859, LEFT, -0.5185, FILTERED),
-    tap(43.1326, RIGHT, 0.1194, FILTERED),
-    tap(44.5362, RIGHT, -0.0709, FILTERED),
-    tap(48.1766, LEFT, -0.7250, FILTERED),
-    tap(48.2846, RIGHT, 0.9999, DIRECT),
-    tap(48.3054, LEFT, 0.0747, FILTERED),
-    tap(48.5793, RIGHT, 0.2397, FILTERED),
-    tap(50.0813, RIGHT, 0.4944, FILTERED),
-    tap(50.1893, LEFT, 0.9352, FILTERED),
-    tap(52.9716, RIGHT, -0.5899, FILTERED),
-    tap(55.0700, RIGHT, -0.6487, FILTERED),
-    tap(55.6475, RIGHT, 0.9999, DIRECT),
-    tap(55.9444, LEFT, 0.6954, FILTERED),
-    tap(56.5317, RIGHT, 0.1315, FILTERED),
-    tap(56.8088, LEFT, -0.4603, FILTERED),
-    tap(57.2415, RIGHT, 0.6194, FILTERED),
-    tap(58.6927, LEFT, -0.3055, FILTERED),
-    tap(60.3412, RIGHT, -0.1251, FILTERED),
-    tap(62.8931, LEFT, 0.4950, FILTERED),
-    tap(63.7022, RIGHT, 0.2295, FILTERED),
-    tap(63.9013, RIGHT, -0.4977, FILTERED),
-    tap(64.3843, RIGHT, -0.7313, FILTERED),
-    tap(64.4478, LEFT, -0.4949, FILTERED),
-    tap(64.6044, RIGHT, -0.0160, FILTERED),
-    tap(65.5861, RIGHT, -0.0302, FILTERED),
-    tap(67.6201, LEFT, -0.0920, FILTERED),
-    tap(67.9444, RIGHT, 0.4659, FILTERED),
-    tap(70.0533, LEFT, 0.0161, FILTERED),
-    tap(70.8750, RIGHT, 0.5901, FILTERED),
-    tap(71.3412, RIGHT, 0.0709, FILTERED),
-    tap(71.3965, LEFT, 0.5126, FILTERED),
-    tap(72.3367, LEFT, -0.5411, FILTERED),
-    tap(74.4351, RIGHT, -0.1319, FILTERED),
-    tap(74.9897, LEFT, 0.9311, FILTERED),
-    tap(77.4162, LEFT, -0.4359, FILTERED),
-    tap(78.2899, RIGHT, 0.4650, FILTERED),
-    tap(78.5567, LEFT, 0.3687, FILTERED),
-    tap(79.0328, LEFT, 0.2723, FILTERED),
-    tap(79.5072, RIGHT, -0.4578, FILTERED),
-    tap(79.7063, LEFT, 0.1315, FILTERED),
-    tap(81.3911, RIGHT, 0.0127, FILTERED),
-    tap(83.0673, RIGHT, 0.0900, FILTERED),
-    tap(83.7494, LEFT, 0.7646, FILTERED),
-    tap(84.9512, RIGHT, -0.8341, FILTERED),
-    tap(85.4501, RIGHT, -0.1003, FILTERED),
-    tap(85.5235, LEFT, 0.0918, FILTERED),
-    tap(85.9196, LEFT, -0.3907, FILTERED),
-    tap(87.1462, RIGHT, 0.1252, FILTERED),
-    tap(90.2401, LEFT, 0.5408, FILTERED),
-    tap(90.7063, RIGHT, 0.4976, FILTERED),
-    tap(92.8130, RIGHT, 1.0641, FILTERED),
-    tap(94.0949, RIGHT, 0.5213, FILTERED),
-    tap(94.1557, LEFT, 0.5024, FILTERED),
-    tap(96.0396, LEFT, 0.3676, FILTERED),
-    tap(97.6550, RIGHT, 0.3885, FILTERED),
-    tap(98.8723, LEFT, -0.5835, FILTERED),
-    tap(100.7562, LEFT, 0.0546, FILTERED),
-    tap(101.2551, RIGHT, -0.6395, FILTERED),
-    tap(101.7947, LEFT, -0.9311, FILTERED),
-    tap(104.8152, RIGHT, -0.5687, FILTERED),
-    tap(106.5113, LEFT, -0.1316, FILTERED),
-    tap(108.6180, RIGHT, 0.3267, FILTERED),
-    tap(108.7434, LEFT, 0.3900, FILTERED),
-    tap(112.1781, RIGHT, -0.4850, FILTERED),
-    tap(113.4600, LEFT, 0.5936, FILTERED),
-    tap(115.9036, LEFT, -0.5791, FILTERED),
-    tap(120.6202, LEFT, 0.5456, FILTERED),
-    tap(123.2665, LEFT, -0.2662, FILTERED),
-    tap(127.9831, LEFT, 0.0858, FILTERED),
+// Low's filtered reflections are its network's line inputs as heard (`network::HEARD_COPY`), not
+// its own read taps: they match Live's reflections and tail more closely.
+const FILTERED_LOW: [[f64; DIRECT_TAPS]; FAMILY_COUNT] = [
+    [1.0046, -1.0055, 0.6008, 0.0880, 0.0876, -0.3697, -0.2277, 0.5996, 0.5789, -0.5780],
+    [-0.1137, 0.1138, 0.5670, -0.7464, -0.7425, 0.6401, 0.6626, 0.5658, 0.3845, -0.3839],
+    [0.1224, -0.1226, 0.5327, 0.8629, 0.8584, 0.8568, -0.0886, 0.5316, -0.3712, 0.3706],
+    [-0.6059, 0.6064, 0.7324, -0.3616, -0.3598, -0.1434, -0.9257, 0.7309, -0.1136, 0.1135],
+    [-0.6745, 0.6751, 0.4080, 0.6666, 0.6632, -0.5739, 0.5313, 0.4072, 0.4912, -0.4905],
+    [0.2339, -0.2341, 0.4853, -0.1921, -0.1911, -0.5374, 0.5163, 0.4842, -1.0149, 1.0133],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
 ];
-const TAPS_HIGH: [Tap; 108] = [
-    tap(0.0011, RIGHT, 1.0000, DIRECT),
-    tap(7.3707, RIGHT, 1.0000, DIRECT),
-    tap(8.9580, RIGHT, -0.6668, FILTERED),
-    tap(11.4138, LEFT, 1.0000, DIRECT),
-    tap(16.3276, RIGHT, -0.1437, FILTERED),
-    tap(17.9045, LEFT, -1.0002, DIRECT),
-    tap(20.3707, RIGHT, -0.0629, FILTERED),
-    tap(21.7698, LEFT, 0.6719, FILTERED),
-    tap(26.5367, LEFT, -1.0000, DIRECT),
-    tap(26.8614, RIGHT, 0.8160, FILTERED),
-    tap(28.4206, LEFT, 0.9998, DIRECT),
-    tap(29.1394, LEFT, -0.2095, FILTERED),
-    tap(30.2732, LEFT, 0.0201, FILTERED),
-    tap(33.1825, LEFT, -0.4210, FILTERED),
-    tap(34.1757, RIGHT, -1.0000, DIRECT),
-    tap(35.4936, RIGHT, -0.6538, FILTERED),
-    tap(37.1666, RIGHT, -0.4857, FILTERED),
-    tap(37.3775, RIGHT, -0.0838, FILTERED),
-    tap(37.6428, LEFT, -0.7228, FILTERED),
-    tap(39.6732, LEFT, 0.3561, FILTERED),
-    tap(41.1244, LEFT, 1.0000, DIRECT),
-    tap(41.6859, LEFT, -0.3483, FILTERED),
-    tap(43.1326, RIGHT, -0.1165, FILTERED),
-    tap(44.5362, RIGHT, 0.1872, FILTERED),
-    tap(46.9626, RIGHT, -0.0427, FILTERED),
-    tap(48.1766, LEFT, 0.5178, FILTERED),
-    tap(48.2846, RIGHT, 1.0000, DIRECT),
-    tap(48.3054, LEFT, -0.6232, FILTERED),
-    tap(48.5793, RIGHT, -0.2408, FILTERED),
-    tap(50.0813, RIGHT, 0.2255, FILTERED),
-    tap(50.1893, LEFT, 0.3210, FILTERED),
-    tap(52.9716, RIGHT, 0.3623, FILTERED),
-    tap(54.2415, LEFT, -0.4708, FILTERED),
-    tap(54.3322, RIGHT, -0.4897, FILTERED),
-    tap(55.0700, RIGHT, -0.3882, FILTERED),
-    tap(55.6475, RIGHT, 1.0000, DIRECT),
-    tap(55.9444, LEFT, -0.3266, FILTERED),
-    tap(56.5317, RIGHT, -0.5626, FILTERED),
-    tap(56.8088, LEFT, 0.5493, FILTERED),
-    tap(57.2415, RIGHT, 0.3069, FILTERED),
-    tap(58.3753, RIGHT, 0.3989, FILTERED),
-    tap(58.6927, LEFT, -0.1218, FILTERED),
-    tap(60.3412, RIGHT, -0.2285, FILTERED),
-    tap(61.6111, LEFT, -0.5851, FILTERED),
-    tap(62.8931, LEFT, -0.2049, FILTERED),
-    tap(63.7022, RIGHT, -0.1026, FILTERED),
-    tap(63.9013, RIGHT, -0.2564, FILTERED),
-    tap(64.3843, RIGHT, 0.7793, FILTERED),
-    tap(64.4478, LEFT, 0.5763, FILTERED),
-    tap(64.6044, RIGHT, 0.4120, FILTERED),
-    tap(64.8660, RIGHT, -0.3442, FILTERED),
-    tap(65.5861, RIGHT, 0.6148, FILTERED),
-    tap(65.6542, LEFT, -0.3286, FILTERED),
-    tap(67.6201, LEFT, -0.0314, FILTERED),
-    tap(67.9444, RIGHT, 0.3512, FILTERED),
-    tap(70.0533, LEFT, 0.0252, FILTERED),
-    tap(70.8750, RIGHT, 0.3540, FILTERED),
-    tap(71.3412, RIGHT, 0.4628, FILTERED),
-    tap(71.3965, LEFT, 0.3938, FILTERED),
-    tap(72.1449, LEFT, -0.1239, FILTERED),
-    tap(72.3367, LEFT, 0.3059, FILTERED),
-    tap(73.4982, RIGHT, -0.4179, FILTERED),
-    tap(74.4351, RIGHT, -0.1747, FILTERED),
-    tap(74.9897, LEFT, -0.2769, FILTERED),
-    tap(75.3821, RIGHT, 0.6754, FILTERED),
-    tap(77.4162, LEFT, -0.6771, FILTERED),
-    tap(78.2899, RIGHT, 0.4663, FILTERED),
-    tap(78.5567, LEFT, -0.3523, FILTERED),
-    tap(79.0328, LEFT, 0.6985, FILTERED),
-    tap(79.5072, RIGHT, 0.4578, FILTERED),
-    tap(79.7063, LEFT, -0.7069, FILTERED),
-    tap(80.7771, LEFT, 0.3855, FILTERED),
-    tap(81.1372, RIGHT, -0.0900, FILTERED),
-    tap(81.3911, RIGHT, 0.3675, FILTERED),
-    tap(82.6610, LEFT, 0.4733, FILTERED),
-    tap(83.7494, LEFT, -0.2268, FILTERED),
-    tap(84.9512, RIGHT, -0.5390, FILTERED),
-    tap(85.4501, RIGHT, 0.5408, FILTERED),
-    tap(85.5235, LEFT, 0.0384, FILTERED),
-    tap(85.9196, LEFT, -0.2411, FILTERED),
-    tap(87.1462, RIGHT, -0.3262, FILTERED),
-    tap(88.0859, RIGHT, 0.3630, FILTERED),
-    tap(88.4161, LEFT, -0.3302, FILTERED),
-    tap(90.2401, LEFT, -0.6291, FILTERED),
-    tap(90.7063, RIGHT, -0.6032, FILTERED),
-    tap(92.8130, RIGHT, -0.5526, FILTERED),
-    tap(94.0949, RIGHT, 0.3103, FILTERED),
-    tap(94.1557, LEFT, -0.3848, FILTERED),
-    tap(95.2461, RIGHT, -0.7236, FILTERED),
-    tap(95.3648, LEFT, -0.8169, FILTERED),
-    tap(96.0396, LEFT, -0.1344, FILTERED),
-    tap(97.6550, RIGHT, 0.1400, FILTERED),
-    tap(98.8723, LEFT, -0.2988, FILTERED),
-    tap(100.7562, LEFT, -0.5208, FILTERED),
-    tap(101.2551, RIGHT, 0.6584, FILTERED),
-    tap(101.7947, LEFT, 0.8028, FILTERED),
-    tap(102.5250, LEFT, 0.2067, FILTERED),
-    tap(102.6090, RIGHT, 0.2912, FILTERED),
-    tap(104.8152, RIGHT, -0.2000, FILTERED),
-    tap(108.6180, RIGHT, -0.0275, FILTERED),
-    tap(108.7434, LEFT, -0.6665, FILTERED),
-    tap(109.8879, LEFT, 0.1370, FILTERED),
-    tap(112.1781, RIGHT, -0.8052, FILTERED),
-    tap(113.4600, LEFT, 0.2707, FILTERED),
-    tap(115.9036, LEFT, 0.1176, FILTERED),
-    tap(120.6202, LEFT, 0.5770, FILTERED),
-    tap(123.2665, LEFT, -0.2507, FILTERED),
-    tap(127.9831, LEFT, 0.3007, FILTERED),
+const TAPS_MID: [Tap; 10] = [
+    tap(0.0011, RIGHT, 1.0000),
+    tap(7.3707, RIGHT, 1.0000),
+    tap(11.4138, LEFT, 1.0000),
+    tap(17.9045, RIGHT, -1.0000),
+    tap(26.5367, LEFT, -1.0000),
+    tap(28.4206, LEFT, 0.9999),
+    tap(34.1757, RIGHT, -1.0000),
+    tap(41.1244, LEFT, 1.0000),
+    tap(48.2846, RIGHT, 0.9999),
+    tap(55.6475, RIGHT, 0.9999),
+];
+const FILTERED_MID: [[f64; DIRECT_TAPS]; FAMILY_COUNT] = [
+    [-0.4317, -0.1195, -0.3981, 0.4319, 0.9028, -0.3047, 0.1194, 0.4944, 0.6194, -0.0160],
+    [-0.5411, 0.1315, 0.7646, 0.5408, -0.5835, 0.0546, -0.1316, 0.5936, 0.5456, 0.0858],
+    [0.6484, -0.0709, 0.2397, -0.6487, 0.2295, -0.0302, 0.0709, 0.4650, -0.1003, 1.0641],
+    [0.7252, 0.4949, -0.5185, -0.7250, -0.4603, -0.3055, -0.4949, 0.5126, 0.3687, -0.3907],
+    [-0.0920, 0.9311, 0.2723, 0.0918, 0.5024, 0.3676, -0.9311, 0.3900, -0.5791, -0.2662],
+    [-0.5899, -0.1251, -0.7313, 0.5901, -0.4578, 0.0127, 0.1252, 0.5213, -0.6395, 0.3267],
+    [0.3106, -0.6956, -0.0172, -0.3105, 0.0747, 0.9352, 0.6954, 0.4950, 0.0161, -0.4359],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
+    [0.1315, -0.4977, 0.4659, -0.1319, 0.0900, -0.8341, 0.4976, 0.3885, -0.5687, -0.4850],
+];
+const TAPS_HIGH: [Tap; 10] = [
+    tap(0.0011, RIGHT, 1.0000),
+    tap(7.3707, RIGHT, 1.0000),
+    tap(11.4138, LEFT, 1.0000),
+    tap(17.9045, LEFT, -1.0002),
+    tap(26.5367, LEFT, -1.0000),
+    tap(28.4206, LEFT, 0.9998),
+    tap(34.1757, RIGHT, -1.0000),
+    tap(41.1244, LEFT, 1.0000),
+    tap(48.2846, RIGHT, 1.0000),
+    tap(55.6475, RIGHT, 1.0000),
+];
+const FILTERED_HIGH: [[f64; DIRECT_TAPS]; FAMILY_COUNT] = [
+    [-0.6668, -0.1437, -0.0629, 0.8160, -0.6538, -0.0838, -0.1165, 0.2255, 0.3069, 0.4120],
+    [0.3059, -0.7069, -0.2268, -0.6291, -0.2988, -0.5208, 0.0000, 0.2707, 0.5770, 0.3007],
+    [-0.4857, 0.1872, -0.2408, -0.3882, -0.1026, 0.6148, 0.4628, 0.4663, 0.5408, -0.5526],
+    [0.0201, -0.7228, -0.3483, 0.5178, 0.5493, -0.1218, 0.5763, 0.3938, -0.3523, -0.2411],
+    [-0.0314, -0.2769, 0.6985, 0.0384, -0.3848, -0.1344, 0.8028, -0.6665, 0.1176, -0.2507],
+    [0.3623, -0.2285, 0.7793, 0.3540, 0.4578, 0.3675, -0.3262, 0.3103, 0.6584, -0.0275],
+    [0.6719, -0.2095, -0.4210, 0.3561, -0.6232, 0.3210, -0.3266, -0.2049, 0.0252, -0.6771],
+    [-0.0427, -0.4897, 0.3989, -0.3442, -0.4179, 0.6754, -0.0900, 0.3630, -0.7236, 0.2912],
+    [-0.4708, -0.5851, -0.3286, -0.1239, 0.3855, 0.4733, -0.3302, -0.8169, 0.2067, 0.1370],
+    [-0.5626, -0.2564, 0.3512, -0.1747, 0.0000, -0.5390, -0.6032, 0.1400, -0.2000, -0.8052],
 ];
 
-/// The tap tables in Density order.
+/// The direct reflections in Density order.
 const TAP_TABLES: [&[Tap]; 4] = [&TAPS_SPARSE, &TAPS_LOW, &TAPS_MID, &TAPS_HIGH];
-/// The most taps a table has.
-const MAX_TAPS: usize = 108;
+/// The filtered reflections in Density order.
+const FILTERED_TABLES: [&[[f64; DIRECT_TAPS]; FAMILY_COUNT]; 4] =
+    [&FILTERED_SPARSE, &FILTERED_LOW, &FILTERED_MID, &FILTERED_HIGH];
 /// The reflections are read this long after the predelay (seconds): one frame before it, as
 /// Live's are at Stereo 120 (`reverb-network-exact`); below 120 Stereo delays them
 /// ([`stereo_delay`]).
 const TAP_OFFSET_SECONDS: f64 = -1.0 / 44_100.0;
-/// Below Stereo 120 the reflections, not the tail, come later: under Smooth Fast and Slow
-/// `floor(STEREO_DELAY_FRAMES × (1 − Stereo / 120))` frames, under None that rounded up to whole
-/// 8-frame blocks (`reverb-er-stereo`: 27 and 32 frames at Stereo 0, 4 and 8 at 100). Read at
-/// 44.1 kHz; 0.625 ms.
+/// Below Stereo 120 the reflections, not the tail, come later: `STEREO_DELAY_FRAMES × (1 − Stereo /
+/// 120)` frames, [`network::rounded`] (`reverb-er-stereo`: 27 and 32 frames at Stereo 0 under Fast
+/// and None, 4 and 8 at 100). Read at 44.1 kHz; 0.625 ms.
 const STEREO_DELAY_FRAMES: f64 = 27.5625;
-/// The blocks Live rounds Stereo's delay up to under Smooth None (frames at 44.1 kHz).
-const STEREO_DELAY_BLOCK: f64 = 8.0;
 /// Level of the first reflection against the input, before the predelay's fade.
 const TAP_GAIN: f64 = 0.0942;
 /// How fast the reflections fade, in dB per ms of their delay, times the Decay setting in
@@ -425,46 +212,11 @@ const SPIN_VOICES: [(f64, f64, f64); 10] = [
 ];
 /// The rate the tap tables' frames count at.
 const REFERENCE_RATE: f64 = 44_100.0;
-/// A filtered reflection is a direct one this many frames later (reference room and rate), always
-/// heard on this side, and swings as that one does. The offsets come in pairs two frames apart,
-/// and each pair keeps to one side, as Live's renders show. So the filtered reflections are
-/// played as one delayed mix of the direct ones per offset.
-const FILTERED_OFFSETS: [(usize, usize); 20] = [
-    (395, RIGHT),
-    (397, RIGHT),
-    (960, LEFT),
-    (962, LEFT),
-    (1335, LEFT),
-    (1337, LEFT),
-    (1639, RIGHT),
-    (1641, RIGHT),
-    (2071, RIGHT),
-    (2073, RIGHT),
-    (2336, RIGHT),
-    (2338, RIGHT),
-    (2392, LEFT),
-    (2394, LEFT),
-    (2493, RIGHT),
-    (2495, RIGHT),
-    (2982, LEFT),
-    (2984, LEFT),
-    (3190, LEFT),
-    (3192, LEFT),
-];
-/// How many frames later than its table offset each family of [`FILTERED_OFFSETS`] is heard:
-/// Live's filtered reflections peak 401, 1337, 1641, 2337, 2985 and 3193 frames after their direct
-/// ones (`reverb-network-exact`, Hi Cut off), where the table's pairs, read as two taps rather than
-/// one low-passed one, put them 0 to 5 frames early. Of the families Density Low lacks, Mid's and
-/// High's reflections alone (`reverb-network-density`, Decay 60 s) peak 961, 2073, 2393 and 2497
-/// frames after theirs.
-const FILTERED_LATE: [f64; 20] =
-    [5.0, 5.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 2.0, 2.0, 2.0, 2.0];
-/// The family ([`measured::FAMILY_COUNT`]) whose peak each pair of [`FILTERED_OFFSETS`] lies about.
-const FILTERED_FAMILIES: [usize; 20] = [0, 0, 6, 6, 3, 3, 2, 2, 7, 7, 5, 5, 8, 8, 9, 9, 4, 4, 1, 1];
-/// Longest delay a filtered offset reaches, at the largest Size (seconds).
-const OFFSET_LINE_SECONDS: f64 = 0.13;
-/// Longest delay from a direct reflection to the measured network, [`measured::entry`] at Shape
-/// 1 (seconds).
+/// Longest delay from a direct reflection to its family's filtered reflection, at the largest Size
+/// (seconds).
+const FAMILY_LINE_SECONDS: f64 = 0.13;
+/// Longest delay from a direct reflection to the network, [`network::entry`] at Shape 1
+/// (seconds).
 const ENTRY_LINE_SECONDS: f64 = 0.06;
 /// Peak swing of a line's delay per unit of Chorus Amount: a 1 kHz tone through Live's tail swings
 /// 12 to 343 cents (left and right added) at five Amounts and Rates, and through Suhina's 12 to 397
@@ -496,40 +248,33 @@ fn reflection_corner(decay: f64, density: usize, room: f64) -> f64 {
 /// at it when High Cut is off.
 const TOP_CUT: f64 = 18_000.0;
 
-/// Density Low, whose late reverb is the measured network read most closely ([`measured`]): its
-/// Smooth Fast is measured, Sparse's, Mid's and High's not.
+/// Density Low: what an unknown Density plays.
 const LOW: usize = 1;
-/// Level of the measured network's input against the direct reflections': with it, each line's
-/// first pass is [`measured`]'s gain times the direct reflection it comes from,
-/// as Live's is (`reverb-network-exact`).
-const MEASURED_GAIN: f64 = 0.2383;
-/// Every Density's reflections are this much of their reference-room level at Size 0, and grow by
-/// [`LOW_SIZE_LEVEL_PER_SIZE`] per unit of Size: a pure gain on the Size 100 response, read at
-/// Sizes 0.222 to 500 for Low (`reverb-network-small`) and 1.53 to 100 for Sparse, Mid and High
-/// (`reverb-network-density-filters`). The measured network's input takes it, and
+/// Level of the network's input against the input, before the predelay's fade: with it, each
+/// line's first pass is [`network`]'s gain times the direct reflection it comes from, as Live's
+/// is (`reverb-network-exact`).
+const NETWORK_GAIN: f64 = 0.294_538_8;
+/// Every Density's reflections are `a + b × Size` of their reference-room level: a pure gain on the
+/// Size 100 response, read at Sizes 0.222 to 500 for Low (`reverb-network-small`) and 1.53 to 100
+/// for Sparse, Mid and High (`reverb-network-density-filters`). The network's input takes it, and
 /// [`NETWORK_SIZE_LEVEL`] too.
-const LOW_SIZE_LEVEL: f64 = 0.92594;
-/// How much louder the reflections are per unit of Size.
-const LOW_SIZE_LEVEL_PER_SIZE: f64 = 0.000_740_59;
-/// The measured network's input grows with Size a second time, `a + b × Size + c × Size²`, which
-/// keeps close to the reflections' own law to Size 100 and falls behind it above (0.45 dB by Size
-/// 500): read against the reflections at Low at Size 0.222 to 500 (`reverb-network-small`,
-/// `reverb-network-scale`, `reverb-network-size-level`, Size 250 to 500 in steps of 50), to 0.012
-/// dB, and the same at Mid and High at 300 and 400. A saturating `S / (1 + S / 1415)` or
-/// `ln(1 + S / 585)` fits as closely.
+const SIZE_LEVEL: (f64, f64) = (0.92594, 0.000_740_59);
+/// The network's input grows with Size a second time, `a + b × Size + c × Size²`, which keeps
+/// close to the reflections' own law to Size 100 and falls behind it above (0.45 dB by Size 500):
+/// read against the reflections at Low at Size 0.222 to 500 (`reverb-network-small`,
+/// `reverb-network-scale`, `reverb-network-size-level`), to 0.012 dB, and the same at Mid and High
+/// at 300 and 400.
 const NETWORK_SIZE_LEVEL: (f64, f64, f64) = (0.935_054, 0.000_751_857, -0.000_000_350_508);
 
-/// Level of the late reverb against the input.
-const TAIL_GAIN: f64 = 1.236;
 /// The damping filters' loss is per trip round a loop this long (seconds, reference room).
 const LOSS_TRIP_SECONDS: f64 = 0.17;
-/// The measured network's (Density Low's) shelves are cookbook shelves of this Q ...
-const MEASURED_SHELF_Q: f64 = 0.70;
+/// The damping shelves are cookbook shelves of this Q ...
+const SHELF_Q: f64 = 0.70;
 /// ... the High Shelf half way at this much of its frequency and the Low Shelf at its frequency
 /// over this: with them `reverb-network-filters` (1 kHz and 500 Hz, gain 0.2) and
 /// `reverb-network-small` (4 kHz, gain 0.4, Size 1.53 to 100) match Live's renders to −32 to −36 dB
-/// from 4 to 8 s, against −12 to −18 dB with Q 0.707 at the frequency (fitted to those three).
-const MEASURED_SHELF_SHIFT: f64 = 0.98;
+/// from 4 to 8 s, against −12 to −18 dB with Q 0.707 at the frequency.
+const SHELF_SHIFT: f64 = 0.98;
 /// Decay time the network is tuned to, against the Decay setting.
 const DECAY_RATIO: f64 = 0.9;
 /// Low Cut, as measured (`reverb-locut-law`, docs/spec/reverb.md): a first-order high-pass at
@@ -556,11 +301,11 @@ const LOW_CUT_LOWEST: f64 = 44.2;
 const RUMBLE_FREQUENCY: f64 = 127.0;
 /// ... and a second one at this frequency.
 const SUBSONIC_FREQUENCY: f64 = 19.0;
-/// The measured network (Density Low) frozen with Flat off falls this many dB per second besides
-/// its damping and A's and B's reads, and with Flat on nothing besides those reads: Live's frozen
-/// tail at 1 kHz falls 0.11 and 0.20 dB/s with Flat on and off (`reverb-freeze-static`, Smooth
-/// Fast), most of it from A's and B's fractions of a frame.
-const MEASURED_FREEZE_DRAIN_UNFLAT: f64 = 0.03;
+/// The network frozen with Flat off falls this many dB per second besides its damping and A's and
+/// B's reads, and with Flat on nothing besides those reads: Live's frozen tail at 1 kHz falls 0.11
+/// and 0.20 dB/s with Flat on and off (`reverb-freeze-static`, Smooth Fast), most of it from A's
+/// and B's fractions of a frame.
+const FREEZE_DRAIN_UNFLAT: f64 = 0.03;
 /// Inside a frozen loop that still takes input, levels above this are compressed so the tail
 /// cannot grow without end.
 const FREEZE_LIMIT: f64 = 2.0;
@@ -715,36 +460,50 @@ const PARAMS: [ParamInfo; param::COUNT] = [
 /// What the reverb is and the parameters it has.
 pub const INFO: DeviceInfo = DeviceInfo { id: "reverb", name: "Reverb", role: Role::Effect, params: &PARAMS };
 
+/// `out` set to the values `t` (0..1) of the way from `a` to `b`.
+fn lerp<const N: usize>(out: &mut [f64; N], a: &[f64; N], b: &[f64; N], t: f64) {
+    for ((o, a), b) in out.iter_mut().zip(a).zip(b) {
+        *o = a + (b - a) * t;
+    }
+}
+
 /// What the control-rate update works out for the taps and the network.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Tuning {
-    /// Each tap's delay after the predelay (frames).
-    tap_delays: [f64; MAX_TAPS],
-    /// Each tap's gain (linear).
-    tap_gains: [f64; MAX_TAPS],
-    /// Each tap's share of the network's input (zero for filtered taps).
-    feed_gains: [f64; MAX_TAPS],
-    /// Each of [`FILTERED_OFFSETS`] (frames).
-    offsets: [f64; FILTERED_OFFSETS.len()],
-    /// The measured network's lengths and gains.
-    measured: measured::Lengths,
-    /// Delay from the predelay to the measured network's input (frames).
+    /// Each direct reflection's delay after the predelay (frames).
+    tap_delays: [f64; DIRECT_TAPS],
+    /// Each direct reflection's gain (linear).
+    tap_gains: [f64; DIRECT_TAPS],
+    /// Each direct reflection's level before its own gain: what its filtered reflections are
+    /// weighed against.
+    reflection_levels: [f64; DIRECT_TAPS],
+    /// Each direct reflection's share of the network's input.
+    feed_gains: [f64; DIRECT_TAPS],
+    /// Each family's delay after its direct reflections (frames).
+    family_delays: [f64; FAMILY_COUNT],
+    /// Each family's fade over that delay.
+    family_gains: [f64; FAMILY_COUNT],
+    /// The network's lengths and gains.
+    network: network::Lengths,
+    /// Delay from the predelay to the network's input (frames).
     entry: f64,
-    /// Gain of the input into the measured network.
-    measured_feed: f64,
+    /// Gain of the input into the network.
+    network_feed: f64,
 }
 
 impl Default for Tuning {
     /// Silent taps and lines at the shortest lengths, until the first tuning.
     fn default() -> Self {
         Self {
-            tap_delays: [2.0; MAX_TAPS],
-            tap_gains: [0.0; MAX_TAPS],
-            feed_gains: [0.0; MAX_TAPS],
-            offsets: [2.0; FILTERED_OFFSETS.len()],
-            measured: measured::Lengths::default(),
+            tap_delays: [2.0; DIRECT_TAPS],
+            tap_gains: [0.0; DIRECT_TAPS],
+            reflection_levels: [0.0; DIRECT_TAPS],
+            feed_gains: [0.0; DIRECT_TAPS],
+            family_delays: [2.0; FAMILY_COUNT],
+            family_gains: [0.0; FAMILY_COUNT],
+            network: network::Lengths::default(),
             entry: 2.0,
-            measured_feed: 0.0,
+            network_feed: 0.0,
         }
     }
 }
@@ -752,18 +511,15 @@ impl Default for Tuning {
 impl Tuning {
     /// The values `t` (0..1) of the way from `from` to `to`.
     fn between(&mut self, from: &Self, to: &Self, t: f64) {
-        fn mix<const N: usize>(out: &mut [f64; N], a: &[f64; N], b: &[f64; N], t: f64) {
-            for ((o, a), b) in out.iter_mut().zip(a).zip(b) {
-                *o = a + (b - a) * t;
-            }
-        }
-        mix(&mut self.tap_delays, &from.tap_delays, &to.tap_delays, t);
-        mix(&mut self.tap_gains, &from.tap_gains, &to.tap_gains, t);
-        mix(&mut self.feed_gains, &from.feed_gains, &to.feed_gains, t);
-        mix(&mut self.offsets, &from.offsets, &to.offsets, t);
-        self.measured.between(&from.measured, &to.measured, t);
+        lerp(&mut self.tap_delays, &from.tap_delays, &to.tap_delays, t);
+        lerp(&mut self.tap_gains, &from.tap_gains, &to.tap_gains, t);
+        lerp(&mut self.reflection_levels, &from.reflection_levels, &to.reflection_levels, t);
+        lerp(&mut self.feed_gains, &from.feed_gains, &to.feed_gains, t);
+        lerp(&mut self.family_delays, &from.family_delays, &to.family_delays, t);
+        lerp(&mut self.family_gains, &from.family_gains, &to.family_gains, t);
+        self.network.between(&from.network, &to.network, t);
         self.entry = from.entry + (to.entry - from.entry) * t;
-        self.measured_feed = from.measured_feed + (to.measured_feed - from.measured_feed) * t;
+        self.network_feed = from.network_feed + (to.network_feed - from.network_feed) * t;
     }
 }
 
@@ -787,8 +543,8 @@ struct Line {
 struct Damper {
     /// High damping as a shelf.
     high_shelf: Biquad,
-    /// High damping as a low-pass: two first-order shelves, each with half its loss.
-    low_pass: [FirstOrder; 2],
+    /// High damping as a low-pass: one whole one-pole on every pass.
+    low_pass: FirstOrder,
     /// Low damping.
     low_shelf: Biquad,
 }
@@ -808,16 +564,6 @@ impl Section for FirstOrder {
 
     fn clear(&mut self) {
         self.reset();
-    }
-}
-
-impl Section for [FirstOrder; 2] {
-    fn run(&mut self, x: f64) -> f64 {
-        self.iter_mut().fold(x, |y, section| section.process(y))
-    }
-
-    fn clear(&mut self) {
-        self.iter_mut().for_each(FirstOrder::reset);
     }
 }
 
@@ -845,7 +591,7 @@ impl Damper {
     /// Silences the filters.
     fn clear(&mut self) {
         self.high_shelf.reset();
-        self.low_pass.clear();
+        self.low_pass.reset();
         self.low_shelf.reset();
     }
 
@@ -868,7 +614,7 @@ impl Damper {
             y + (high - y) * amounts.high
         } else {
             self.high_shelf.reset();
-            self.low_pass.clear();
+            self.low_pass.reset();
             y
         };
         y + (heard(&mut self.low_shelf, y, amounts.low) - y) * amounts.low
@@ -1005,28 +751,29 @@ pub struct Reverb {
     high_cut: Biquad,
     /// The low-pass the input passes while High Cut is off.
     top_cut: Biquad,
-    /// The reflections' low-pass, for the filtered taps of each side.
+    /// The reflections' low-pass, for the filtered reflections of each side.
     reflection_filters: [Biquad; 2],
     /// The reflections of each side, for Stereo's delay of them ([`stereo_delay`]).
     stereo_lines: [DelayLine; 2],
-    /// The early reflections of the Density setting.
+    /// The direct reflections of the Density setting.
     taps: &'static [Tap],
-    /// The Density whose reflections [`taps`](Self::taps) are.
+    /// Their filtered reflections, family by family.
+    filtered: &'static [[f64; DIRECT_TAPS]; FAMILY_COUNT],
+    /// Each direct reflection's Spin LFO, one of [`SPIN_VOICES`].
+    voices: [usize; DIRECT_TAPS],
+    /// The Density whose reflections these are.
     reflections: usize,
-    /// One line per [`FILTERED_OFFSETS`] entry, holding the mix of direct reflections that
-    /// reflections at that offset play.
-    offset_lines: [DelayLine; FILTERED_OFFSETS.len()],
-    /// Which of [`offset_lines`](Self::offset_lines) the Density setting's reflections play.
-    offsets_used: [bool; FILTERED_OFFSETS.len()],
+    /// One line per family, holding the mix of direct reflections its filtered reflections play.
+    family_lines: [DelayLine; FAMILY_COUNT],
+    /// Which families the Density setting's reflections have.
+    families_used: [bool; FAMILY_COUNT],
     /// The predelay line, which the taps and the network's entry read.
     input: DelayLine,
-    /// The measured network's input groups, each the sum of its direct reflections as they were
-    /// read (Spin's shift included), delayed by the Shape entry before the network takes them.
-    group_lines: [DelayLine; measured::MAX_GROUPS],
-    /// The measured network.
-    measured: measured::Network,
-    /// How each reflection is read.
-    routes: [Route; MAX_TAPS],
+    /// The network's input groups, each the sum of its direct reflections as they were read
+    /// (Spin's shift included), delayed by the Shape entry before the network takes them.
+    group_lines: [DelayLine; network::MAX_GROUPS],
+    /// The network.
+    network: network::Network,
     /// The size factor `(size / 100)^(1/3)` as it glides.
     room: f64,
     /// The tuning at the last control point.
@@ -1064,8 +811,7 @@ fn db_to_gain(db: f64) -> f64 {
 /// How much later than at Stereo 120 the reflections are heard at `stereo` (frames at
 /// `sample_rate`), under Smooth Fast or Slow when `fast` ([`STEREO_DELAY_FRAMES`]).
 fn stereo_delay(stereo: f64, fast: bool, sample_rate: f64) -> f64 {
-    let frames = (STEREO_DELAY_FRAMES * (1.0 - stereo / 120.0)).max(0.0).floor();
-    let frames = if fast { frames } else { STEREO_DELAY_BLOCK * (frames / STEREO_DELAY_BLOCK).ceil() };
+    let frames = network::rounded((STEREO_DELAY_FRAMES * (1.0 - stereo / 120.0)).max(0.0), fast, true);
     frames * sample_rate / REFERENCE_RATE
 }
 
@@ -1076,41 +822,15 @@ fn spin_reach(predelay_ms: f64) -> f64 {
     SPIN_REACH_MS / (predelay_ms - SPIN_REACH_OFFSET_MS).max(SPIN_REACH_MS)
 }
 
-/// How a reflection is read.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Route {
-    /// From the predelay line at its own delay, swinging by it on this LFO of [`SPIN_VOICES`].
-    Own(usize),
-    /// As the direct reflection `source` (its place in the table), one of [`FILTERED_OFFSETS`]
-    /// later.
-    Follows { source: usize, offset: usize },
-}
-
-/// Each tap's [`Reverb::routes`] entry: a direct tap is read at its own delay, on the LFO of its
-/// time; a filtered one follows the direct tap it is one of [`FILTERED_OFFSETS`] on its side
-/// after, or is read at its own delay if it follows none.
-fn routes(taps: &[Tap]) -> [Route; MAX_TAPS] {
-    let voice = |ms: f64| {
-        SPIN_VOICES
-            .iter()
-            .enumerate()
-            .min_by(|a, b| (a.1.0 - ms).abs().total_cmp(&(b.1.0 - ms).abs()))
-            .map_or(0, |(k, _)| k)
-    };
-    let mut routes = [Route::Own(0); MAX_TAPS];
-    for (route, tap) in routes.iter_mut().zip(taps) {
-        let followed = FILTERED_OFFSETS.iter().enumerate().filter(|&(_, &(_, side))| side == tap.side).find_map(
-            |(offset, &(frames, _))| {
-                let ms = frames as f64 * 1_000.0 / REFERENCE_RATE;
-                taps.iter().position(|d| !d.filtered && (tap.ms - d.ms - ms).abs() < 0.0015).map(|d| (d, offset))
-            },
-        );
-        *route = match followed {
-            Some((source, offset)) if tap.filtered => Route::Follows { source, offset },
-            _ => Route::Own(voice(tap.ms)),
-        };
+/// Each of `taps`' Spin LFO: the one of [`SPIN_VOICES`] at its time.
+fn voices(taps: &[Tap]) -> [usize; DIRECT_TAPS] {
+    let mut voices = [0; DIRECT_TAPS];
+    for (voice, tap) in voices.iter_mut().zip(taps) {
+        *voice = (0..SPIN_VOICES.len())
+            .min_by(|&a, &b| (SPIN_VOICES[a].0 - tap.ms).abs().total_cmp(&(SPIN_VOICES[b].0 - tap.ms).abs()))
+            .unwrap_or(0);
     }
-    routes
+    voices
 }
 
 /// Spin's LFO positions at the start, in cycles.
@@ -1162,13 +882,14 @@ impl Reverb {
             top_cut: Biquad::default(),
             reflection_filters: Default::default(),
             taps: &TAPS_LOW,
+            filtered: &FILTERED_LOW,
+            voices: voices(&TAPS_LOW),
             reflections: LOW,
-            offset_lines: Default::default(),
-            offsets_used: [false; FILTERED_OFFSETS.len()],
+            family_lines: Default::default(),
+            families_used: [false; FAMILY_COUNT],
             input: DelayLine::default(),
             group_lines: std::array::from_fn(|_| DelayLine::default()),
-            measured: measured::Network::default(),
-            routes: routes(&TAPS_LOW),
+            network: network::Network::default(),
             room: 1.0,
             from: Tuning::default(),
             to: Tuning::default(),
@@ -1192,8 +913,8 @@ impl Reverb {
         self.stereo_lines =
             std::array::from_fn(|_| DelayLine::for_seconds(2.0 * STEREO_DELAY_FRAMES / REFERENCE_RATE, sr));
         self.group_lines = std::array::from_fn(|_| DelayLine::for_seconds(ENTRY_LINE_SECONDS, sr));
-        self.offset_lines = std::array::from_fn(|_| DelayLine::for_seconds(OFFSET_LINE_SECONDS, sr));
-        self.measured = measured::Network::new(sr);
+        self.family_lines = std::array::from_fn(|_| DelayLine::for_seconds(FAMILY_LINE_SECONDS, sr));
+        self.network = network::Network::new(sr);
     }
 
     /// The value of parameter `index`, 0.0 for an unknown one.
@@ -1216,8 +937,7 @@ impl Reverb {
         let sr = self.sample_rate;
         let flag = |index| if self.on(index) { 1.0 } else { 0.0 };
         // Frozen with Flat on, the damping is left out; with Flat off it stays in, as Live's frozen
-        // tail goes on losing the bands the shelves take. The fixed loss of the highs stays in
-        // either way, at its longest decay's (FREEZE_DRAIN).
+        // tail goes on losing the bands the shelves take.
         let filtered = if self.frozen() && self.on(param::FLAT) { 0.0 } else { 1.0 };
         Ramps {
             predelay: self.value(param::PREDELAY) * sr,
@@ -1280,12 +1000,12 @@ impl Reverb {
         for line in &mut self.group_lines {
             line.clear();
         }
-        for line in &mut self.offset_lines {
+        for line in &mut self.family_lines {
             line.clear();
         }
-        self.measured.set_design(measured::design(self.value(param::DENSITY) as usize));
-        self.measured.clear();
         self.set_reflections();
+        self.set_network();
+        self.network.clear();
         self.room = self.room_target();
         self.spin_phases = spin_start();
         self.chorus_phase = 0.0;
@@ -1301,23 +1021,28 @@ impl Reverb {
     /// Plays the Density setting's reflections.
     fn set_reflections(&mut self) {
         self.reflections = self.value(param::DENSITY) as usize;
-        self.taps = TAP_TABLES.get(self.reflections).copied().unwrap_or(&TAPS_LOW);
-        self.routes = routes(self.taps);
-        let mut used = [false; FILTERED_OFFSETS.len()];
-        for route in self.routes.iter().take(self.taps.len()) {
-            if let &Route::Follows { offset, .. } = route
-                && let Some(slot) = used.get_mut(offset)
-            {
-                *slot = true;
-            }
-        }
-        // Offset lines that start again begin silent.
-        for ((line, &now), was) in self.offset_lines.iter_mut().zip(&used).zip(self.offsets_used) {
+        let density = if self.reflections < TAP_TABLES.len() { self.reflections } else { LOW };
+        self.taps = TAP_TABLES[density];
+        self.filtered = FILTERED_TABLES[density];
+        self.voices = voices(self.taps);
+        let used = self.filtered.map(|row| row.iter().any(|&g| g != 0.0));
+        // Family lines that start again begin silent.
+        for ((line, &now), was) in self.family_lines.iter_mut().zip(&used).zip(self.families_used) {
             if now && !was {
                 line.clear();
             }
         }
-        self.offsets_used = used;
+        self.families_used = used;
+    }
+
+    /// Runs the Density setting's network, its copies those of the reflections played.
+    fn set_network(&mut self) {
+        let mut gains = [0.0; DIRECT_TAPS];
+        for (gain, tap) in gains.iter_mut().zip(self.taps) {
+            *gain = tap.gain;
+        }
+        let design = network::design(self.value(param::DENSITY) as usize);
+        self.network.set_design(design, self.filtered, &gains[..self.taps.len()]);
     }
 
     /// The input filters from the band's (ramped) centre and width.
@@ -1365,91 +1090,80 @@ impl Reverb {
         // without interpolation, which would take away highs on every trip. While Size or Decay
         // glide they move smoothly between frames.
         let settled = self.room == self.room_target() && !self.ramps.control_moving();
-        let density_index = self.value(param::DENSITY) as usize;
+        let density = self.value(param::DENSITY) as usize;
         let predelay_gain = db_to_gain(-PREDELAY_FADE * predelay_ms / setting);
-        let taps = self.taps;
         // Smooth Slow renders as Fast (`reverb-network-fast`).
         let fast = self.value(param::SMOOTH) as usize != 0;
         let size = REFERENCE_SIZE * room.powi(3);
-        let size_level = LOW_SIZE_LEVEL + LOW_SIZE_LEVEL_PER_SIZE * size;
+        let size_level = SIZE_LEVEL.0 + SIZE_LEVEL.1 * size;
         // The network is fed by the direct reflections, each at its own level and fade.
-        let norm = taps.iter().filter(|tap| !tap.filtered).map(|tap| tap.gain * tap.gain).sum::<f64>().sqrt().max(1e-9);
+        let norm = self.taps.iter().map(|tap| tap.gain * tap.gain).sum::<f64>().sqrt().max(1e-9);
+        let level = TAP_GAIN * predelay_gain * size_level;
         let t = &mut self.to;
-        t.tap_gains = [0.0; MAX_TAPS];
-        t.feed_gains = [0.0; MAX_TAPS];
-        for (((delay, gain), feed), tap) in
-            t.tap_delays.iter_mut().zip(&mut t.tap_gains).zip(&mut t.feed_gains).zip(taps)
+        t.tap_gains = [0.0; DIRECT_TAPS];
+        t.reflection_levels = [0.0; DIRECT_TAPS];
+        t.feed_gains = [0.0; DIRECT_TAPS];
+        for ((((delay, gain), reflection), feed), tap) in t
+            .tap_delays
+            .iter_mut()
+            .zip(&mut t.tap_gains)
+            .zip(&mut t.reflection_levels)
+            .zip(&mut t.feed_gains)
+            .zip(self.taps)
         {
             let time = tap.ms * room;
             *delay = time * ms + TAP_OFFSET_SECONDS * sr;
-            let level = tap.gain * db_to_gain(-fade * time);
-            *gain = TAP_GAIN * predelay_gain * level * size_level;
-            if !tap.filtered {
-                *feed = level / norm;
-            }
+            let faded = db_to_gain(-fade * time);
+            *reflection = level * faded;
+            *gain = tap.gain * *reflection;
+            *feed = tap.gain * faded / norm;
         }
-        for (((offset, (frames, _)), late), family) in
-            t.offsets.iter_mut().zip(FILTERED_OFFSETS).zip(FILTERED_LATE).zip(FILTERED_FAMILIES)
-        {
-            let frames = frames as f64 + late;
-            // A family's pair keeps its place about the family's peak, which moves in Live's
-            // 8-frame blocks (`reverb-network-small`), or under Smooth Fast in whole frames to
-            // where the network hears its copy, at every Density (Live's reflections at Size 100
-            // peak 396 and 1336 frames after their direct ones, against 401 and 1337 under None:
-            // `reverb-impulse` reverb-decay; `reverb-network-density-size`).
-            let frames =
-                (frames - measured::peak(family, 1.0, true, false) + measured::peak(family, room, settled, fast)) * sr
-                    / REFERENCE_RATE;
-            *offset = if settled { frames.round() } else { frames }.max(2.0);
+        // A family's filtered reflections peak where the network hears its copy, in Live's 8-frame
+        // blocks or under Smooth Fast in whole frames, and fade over that delay as the reflections do.
+        for (family, (delay, gain)) in t.family_delays.iter_mut().zip(&mut t.family_gains).enumerate() {
+            let frames = network::front(family, room, settled, fast) * sr / REFERENCE_RATE;
+            *delay = if settled { frames.round() } else { frames }.max(2.0);
+            *gain = db_to_gain(-fade * network::peak(family, room, false, false) * 1_000.0 / REFERENCE_RATE);
         }
         let gain = |seconds: f64| {
             if frozen {
-                db_to_gain(-seconds * if self.params.on(param::FLAT) { 0.0 } else { MEASURED_FREEZE_DRAIN_UNFLAT })
+                db_to_gain(-seconds * if self.params.on(param::FLAT) { 0.0 } else { FREEZE_DRAIN_UNFLAT })
             } else {
                 db_to_gain(-60.0 * seconds / decay)
             }
         };
-        let design = measured::design(density_index);
-        t.measured.tune(design, room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
-        t.measured.fade(design, room, fade);
-        t.entry = measured::entry(shape, settled, fast) * sr / REFERENCE_RATE;
-        let tail_gain = TAIL_GAIN * predelay_gain;
-        // The measured network's lines scale with the room's own size factor, small rooms too, and
-        // its input with the reflections' level and its own ([`NETWORK_SIZE_LEVEL`]). Every path through it fades with its
-        // whole time, so it needs no cut for short decays, and its first passes are as loud at
-        // every Shape as Live's (`reverb-network-exact`, `reverb-network-density`), with no trim
-        // for the Density.
+        let design = network::design(density);
+        t.network.tune(design, room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
+        t.network.fade(design, room, fade);
+        t.entry = network::entry(shape, settled, fast) * sr / REFERENCE_RATE;
+        // The network's lines scale with the room's own size factor, small rooms too, and its input
+        // with the reflections' level and its own ([`NETWORK_SIZE_LEVEL`]). Every path through it
+        // fades with its whole time, so it needs no cut for short decays.
         let (a, b, c) = NETWORK_SIZE_LEVEL;
-        t.measured_feed = tail_gain * MEASURED_GAIN * size_level * (a + b * size + c * size * size);
-        let corner = reflection_corner(setting, density_index, room).clamp(20.0, 0.45 * sr);
+        t.network_feed = NETWORK_GAIN * predelay_gain * size_level * (a + b * size + c * size * size);
+        let corner = reflection_corner(setting, density, room).clamp(20.0, 0.45 * sr);
         let reflection = Coefficients::lowpass(sr, corner, REFLECTION_Q);
         for filter in &mut self.reflection_filters {
             filter.set(reflection);
         }
-        self.measured.set_copy_filter(reflection);
+        self.network.set_copy_filter(reflection);
 
-        // The measured network has no loss of the highs of its own: with Smooth None its only loss
-        // is A's and B's hundredth of a frame, and under Fast or Slow their larger fractions
-        // (`measured::DELAYS`), read from `reverb-network-fast-train`.
+        // Each line passes the shelves, with a gain per trip as long as the line, or one whole
+        // one-pole of the Low-Pass on every pass, however long the line (`reverb-network-filters`:
+        // at 250 Hz, 1 kHz and 4 kHz and Size 1.53 to 100 that alone matches Live's renders to −27
+        // to −37 dB). The input passes no damping: in Live's network each line has its own, and the
+        // input none (`reverb-network-small hi-shelf-4k`, `reverb-network-filters`).
         let r = &self.ramps;
         let (high_f, high_g) = (2.0f64.powf(f64::from(r.high_frequency.current())), f64::from(r.high_gain.current()));
         let (low_f, low_g) = (2.0f64.powf(f64::from(r.low_frequency.current())), f64::from(r.low_gain.current()));
-        // Each of the measured network's lines passes one whole one-pole of the Low-Pass on every
-        // pass, however long the line (`reverb-network-filters`: at 250 Hz, 1 kHz and 4 kHz and
-        // Size 1.53 to 100 that alone matches Live's renders to −27 to −37 dB). The input passes
-        // no damping: in Live's bare network each line has its own, and the input none
-        // (`reverb-network-small hi-shelf-4k`, `reverb-network-filters`).
         let line_pole = (-std::f64::consts::TAU * high_f / sr).exp();
         let line_pass = FirstOrderCoefficients { b0: 1.0 - line_pole, b1: 0.0, a1: -line_pole };
-        for (line, &trips) in self.measured.lines.iter_mut().zip(&self.to.measured.trips) {
+        for (line, &trips) in self.network.lines.iter_mut().zip(&self.to.network.trips) {
             let db = |g: f64| 20.0 * g.max(1e-6).log10() * trips;
             let damper = &mut line.damper;
-            let (q, shift) = (MEASURED_SHELF_Q, MEASURED_SHELF_SHIFT);
-            damper.high_shelf.set(Coefficients::high_shelf(sr, high_f * shift, q, db(high_g)));
-            damper.low_shelf.set(Coefficients::low_shelf(sr, low_f / shift, q, db(low_g)));
-            let [whole, rest] = &mut damper.low_pass;
-            whole.set(line_pass);
-            rest.set(FirstOrderCoefficients::IDENTITY);
+            damper.high_shelf.set(Coefficients::high_shelf(sr, high_f * SHELF_SHIFT, SHELF_Q, db(high_g)));
+            damper.low_shelf.set(Coefficients::low_shelf(sr, low_f / SHELF_SHIFT, SHELF_Q, db(low_g)));
+            damper.low_pass.set(line_pass);
         }
     }
 
@@ -1457,8 +1171,8 @@ impl Reverb {
     /// `room` (frames).
     fn longest_delay(&self, room: f64) -> f64 {
         let tap = self.taps.iter().map(|tap| tap.ms).fold(0.0, f64::max) * room * self.sample_rate / 1_000.0;
-        let design = measured::design(self.value(param::DENSITY) as usize);
-        tap.max(measured::Lengths::longest(design, room, self.sample_rate))
+        let design = network::design(self.value(param::DENSITY) as usize);
+        tap.max(network::Lengths::longest(design, room, self.sample_rate))
     }
 
     /// Size moves toward its setting, as fast as Smooth says, over one control period.
@@ -1546,11 +1260,9 @@ impl Device for Reverb {
         if self.reflections != self.value(param::DENSITY) as usize {
             self.set_reflections();
         }
-        let design = measured::design(self.value(param::DENSITY) as usize);
-        // The groups each direct reflection feeds.
-        let tap_groups = &design.tap_groups;
         // A network that takes over from another starts silent.
-        self.measured.set_design(design);
+        self.set_network();
+        let design = network::design(self.value(param::DENSITY) as usize);
         let (spin_step, chorus_step) =
             (self.value(param::SPIN_RATE) * SPIN_RATE_SCALE / sr, self.value(param::CHORUS_RATE) / sr);
         // How far ahead of their phases Spin's LFOs are read, in cycles at Spin Rate.
@@ -1610,10 +1322,6 @@ impl Device for Reverb {
             ] {
                 s.next_value();
             }
-            // Every Density's allpasses take the whole Diffusion as their gain. At Sparse a fifth of
-            // it left the tail at Size 0.222 −16 dB from Live's by 3 s at Diffusion 0.1 %, the whole
-            // of it −21; at the default 60 % −2.8 dB from 0.08 to 0.3 s against −11.8
-            // (`reverb-network-density-size`, `reverb-texture` density-sparse).
             let diffusion = r.diffusion.next_value();
             let damping = Damping {
                 high: f64::from(r.high.next_value()),
@@ -1634,10 +1342,9 @@ impl Device for Reverb {
 
             // Early reflections and the network's input, read from the predelay line. Spin swings
             // each direct reflection's whole delay on its own LFO, by a share of it that falls as
-            // the predelay grows, and the network's input with it; a filtered one is the direct
-            // one it follows, a whole number of frames later, so it is played from a mix of the
-            // direct ones per offset. Without Spin, and with nothing moving, the taps fall on
-            // whole frames.
+            // the predelay grows, and the network's input with it; a filtered one is a direct one
+            // a family's delay later, so it is played from a mix of the direct ones per family.
+            // Without Spin, and with nothing moving, the taps fall on whole frames.
             let mut spin = [0.0f64; SPIN_VOICES.len()];
             if spin_swing > 0.0 {
                 let reach = spin_swing * spin_reach(predelay * 1_000.0 / sr);
@@ -1663,63 +1370,37 @@ impl Device for Reverb {
                     line.read_hermite(at)
                 })
             };
-            // Direct and filtered reflections, left and right; each direct one also feeds the
+            // Direct reflections, left and right; each also feeds its family mixes and the
             // network's group it belongs to.
-            let (mut direct, mut filtered) = ([0.0f64; 2], [0.0f64; 2]);
-            let mut groups = [0.0f64; measured::MAX_GROUPS];
-            let mut direct_index = 0;
-            let mut reads = [0.0f64; MAX_TAPS];
-            for (((((tap, &delay), &gain), &share), route), read) in self
-                .taps
-                .iter()
-                .zip(&t.tap_delays)
-                .zip(&t.tap_gains)
-                .zip(&t.feed_gains)
-                .zip(&self.routes)
-                .zip(&mut reads)
-            {
-                let &Route::Own(voice) = route else { continue };
-                let at = predelay + delay + spin.get(voice).copied().unwrap_or(0.0) * (predelay + delay);
-                *read = read_from(&self.input, at);
-                let sides = if tap.filtered { &mut filtered } else { &mut direct };
-                if let Some(side) = sides.get_mut(tap.side) {
-                    *side += *read * gain;
-                }
-                if !tap.filtered {
-                    // Read where the reflection is, and delayed by the entry below, so the network
-                    // hears the shift Spin gave the reflection, not the one it has an entry later.
-                    // At whole frames each is rounded on its own, the reflection where it is heard and
-                    // the entry, as Live's are (`reverb-network-small`).
-                    let from = at + if whole { t.entry.round() - group_whole } else { t.entry - group_delay };
-                    let u = read_from(&self.input, from) * share * feed * t.measured_feed;
-                    if let Some(group) = tap_groups.get(direct_index).and_then(|&g| groups.get_mut(g)) {
-                        *group += u;
-                    }
-                    direct_index += 1;
+            let mut direct = [0.0f64; 2];
+            let mut groups = [0.0f64; network::MAX_GROUPS];
+            let mut reads = [0.0f64; DIRECT_TAPS];
+            for (d, tap) in self.taps.iter().enumerate() {
+                let delay = t.tap_delays[d];
+                let at = predelay + delay + spin[self.voices[d]] * (predelay + delay);
+                let read = read_from(&self.input, at);
+                direct[tap.side] += read * t.tap_gains[d];
+                reads[d] = read * t.reflection_levels[d];
+                // Read where the reflection is, and delayed by the entry below, so the network
+                // hears the shift Spin gave the reflection, not the one it has an entry later. At
+                // whole frames each is rounded on its own, the reflection where it is heard and the
+                // entry, as Live's are (`reverb-network-small`).
+                let from = at + if whole { t.entry.round() - group_whole } else { t.entry - group_delay };
+                let u = read_from(&self.input, from) * t.feed_gains[d] * feed * t.network_feed;
+                if let Some(group) = design.tap_groups.get(d).and_then(|&g| groups.get_mut(g)) {
+                    *group += u;
                 }
             }
-            let mut mixes = [0.0f64; FILTERED_OFFSETS.len()];
-            for (route, &gain) in self.routes.iter().zip(&t.tap_gains).take(self.taps.len()) {
-                if let &Route::Follows { source, offset } = route
-                    && let Some(mix) = mixes.get_mut(offset)
-                {
-                    *mix += reads.get(source).copied().unwrap_or(0.0) * gain;
+            let mut filtered = [0.0f64; 2];
+            for (family, line) in self.family_lines.iter_mut().enumerate() {
+                if !self.families_used[family] {
+                    continue;
                 }
-            }
-            for ((((line, mix), &offset), &(_, side)), _) in self
-                .offset_lines
-                .iter_mut()
-                .zip(mixes)
-                .zip(&t.offsets)
-                .zip(&FILTERED_OFFSETS)
-                .zip(&self.offsets_used)
-                .filter(|(_, used)| **used)
-            {
-                let y = if self.moving { line.read_hermite(offset) } else { line.read(offset.round() as usize) };
-                if let Some(out) = filtered.get_mut(side) {
-                    *out += f64::from(y);
-                }
-                line.push(mix as f32);
+                let delay = t.family_delays[family];
+                let y = if self.moving { line.read_hermite(delay) } else { line.read(delay.round() as usize) };
+                filtered[FAMILY_SIDES[family]] += f64::from(y);
+                let mix: f64 = self.filtered[family].iter().zip(&reads).map(|(g, r)| g * r).sum();
+                line.push((mix * t.family_gains[family]) as f32);
             }
             let [left_filter, right_filter] = &mut self.reflection_filters;
             let early = [direct[0] + left_filter.process(filtered[0]), direct[1] + right_filter.process(filtered[1])];
@@ -1745,7 +1426,7 @@ impl Device for Reverb {
                 if chorus_swing > 0.0 { (std::f64::consts::TAU * self.chorus_phase).sin_cos() } else { (0.0, 0.0) };
             let swing =
                 |(c, s): (f64, f64), length: f64| chorus_swing.min(0.5 * length) * (chorus_sin * c + chorus_cos * s);
-            let tail = self.measured.process(&groups, &t.measured, diffusion, &damping, swing, frozen);
+            let tail = self.network.process(&groups, &t.network, diffusion, &damping, swing, frozen);
             self.input.push(x as f32);
 
             // Output: the two parts, Stereo's rotation, then the mix.

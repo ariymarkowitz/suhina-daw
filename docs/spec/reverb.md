@@ -1,5 +1,5 @@
 ---
-description: The built-in algorithmic reverb - its parameters, signal flow (input band, early reflections, a measured feedback delay network per Density, chorus, freeze, stereo), how Live's Reverb imports into it, and how close it comes to Live's renders
+description: The built-in algorithmic reverb - its parameters, signal flow (input band, early reflections and their families, a measured feedback delay network per Density, chorus, freeze, stereo), how Live's Reverb imports into it, and how close it comes to Live's renders
 read_when: reverb, algorithmic reverb, room, decay, early reflections, predelay, feedback delay network, FDN, damping, freeze, diffusion, importing Live's Reverb, Reverb elements
 type: spec
 status: current
@@ -70,8 +70,8 @@ Diffuse go down to a linear gain of 0.03, which Live shows as −30 dB.
 ## Behaviour
 
 ```text
-in -> mono sum -> roll-off -> Low Cut -> High Cut -> predelay line -+-> reflection taps (Spin) --- Reflect -+
-                                                                    |                                     +-> Stereo -> Dry/Wet
+in -> mono sum -> roll-off -> Low Cut -> High Cut -> predelay line -+-> direct taps (Spin) -+-> families --- Reflect -+
+                                                                    |                       +--------------------------+-> Stereo -> Dry/Wet
                                                                     +-> direct taps -> Shape entry -> network --- Diffuse -+
                                                                         (lines, allpasses, damping, Chorus, Freeze)
 ```
@@ -87,143 +87,103 @@ frames of 44.1 kHz and convert to the session rate.
 - **Roll-off.** The input always passes first-order high-passes at 127 Hz and 19 Hz.
 - **Input band.** Low Cut is a first-order high-pass at 2.5 times the band's lower edge,
   `frequency / 2^(width/2)`, plus two first-order low shelves at 25 and 250 Hz whose gains follow the
-  edge (see Low Cut's law below). It does nothing with the edge below 44.2 Hz. High Cut is a
-  12 dB/octave Butterworth low-pass at `frequency × 2^(width/2)`, never above 18 kHz, with no
-  delay beyond the filter's own. With High Cut off the input still passes the same low-pass at
-  18 kHz, as Live's does (left out at sample rates where 18 kHz is above 0.45 of the
-  rate). Both filters always run and their switches crossfade.
+  edge (Design notes). It does nothing with the edge below 44.2 Hz. High Cut is a 12 dB/octave
+  Butterworth low-pass at `frequency × 2^(width/2)`, never above 18 kHz. With High Cut off the input
+  still passes the same low-pass at 18 kHz, as Live's does (left out where 18 kHz is above 0.45 of
+  the rate). Both filters always run and their switches crossfade.
 - **Predelay** delays the wet signal. The wet signal, reflections and tail alike, is also quieter
   by `0.0113 / decay` dB per ms of predelay (decay in seconds).
 
-### Size and Smooth
+### Size, Smooth and rounding
 
-Every delay of the reverb (taps, lines, allpasses) is its reference-room length times the size
-factor. **Smooth** glides the factor with a time constant of 45 ms (Slow) or 15 ms (Fast), or not at
-all (None), where Size changes glitch as in Live. However fast the glide, no line or reflection
-changes by more than half a frame a frame: faster, a line is read backwards and buzzes.
+Every delay of the reverb is its reference-room length times the size factor. **Smooth** glides the
+factor with a time constant of 45 ms (Slow) or 15 ms (Fast), or not at all (None), where Size
+changes glitch as in Live. However fast the glide, no line or reflection changes by more than half a
+frame a frame: faster, a line is read backwards and buzzes.
+
+**Rounding.** Live rounds every delay below that is said to be *rounded* (the network's lines,
+allpasses and families, the Shape entry and Stereo's delay) the same way: under Smooth Fast and
+Slow (Slow renders as Fast) down to a whole frame, `floor(x)`; under None to whole 8-frame blocks,
+up unless it is less than a tenth of a block past one, `8 × floor(x / 8 + 0.9)`. While Size or
+Scale move, a length follows the straight line through the middle of its steps.
 
 ### Early reflections
 
-- **Taps.** Each Density has Live's own pattern, read tap by tap from its impulse responses: 4 direct
-  taps at Sparse, 10 at Low, Mid and High (the same ten times), and filtered taps up to 130 ms
-  (20 taps at Sparse, 71 at Low, 90 at Mid, 108 at High). Every tap has a time (a whole number of
-  frames plus the fraction of a frame at which Live rounds it), a side and a level. The first tap
-  arrives one frame before the predelay at a gain of 0.0942. The predelay and a tap's time round to
-  a frame together.
-- **Stereo's delay.** Below Stereo 120 the reflections heard, not the tail and not the network's
-  input, come later: `floor(27.5625 × (1 − stereo / 120))` frames (0.625 ms at most) under Smooth
-  Fast and Slow, rounded up to a whole 8-frame block under None (4 and 8 frames at the default 100).
+- **Direct taps.** Each Density has Live's own: 4 at Sparse, the same ten times at Low, Mid and High,
+  each with a side and a level. Each time is a whole number of frames plus the fraction of a frame at
+  which Live rounds it, and the predelay and a tap's time round to a frame together. The first tap
+  arrives one frame before the predelay at a gain of 0.0942.
 - **Level.** Every tap is `0.92594 + 0.00074059 × Size` of its reference level (0.926 at the
   smallest Size, 1.296 at 500), and fades by `(0.0328 + 0.0668 × Shape) / decay` dB per ms of its
   delay.
-- **Filtered taps** pass a cookbook low-pass of Q 0.5 per side. Its double pole is that of
-  11.98 kHz plus `1.115 × (1 − exp(−t × size factor / decay))`, with `t` 0.0512 s at Low, 0.2092 at
-  Sparse, 0.3200 at Mid and 0.2657 at High: the corner falls with a shorter Decay faster the denser
-  the reflections (at Size 100, Low 8.5 kHz at 0.2 s, 11.3 at 1.2 s; Mid 1.4 and 8.4 kHz), and a
-  smaller room's reflections are brighter (Low at 0.2 s: 10.2 kHz at Size 10.54, 11.0 at 1.53).
-  The Decays were read at Size 100, the Sizes at Low (`reverb-size`, `reverb-smooth-slow`). Every filtered tap is a
-  direct tap a whole number of frames later (20 offsets in pairs two frames apart, 395 to 3192
-  frames, 9 to 72 ms), always on one side per pair. So they are played as one mix of the direct
-  taps per offset, delayed by the offset. The ten pairs are ten *families*, the same at every
-  Density (Sparse, Mid and High hear Low's six, and Mid and High four more). A family's peak is
-  `8 × floor(n × size factor + 0.7) + 1` frames after its direct tap under None (read at Size 0.222
-  to 500, Low's every 50 from 250), `floor(8 × n' ×
-  size factor) + 1` under Fast and Slow, with its own n and n' (blocks): under Fast it comes 0 to 6
-  frames sooner.
+- **Families.** Every other reflection is a direct tap heard again, through a low-pass, after one of
+  ten *family* delays: 401, 3193, 1641, 1337, 2985, 2337, 961, 2073, 2393 and 2497 frames to its
+  peak in the reference room (rounded; under Fast 0 to 6 frames sooner). A family is heard on one
+  side, and each Density has a table of how loud each family repeats each direct tap: Low has the
+  first six families, Sparse four of them, Mid all but the 2073 and 2393 families, High all ten.
+  So the reflections are played as one mix of the direct taps per family, delayed, and fading over
+  the family's delay as the taps do. The network hears the same families (Late reverb).
+- **The low-pass** is a cookbook low-pass of Q 0.5 per side. Its double pole is that of 11.98 kHz
+  plus `1.115 × (1 − exp(−t × size factor / decay))`, with `t` 0.0512 s at Low, 0.2092 at Sparse,
+  0.3200 at Mid and 0.2657 at High: the corner falls with a shorter Decay, faster the denser the
+  reflections (at Size 100, Low 8.5 kHz at 0.2 s and 11.3 at 1.2 s; Mid 1.4 and 8.4 kHz), and a
+  smaller room's reflections are brighter.
+- **Stereo's delay.** Below Stereo 120 the reflections heard, not the tail and not the network's
+  input, come `27.5625 × (1 − stereo / 120)` frames later, rounded (4 and 8 frames at the default
+  100 under Fast and None).
 - **Spin** swings each direct tap's whole delay `T` (predelay included) by
   `0.00995 × amount × reach(predelay) × T × sin(2π × m × rate × t + φ)`, where `reach` is 1 up to 5 ms
   of predelay and `2 / (predelay − 3.02)` above it (predelay in ms), so a long predelay swings every
-  tap by about the same 2 ms × 0.00995 × amount. Each of the ten direct taps has its own LFO, rate
-  `m` times Spin Rate times 1.0053 (`m` 0.978 to 1.042) and a phase that restarts with the
-  transport, 8 ms of its cycle ahead of `φ`. A filtered tap
-  swings as its direct tap did when it was read, one offset earlier. The tail's input swings with
-  the reflections it comes from. Moving reflections are read by linear interpolation, as Live's
-  (its reflections lose 0.4 dB at 6 kHz to 1.6 dB at 15 kHz as soon as Spin moves them); static
-  ones are read at whole frames.
+  tap by about the same 2 ms × 0.00995 × amount. Each direct tap has its own LFO, rate `m` times Spin
+  Rate times 1.0053 (`m` 0.978 to 1.042) and a phase that restarts with the transport, 8 ms of its
+  cycle ahead of `φ`. A family's reflection swings as its direct tap did when it was read, and the
+  tail's input with the reflections it comes from. Moving reflections are read by linear
+  interpolation, as Live's (they lose 0.4 dB at 6 kHz to 1.6 dB at 15 kHz as soon as Spin moves
+  them); static ones are read at whole frames.
 
-### Late reverb: the measured network
+### Late reverb
 
 Live's network, identified from its renders, with a design per Density. A **line** is a delay and
-a Schroeder allpass (Diffusion as its gain), two in series at Mid and High; lines are mixed after every trip by one matrix,
-orthogonal between the lines as they are heard, and each line has its own mix of the direct taps as input.
+a Schroeder allpass with Diffusion as its gain (two allpasses in series at Mid and High). Lines are
+mixed after every trip by one matrix, orthogonal between the lines as they are heard.
 
 | Density | Lines | Direct taps feed | Sides (left/right) |
 |---|---|---|---|
-| Sparse | 4 (X, Y, Z, W) | one line each | X, Y / Z, W |
+| Sparse | 4 | one line each | 2 / 2 |
 | Low | 6 (A, B, C, D, F, R) | six groups of taps | B, D, F / A, C, R |
-| Mid | 8 | eight groups | four each |
-| High | 10 | ten taps | five each |
+| Mid | 8 | eight groups | 4 / 4 |
+| High | 10 | ten taps | 5 / 5 |
 
-- **Input.** The direct taps are read after the **Shape entry**, `1543.5 × Shape` frames at
-  44.1 kHz (35 ms a unit) less a frame, rounded up to whole 8-frame blocks under None and down to a
-  whole frame under Fast and Slow: −1, 391, 775, 1159 and 1543 frames at Shape 0, 0.25, 0.5, 0.75
-  and 1 under None, −1, 384, 770, 1156 and 1542 under Fast, at every Size and Density. They come at
-  their reflection levels and fades, so Shape and Decay shape the tail's onset as they shape the
-  reflections. The network is mono: it
-  hears no side of the input, and the input passes no damping. The level is
-  `1.236 × 0.2383 × Size level × Network level` times each line's input weight, where *Size
-  level* is the reflections' `0.92594 + 0.00074059 × Size` above and *Network level* is
-  `0.935054 + 0.000751857 × Size − 0.000000350508 × Size²`: close to the reflections' law to
-  Size 100, 0.45 dB below it at 500 (read at Low at Size 0.222 to 500, every 50 from 200, to
-  0.012 dB, and the same at Mid and High at 300 and 400). Each Density's inputs and filtered-reflection
-  copies are scaled to Live's levels (Sparse inputs ×0.9965, copies ×1.79; Mid and High inputs
-  ×1.057, copies ×1.9).
-- **Families.** Each line's *family* of filtered reflections (a mix of the direct taps, one per
-  line, 401 to 3193 frames after them) is heard again, low-passed like the reflections, as part of
-  that line's output into the mix.
-- **Line levels.** Sparse's, Mid's and High's lines are heard at levels up to 1 % apart (the line
-  with A's delay, and High's 2073 family's, the quietest: 0.992 to 0.996 against the others' 0.999
-  to 1.004; Low's at one level). Their inputs and copies were read with these levels in them, so the device sums
-  every line at one level and runs the mix between them as `level_i × mix_ij / level_j`, orthogonal
-  between the lines taken at their levels.
-- **Lengths.** A line's delay and allpass are whole numbers of 8-frame blocks plus a frame (Live
-  builds them so). At Low: the delay is `8 × floor(y × size factor + 0.85) + 1` frames, the allpass
-  `8 × floor(c × Scale × size factor + 0.9) + 1` (Scale in %), with y 287.0993, 340.0779, 628.7004,
-  459.9281, 846.6372 and 1220.5524 and c 0.63476, 1.22412, 0.87055, 3.97956, 2.18481 and 0.80455 for
-  A, B, C, D, F and R, the same numbers as Smooth Fast's (below), rounded to blocks; each is the
-  middle of what both settings' reads at Size 0.222 to 500 allow. C's delay is its family's offset
-  and a plain delay, and R's is A's delay and a delay G, but each rounds as one length: at Size
-  0.222 rounding the parts on their own makes C a block longer and R a block shorter, which takes
-  the tail's waveform apart from Live's after 20 ms. At the
-  default Scale in the reference room A, B, D and F are 57, 71, 113 and 170 ms, C 1640 frames then
-  83 ms, R 228 ms. Sparse's, Mid's and High's lines follow the same law, from one table by family
-  (the family of the line's copy): a delay y and two allpasses of c₁ and c₂ blocks per Scale %, each
-  rounded on its own at the same edges (0.85 and 0.9) and a frame. A Mid or High line of family f
-  is f's delay and both of f's allpasses; High has all ten families, Mid all but 7 and 8. A Sparse
-  line has one allpass, its family's shorter: F, B and R are their families', and the C line has A's
-  delay with C's allpass. y, c₁ and c₂ are A 1184.4905, 0.6886, 12.7517; B 442.6705, 1.1039, 3.7124;
-  C 436.2265, 1.3804, 5.9511; D 1026.769, 1.7356, 3.4461; F 356.0745, 2.4623, 5.7064; R 560.7478,
-  0.7406, 8.3358; and 6 to 9 621.4635, 2.9617, 3.7544; 1983.288, 0.7584, 2.6925; 379.8665, 0.8037,
-  5.6726; 501.2132, 1.1817, 3.8076: each fits every line's first pass at Size 0.222, 100, 300, 400 and 500 with
-  Smooth None and Fast and at Scale 0 to 100 % at Size 100 (but Sparse's F line at Scale 0, read a
-  block long). Which allpass is the shorter, and how a line's length splits between its two,
-  shows only above Diffusion 0.1 % (Diffusion 30 and 60 %, where each first pass arrives as g² at
-  the delay, −g(1 − g²) after each allpass and (1 − g²)² after both): D's and the 2073 family's
-  split was read again at Size 10.54, Scale 40 and 100 %, where a block moves between their two
-  allpasses that the sums at Diffusion 0.1 % do not show. These lines' lengths are not Low's. While
-  Size or Scale move, each length follows the straight line through the middle of its steps.
-- **Reading.** A and B are a hundredth of a frame longer, read by linear interpolation, which is
-  all the highs the network loses on a pass; the other lines are whole frames and are not
-  interpolated. So are Sparse's, Mid's and High's lines of families A and B under Smooth None
-  (Sparse's C line, with A's delay, is whole): without it their tails keep up to 5 dB too much
-  above 12 kHz by 3 s at Size 0.222, and no other hundredth fits as well. Lines with Chorus are read with cubic (Hermite) interpolation.
-- **Smooth Fast and Slow** (Slow renders as Fast) change Low's lengths: none keeps to 8-frame
-  blocks. Each length is its continuous value rounded down to a frame, and a frame: the allpass
-  `floor(8 × c × Scale × size factor) + 1`, the delay `floor(8 × y × size factor) + 1`, but A's and
-  B's delays keep their fraction of a frame (`8 × y × size factor + 1`, read by linear
-  interpolation, most of the highs lost). The loops are 5 frames longer than their first passes, and
-  the Shape entry rounds to a frame, not a block (Input above), so at Shape 0.5 the input reaches
-  them 5 frames sooner, and at Shape 0 and 1 a frame or none. The other Densities' lines do the
-  same with their own lengths: whole frames, but the A and B lines' delays keep their fraction
-  (Mid's and High's A and B lines, and Sparse's B line), and the same entry.
+- **Input.** Each line takes its own mix of the direct taps, after the **Shape entry**: `1543.5 ×
+  Shape` frames (35 ms a unit), rounded, less a frame, at every Size and Density (−1, 391, 775, 1159
+  and 1543 frames at Shape 0 to 1 by quarters under None, −1, 384, 770, 1156 and 1542 under Fast).
+  The taps come at their reflection levels and fades, so Shape and Decay shape the tail's onset as
+  they shape the reflections. The network hears no side of the input, and the input passes no
+  damping. Its level is `0.2945 × Size level × Network level` times each line's input weight, with
+  *Size level* the reflections' law above and *Network level*
+  `0.935054 + 0.000751857 × Size − 0.000000350508 × Size²`: close to the reflections' law up to Size
+  100, 0.45 dB below it at 500.
+- **Families.** Each line has a family. Its filtered reflections, 1.70 times quieter than they are
+  heard, join that line's output in the mix: Live's reflections and the network's copies are one
+  signal at a fixed ratio of 1.69 to 1.71 at every Density. At Low a line's input is its own family.
+- **Line levels.** Sparse's, Mid's and High's lines are heard at levels up to 1 % apart (Low's at
+  one level). The device sums every line at one level and runs the mix between them as
+  `level_i × mix_ij / level_j`, so it stays orthogonal between the lines taken at their levels.
+- **Lengths.** A line's delay and each allpass are rounded, plus a frame: the delay
+  `y × size factor` blocks, an allpass `c × Scale × size factor` (Scale in %), with y and c per line
+  (Low) or per family (Sparse, Mid and High: a Mid or High line has its family's delay and both of
+  its allpasses; a Sparse line its family's shorter allpass, and the C-family line A's delay). Under
+  Fast the delays of the A and B families' lines keep their fraction of a frame, read by linear
+  interpolation, most of the highs that setting loses. At the default Scale in the reference room
+  Low's A, B, D and F are 57, 71, 113 and 170 ms, C 1640 frames then 83 ms, R 228 ms.
+- **Reading.** Under None the A and B families' lines are a hundredth of a frame longer, read by
+  linear interpolation, which is all the highs the network loses on a pass. Other lines are whole
+  frames and not interpolated, except with Chorus, where they are read with cubic (Hermite)
+  interpolation.
 - **Decay.** The network is tuned to a T60 of 0.9 of the Decay setting. Every path fades with its
   whole time: each line's gain covers its delay, and its allpass loses its own delay's gain on every
-  pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`). The mix is made exactly orthogonal between the
-  lines at their levels, so nothing is lost on a pass but the decay: the late tail falls by the same
-  dB per second at every Size.
-- **Every Density's allpasses** take the Diffusion setting as their gain. (Sparse's once took a
-  fifth of it, never read from Live: at Diffusion 0.1 % and 60 % the whole setting fits far better,
-  and 0.55 or 0.65 of it worse.)
+  pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`). With the mix orthogonal, nothing else is lost on
+  a pass, so the tail falls by the same dB per second at every Size.
 
 ### Damping
 
@@ -232,7 +192,7 @@ In each line, after its gain, with the loss specified per second so it does not 
 - **High Damping, Shelf:** a second-order high shelf (Q 0.70) half way at 0.98 of the frequency.
   **Low Damping:** a second-order low shelf (Q 0.70) half way at the frequency over 0.98.
   The Gain is a linear factor per 0.17 s trip, raised to the power of the line's length plus its
-  allpass's, in seconds, over 0.17 s. Sparse's shelves lose 1.37 times as much.
+  allpasses', in seconds, over 0.17 s. Sparse's shelves lose 1.37 times as much.
 - **High Damping, Low-Pass:** one whole one-pole low-pass `y += (1 − p)(x − y)` with
   `p = e^(−2π × frequency / sample rate)` on every pass through every line, whatever its length;
   Gain does nothing with it, in Live's renders as here.
@@ -298,9 +258,10 @@ Live's Reverb is the element `Reverb`; every value is `<Element>/Manual@Value`
 A stepped value outside its list is left at the default with a warning. Sets saved before Live
 11.2 named some of these differently; only 12.4.6's names are read.
 
+
 ## Design notes
 
-Why the device is built as it is.
+Why the device is built as it is. Where each constant was read is in its doc comment in the code.
 
 - **Live's network, read from its renders, over a textbook feedback delay network.** A designed
   network (Householder or Hadamard mixing, one allpass per line) reached Live's class of tail but
@@ -309,142 +270,108 @@ Why the device is built as it is.
   network turns to noise in two trips. Impulse responses with Diffusion at its minimum (an allpass
   is then a plain delay), Decay at its maximum and several Scales show each arrival as one sample
   once the input's fixed filters are divided out, and tell lines, allpasses, mix and outputs apart.
-  Cost: the constants are fitted values, not derivations; they are exact where read (Size 100 for
-  Sparse, Mid and High) and extrapolated by the same laws elsewhere.
-- **Early reflections are Live's tap pattern.** Every tap is a delay of the input rounded to a whole
-  frame, either as it is or through one low-pass, and times scale with the cube root of Size. Used
-  as read, the taps of the reflection-only cases land within 0.5 ms and 0.5 dB of Live's. The
-  fraction of a frame is kept because Live steps each tap to the next frame at its own fraction as
-  the predelay moves; without it four taps were a frame late at most predelays. Two direct taps
-  (17.90 and 41.12 ms, and the filtered ones after them) sit at 0.59 of a frame rather than the
-  0.65 their predelay steps read, so that every direct tap lands on Live's frame at every Size
-  read, 0.222 to 500.
-- **Filtered taps are played as delayed mixes of the direct ones.** Reading all 178 taps of High
-  on its own cost 6.9 % of a core; one mix per offset into twenty lines read at whole frames costs
-  4.7 %, and is exactly what Live does (a filtered tap is its direct tap delayed again).
-- **Lengths in whole 8-frame blocks, without interpolation once settled.** Live builds every length
-  from blocks, and fractional delays in the loop cut the 8 kHz octave's decay time by 10 to 38 %.
-  While Size or Scale move, the straight line through the middle of the steps avoids a jump of a
-  block at a time.
+  Cost: the constants are fitted values, not derivations; they are exact where read and
+  extrapolated by the same laws elsewhere.
+- **One rounding for every delay.** Lines, allpasses, families, the Shape entry and Stereo's delay
+  all fit the same rule (Size, Smooth and rounding) at every Size, Scale, Density and Smooth read:
+  under None it is Fast's length rounded up to whole blocks, but for the last tenth of a block. Each
+  length's constant is the middle of what both settings' reads allow. Lengths settle on whole frames
+  without interpolation: fractional delays in the loop cut the 8 kHz octave's decay time by 10 to
+  38 %.
+- **Families are one signal.** A family's reflections and the copy the network hears are a direct
+  tap delayed again by the family's delay, through the same low-pass, at a fixed ratio of 1.70. So
+  each Density keeps one table of family levels and derives the copies from it. Sparse's, Mid's and
+  High's tables are their reflections read tap by tap; Low's are its line inputs, which match Live's
+  reflections and tail more closely than its own read taps. Played as one mix per family, the
+  reflections cost a delay line per family instead of one read per tap.
+- **Tap times keep Live's fraction of a frame.** Live steps each tap to the next frame at its own
+  fraction as the predelay moves; without it four taps were a frame late at most predelays. Two
+  direct taps (17.90 and 41.12 ms) sit at 0.59 of a frame rather than the 0.65 their predelay steps
+  read, so that every direct tap lands on Live's frame at every Size read, 0.222 to 500.
 - **Nothing is lost on a pass but the decay.** Live's tail falls a fixed dB per second at every
   frequency the damping does not touch, at every Size. A loss per pass cannot be told apart from a
-  loss per second at one Size, but at Size 0.222 it let the tail grow without end. The network's mix
-  is exactly orthogonal between the lines at their levels, every path fades with its whole time (an allpass holds echoes back for
-  several of its delays, so it loses its own), and the one real loss of the highs is A's and B's
-  hundredth of a frame, read by linear interpolation. This reproduces Live's tail in every band to
-  within 0.1 dB per second from Size 1.53 to 100.
-- **Damping is a gain per 0.17 s trip, applied in proportion to each line's length.** The loop
-  length is the one that fits every band Live was measured at, and it makes the loss per second
-  independent of Size, as Live's top octaves are. Shelves are second-order: first-order ones had
-  to sit off the set frequency and were 13 to 28 % off in octave decay time. The Low-Pass is a
-  whole one-pole per pass, because a one-pole once a trip at the set frequency fits Live's decay
-  per third-octave where an analog first-order low-pass needs separate corners. The input passes no
-  damping: Live's lines each have their own and the input none (with an input pass, the first
-  arrivals were 3 dB too dark).
+  loss per second at one Size, but at Size 0.222 it let the tail grow without end. So the mix is
+  exactly orthogonal between the lines at their levels, every path fades with its whole time (an
+  allpass holds echoes back for several of its delays, so it loses its own), and the one real loss
+  of the highs is A's and B's fraction of a frame.
+- **Damping is a gain per 0.17 s trip, applied in proportion to each line's length.** The trip is
+  the one that fits every band Live was measured at, and it makes the loss per second independent of
+  Size. Shelves are second-order: first-order ones had to sit off the set frequency and were 13 to
+  28 % off in octave decay time. The Low-Pass is a whole one-pole per pass, because that fits Live's
+  decay per third-octave where an analog first-order low-pass needs separate corners. The input
+  passes no damping: with an input pass, the first arrivals were 3 dB too dark.
 - **Low Cut is a roll-off plus two shelves.** Live's Lo Cut has a first-order corner at 2.33 to 2.5
-  times its band edge, and below it a gentle low shelf whose gain falls from +10.6 dB at 25 Hz for an
-  edge of 132 Hz to −12.4 dB at 250 Hz for 841 Hz. Two shelves at 25 and 250 Hz take gains (dB) of
-  (10.57, 1.17), (7.09, 1.30), (4.60, 0.71), (2.65, −3.49), (4.38, −7.11) and (7.58, −12.42) at edges
-  of 132, 192, 264, 500, 658 and 841 Hz, joined linearly against the edge's logarithm and held
+  times its band edge, and below it a gentle low shelf. Two shelves at 25 and 250 Hz take gains (dB)
+  of (10.57, 1.17), (7.09, 1.30), (4.60, 0.71), (2.65, −3.49), (4.38, −7.11) and (7.58, −12.42) at
+  edges of 132, 192, 264, 500, 658 and 841 Hz, joined linearly against the edge's logarithm and held
   beyond; they match Live's six edges to within 0.9 dB in every third-octave band. These are fitted
-  values, not a law, and Live's Lo Cut does nothing for edges below about 44 Hz.
-- **The 127 Hz and 19 Hz roll-off** is the shape of every reflection in Live's renders with both
-  cuts off; the second brings the lowest band (32 Hz) within 0.2 dB.
+  values, not a law. The fixed 127 Hz and 19 Hz roll-off is the shape of every reflection in Live's
+  renders with both cuts off.
 - **Spin swings each direct tap's whole delay, by a share that falls with predelay.** Tracked in
   Live's renders of clicks at Predelay 0.5 to 250 ms, Amount 17.5 and 55, three Rates and three
-  Sizes, every tap follows a sine of peak `0.00995 × amount × reach × T`, whatever the Rate, Amount
-  and Size. Swinging only the delay after the predelay left the first tap still and over-swung the
-  late ones at long predelays; swinging each tap by its own delay overstated the tone's FM 2.6 times
-  at the default. Each tap has its own LFO as tracked in Live's renders, and a filtered tap moves as
-  its direct tap did when it was read, because it is that tap, delayed. The network's input moves
-  with its reflections, because Live's tail with Spin is uncorrelated with its tail without.
+  Sizes, every tap follows a sine of peak `0.00995 × amount × reach × T`. Swinging only the delay
+  after the predelay left the first tap still and over-swung the late ones at long predelays;
+  swinging each tap by its own delay overstated the tone's FM 2.6 times at the default. The
+  network's input moves with its reflections, because Live's tail with Spin is uncorrelated with its
+  tail without.
 - **Linear interpolation for Spin, cubic for the lines.** Live reads Spin's reflections linearly, so
   this device does too. The lines move with Chorus, where linear interpolation would dull and
   modulate the highs for a saving of about 0.8 % of a core.
 - **Chorus swings by 0.38 ms per unit of Amount**, fitted so a 1 kHz tone through the tail swings as
   far as through Live's (12 to 343 cents at five Amounts and Rates; Suhina 12 to 397). The loop adds
-  each trip's shift to the last, so reading the swing as one line's gave 1.8 ms and a hiss. Evenly
-  spread phases per side cancel Doppler shifts; golden-angle phases left a side's lines within a
-  quarter cycle and rippled twice as much.
+  each trip's shift to the last, so reading the swing as one line's gave 1.8 ms and a hiss.
 - **Decay is tuned to 0.9 of the setting**, which is what Live's renders show (0.87 to 0.9 from 0.8
-  to 3.5 s). With every path fading with its whole time, the tail needs no level correction for
-  short decays, and every window of the Decay cases is within 1.7 dB of Live's from 60 ms on.
-- **The reflections' low-pass follows Decay by Density.** The corner of the copies was solved from
-  Live's reflections alone at every Density and Decay 0.2 to 60 s: a cookbook low-pass of Q 0.50
-  whose pole follows the law above (15 Hz rms over all 24 cases). High Cut does not change it.
-- **Level follows Size** as `0.92594 + 0.00074059 × Size`, a pure gain on the reference
-  response read at Sizes 0.222 to 500, and the network's input takes it and a law of its own that
-  falls behind it above Size 100 (Input above). These laws fit all four Densities.
-- **Stereo, not High Cut, delays the reflections.** The 8 frames once read as High Cut's were the
-  default Stereo's delay under None; with it on the reflections alone and the tail left where it
-  was, every Decay case lines up with Live's to the frame. Live's reflections are one frame before
-  the predelay, not after it.
-- **Two rounding rules, one set of lengths.** Under None every length is whole 8-frame blocks and a
-  frame, under Fast and Slow whole frames, but both come from the same numbers: one y and c per
-  line and two numbers per family fit both settings' reads from Size 0.222 to 500, and the
-  families are the same at every Density. Reads at Size 500 and 0.222 settled lengths that the
-  reads at 1.53 to 100 had left a frame or a block either way.
+  to 3.5 s).
 - **Smooth's glide times** (45 ms Slow, 15 ms Fast) are what one point of Live's glide gives for an
-  exponential glide (50 ms after a jump Fast has finished, Slow has 30 to 40 % left); the curve
-  itself was not measured. The half-frame slew limit stops lines being read backwards.
+  exponential glide; the curve itself was not measured.
 - **Freeze, Flat and Cut** follow Live's renders per band: with Flat on the frozen tail falls 0.1 dB/s
-  at 1 kHz and up to 1.6 dB/s at 16 kHz; with Flat off the damping stays in and drains the shelves'
-  bands as fast as the preset's filters do. The soft limit with Cut off is Suhina's.
-- **Switching Density has no crossfade**: it was listened to, and no click could be heard.
+  at 1 kHz and up to 1.6 dB/s at 16 kHz; with Flat off the damping stays in. The soft limit with Cut
+  off is Suhina's.
 
 ## How close it is to Live
 
-Measured against Live's renders of the same settings, imported and rendered by `suhina-cli render` at
-44.1 kHz:
+Residual against Live's renders of the same settings (the difference's energy against Live's, dB;
+lower is closer), imported and rendered by `suhina-cli render` at 44.1 kHz, impulse responses with
+Smooth None unless the row says Fast:
 
-- **Early reflections:** every tap within 0.5 ms and 0.5 dB at every Density, the first 140 ms of
-  the reflections alone within −35 to −42 dB of Live's energy at Size 100 and −29 to −43 dB at
-  Size 0.222 and 500 (Low; every Density's first 200 ms at 500), −36 to −43 dB at Size 250 to 450
-  (Low), −38 to −39 dB over the first
-  80 ms at Size 1.53 and 10.54 (Low, at Decay 0.2 and 1.2 s and every Diffusion and Scale), and the level within 0.1
-  dB in every octave at every Decay.
-- **The network (Low):** waveform within −39 to −41 dB of Live's over the first 0.5 s and −35 dB
-  from 1 to 2 s at every Scale at Size 100, −33 to −38 dB at Sizes 1.53 to 50, and −43 to −44 dB
-  from 0.08 to 3 s at Size 250 to 500. Energy in windows to
-  4.8 s is within 0.5 dB in 941 of 1,084 cases (median 0.10 dB), and the decay time within 10 % in
-  every band to 8 kHz.
-- **Sparse, Mid and High:** waveform within −37 to −41 dB of Live's at Size 100 from 0.08 to 3.5 s
-  at Scale 5, 40 and 100 %, and at Size 1.53 and 10.54 from 0.08 to 3 s, flat with time (Mid and
-  High at 10.54 at Diffusion 0.1, 30 and 60 %, Scale 40 and 100 %, −37 to −40 dB; with damping
-  or a filter −31 to −36 dB). At Size 0.222 and
-  500 under None (Diffusion 0.1 %, Decay 60 s) −36 to −40 dB to 8 s (the line levels add 0.2 to
-  0.5 dB of that at Sparse and Mid, 1 to 1.3 at High); at Diffusion 60 % and Decay 0.83 s to 60 s
-  −34 to −39 dB to 3 s; Mid and High at Size 300 and 400 −36 to −40 dB to 3 s. The network's level
-  is within 0.05 dB of Live's at every Density from
-  Size 0.222 to 500.
+| Density | Settings | 0–80 ms | 0.08–0.5 s | 0.5–3 s | 3–8 s |
+|---|---|---|---|---|---|
+| Low | Size 100, every Scale and Shape | −31 to −48 | −31 to −44 | −30 to −43 | −41 to −43 |
+| Low | Size 1.53 to 50 | −43 to −48 | −37 to −44 | −36 to −43 | −29 to −43 |
+| Low | Size 250 to 500 | −43 to −44 | −43 to −44 | −43 to −44 | −42 to −43 |
+| Low | Size 0.222 and 500, None and Fast | −43 to −44 | −37 to −44 | −30 to −44 | −26 to −43 |
+| Sparse | Size 100, Scale 5 to 100 % | −42 | −42 | −42 to −43 | −42 |
+| Mid | Size 100, Scale 5 to 100 % | −44 | −41 to −47 | −42 | −42 |
+| High | Size 100, Scale 5 to 100 % | −44 | −40 to −48 | −41 | −41 |
+| Mid, High | Size 300 and 400 | −43 | −40 to −42 | −40 to −42 | −41 to −42 |
+| Mid, High | Decay 0.83 to 60 s, Diffusion 0.1 to 60 % | −42 to −44 | −38 to −49 | −36 to −42 | −36 to −42 |
+| Sparse, Mid, High | Size 0.222 and 500, None and Fast | −39 to −44 | −31 to −46 | −28 to −42 | −20 to −42 |
+
+Tap by tap, every reflection is within 0.5 ms and 0.5 dB of Live's at every Density, and the
+network's level within 0.05 dB from Size 0.222 to 500.
 
 ### What is further off
 
-- **Sparse, Mid and High under Smooth Fast.** Their tails drift slowly from Live's under Fast,
-  where under None they do not: −29 dB by 3 s at Sparse at Size 0.222 (Mid −34, High −37), and
-  −23 to −29 dB at every Density at Size 500. Their damping at Decay 1 s was not read either: at the default damping the 8 to
-  16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
-- **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100 and 250 to
-  500 (every 50), Diffusion 0.1 to 60 % and Decay 60 and 0.83 s; between 100 and 250 only Size 200's
-  reflections were read. At Size 500 under Fast the waveform drifts to −28 dB by 3 s, not read. The Shape entry was read at Size 100 and Density
-  Low only, at Shape 0, 0.25, 0.5, 0.75 and 1; that it holds at every Size is inferred from Shape
-  0.5's being the same at every Size, as none of the entry is left for Size to scale.
-- **Stereo's delay** was read at 44.1 kHz only; whether it is 0.625 ms or 27.5625 frames at other
-  rates, and how it moves while Stereo is automated, were not read.
+- **Smooth Fast at the ends of the Size range.** Sparse's, Mid's and High's tails drift slowly from
+  Live's under Fast, where under None they do not: −29 dB by 3 s at Sparse at Size 0.222 and −20 to
+  −29 dB at every Density at Size 500 by 8 s (Low's too, −26 dB).
+- **Sparse's tail with the default damping** (`reverb-er-decay`, Decay 0.83 to 60 s): −26 dB from
+  0.5 s and −18 to −23 dB from 3 s, against −36 at the other Densities. At the default damping the 8
+  to 16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
+- **Low beyond the settings read.** Between Size 100 and 250 only Size 200's reflections were read.
+  The Shape entry was read at Size 100 and Density Low only; that it holds at every Size is inferred
+  from Shape 0.5's being the same at every Size.
+- **Stereo's delay** was read at 44.1 kHz only, and not while Stereo is automated.
 - **Low Cut** is extrapolated for edges between 44.2 and 132 Hz and above 841 Hz.
 - **Spin.** Tap by tap the swing is within 0.02 ms of Live's. Live's moving reflections carry a flat
   floor of noise from 16 to 22 kHz that follows Spin's speed (−50 dB at the default to −29 dB at the
-  extreme, against 1 kHz), which this device's reads do not make, so above 12 kHz Live's highs vary
-  less at Spin's rate (0.4 to 1.3 dB against 2.3 to 4.7 at Amount 55 and 1.3 Hz). Live's LFOs run
-  0.53 % faster than Spin Rate says, and start 8 ms into their cycle, at 0.3 and 1.3 Hz alike:
-  without that the reflections drifted up to ±10 frames from Live's within 6 s at 2.5 ms of
-  predelay, where Spin swings furthest. With it a 1 kHz tone through the reflections differs from
-  Live's by −19 dB at 2.5 ms of predelay (−6 without) and −33 dB at 50 ms (−27); at 0.07 Hz it
-  still does not follow Live's (+1.7 dB), for a reason not found. Chorus's LFO was not checked for
-  the same error: Live's tail does not follow it closely enough to measure.
+  extreme, against 1 kHz), which this device's reads do not make. A 1 kHz tone through the
+  reflections differs from Live's by −19 dB at 2.5 ms of predelay and −33 dB at 50 ms; at 0.07 Hz it
+  still does not follow Live's (+1.7 dB), for a reason not found. Without Spin, a 1 kHz tone through
+  Low is −43 dB from Live's; a stronger R family from the sixth direct tap would bring it to −44 dB
+  but takes impulses up to 4.5 dB further from Live's.
 - **Echo texture.** The tail's echoes thicken differently from Live's: kurtosis 26 from 100 to 150 ms
-  and 5.8 from 150 to 200 against Live's 15 and 10.5, and about four fifths of Live's strong
-  clicks from 50 to 250 ms.
+  and 5.8 from 150 to 200 against Live's 15 and 10.5.
 - **Smooth None against Fast at Decay 3.46 s** (Sparse, Mid, High): Live's two settings differ by up
   to 2 dB by 2.4 s; this device follows Fast, the preset's setting, there.
 - **Long and small-room highs** (Sparse, Mid, High): a fixed shelf per trip cannot follow Live's
@@ -452,28 +379,17 @@ Measured against Live's renders of the same settings, imported and rendered by `
 
 ## Cost
 
-One instance at its defaults: 2.8 to 3.2 % of one core at 48 kHz (60 s rendered in 1.7 to 1.9 s,
-release build, Apple M-series, 2026-10-30), over the 1 % budget as the device notes allow for
-reverbs: ten direct taps, up to twenty offset lines for the filtered taps, and 4 to 10 modulated
-lines with one allpass (two at Mid and High) and damping each, every frame. Density Sparse costs 2.3 %, and 2.4 % with Spin
-off. Run `cargo test --release -p suhina-device-reverb cost -- --ignored --nocapture` to
-measure it.
+One instance at its defaults: 2.0 % of one core at 48 kHz (60 s rendered in 1.19 s, release build,
+Apple M-series, 2026-10-31), over the 1 % budget as the device notes allow for reverbs: ten direct
+taps, up to ten family lines, and 4 to 10 modulated lines with one allpass (two at Mid and High) and
+damping each, every frame. Run `cargo test --release -p suhina-device-reverb cost -- --ignored
+--nocapture` to measure it.
 
 ## Tests
 
-`devices/reverb/src/tests.rs`: the device contract (`device_api::conformance`); the decay time at 1
-and 3 s within 10 % at 44.1 and 96 kHz, and at 0.2 s for every Diffusion; the smallest room still
-decaying at the longest Decay; the same level at both rates; Stereo's correlation at 0, 100 and
-120; Reflect and Diffuse independent; the dry signal undelayed and the mix equal-power; the loop
-keeping its energy with each line at its level; Mid's lines passing two allpasses (a first pass at Diffusion 60 % keeps
-(1 − g²)² of its level); the first
-reflection after the predelay; the predelay lowering the wet signal in inverse proportion to Decay;
-the reflections' fade with Shape and Decay; Spin's reach, swing, restart and filtered taps following
-one direct tap each; Sparse and Low each playing their own reflections; Freeze holding the tail,
-Cut keeping new input out and Flat off keeping the damping; silence decaying to exact zeros; every
-control moved from one end to the other without a click.
-
-`devices/reverb/src/golden_tests.rs`: golden renders of nine scenarios (the defaults, no modulation,
-the densities, damping, Chorus and Spin, Reflect and Diffuse, Freeze with and without Cut, a size
-change), compared within 1e-6 with the files in `devices/reverb/tests/golden`; its README lists
+`devices/reverb/src/tests.rs` checks the device contract and what the reverb must do against these
+laws: decay times, levels, Stereo, the mix, the reflections' times, fades, Spin and families,
+Freeze and Cut, and that no control clicks. `devices/reverb/src/network.rs` checks every measured
+length, entry and family delay against Live's reads. `devices/reverb/src/golden_tests.rs` compares
+nine scenarios within 1e-6 with the renders in `devices/reverb/tests/golden`, whose README lists
 them and how to make them again when a change to the sound is intended.

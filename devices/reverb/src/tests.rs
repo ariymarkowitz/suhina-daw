@@ -72,7 +72,7 @@ fn the_tail_decays_in_the_decay_time_at_every_sample_rate() {
 }
 
 #[test]
-fn the_measured_network_decays_in_the_decay_time_at_every_diffusion() {
+fn the_network_decays_in_the_decay_time_at_every_diffusion() {
     // Every path fades with its whole time: the allpasses' echoes and the plain delays too, so
     // even the shortest decay falls as tuned once the first arrivals are out.
     let sr = 44_100.0;
@@ -282,8 +282,7 @@ fn two_direct_reflections_land_on_lives_frames_at_every_size() {
         ),
     ];
     for (near, frames) in reads {
-        let tap =
-            TAPS_LOW.iter().find(|t| !t.filtered && (t.ms - near).abs() < 0.01).expect("a direct reflection there");
+        let tap = TAPS_LOW.iter().find(|t| (t.ms - near).abs() < 0.01).expect("a direct reflection there");
         for &(size, want) in frames {
             let room = (size / REFERENCE_SIZE).cbrt();
             let at = 0.0025 * 44_100.0 + tap.ms * room * 44.1 + TAP_OFFSET_SECONDS * 44_100.0;
@@ -446,39 +445,26 @@ fn filtered_reflections_swing_with_the_direct_one_they_follow() {
 }
 
 #[test]
-fn every_filtered_reflection_follows_exactly_one_direct_one() {
-    // As Live's renders with Spin show, at every Density: the faint right taps at 63.95 ms (Mid)
-    // and 56.58 ms (High) follow the ones at 7.37 and 0 ms, and of the two taps at 64.44 ms the
-    // left follows the right one at 34.17 ms and the right the left one at 11.43 ms.
-    for taps in TAP_TABLES {
-        for tap in taps.iter().filter(|tap| tap.filtered) {
-            let matches = FILTERED_OFFSETS
-                .iter()
-                .filter(|&&(_, side)| side == tap.side)
-                .flat_map(|&(frames, _)| {
-                    let offset = frames as f64 * 1_000.0 / REFERENCE_RATE;
-                    taps.iter().filter(move |d| !d.filtered && (tap.ms - d.ms - offset).abs() < 0.0015)
-                })
-                .count();
-            assert_eq!(matches, 1, "{tap:?}");
-        }
-    }
-    // Times to within a frame (each table time carries its fraction of a frame).
-    let source = |taps: &[Tap], ms: f64, side: usize| {
-        let k = taps.iter().position(|t| t.filtered && t.side == side && (t.ms - ms).abs() < 0.02);
-        match k.map(|k| routes(taps)[k]) {
-            Some(Route::Follows { source, .. }) => taps[source].ms,
-            _ => f64::NAN,
-        }
+fn each_density_has_its_families_of_filtered_reflections() {
+    // Sparse hears four of Low's six families, Mid all but two of the ten, High all ten.
+    let families = |table: &[[f64; DIRECT_TAPS]; FAMILY_COUNT]| -> Vec<usize> {
+        (0..FAMILY_COUNT).filter(|&f| table[f].iter().any(|&g| g != 0.0)).collect()
     };
-    for (taps, ms, side, expected) in [
-        (&TAPS_MID[..], 63.901, RIGHT, 7.370),
-        (&TAPS_HIGH[..], 56.532, RIGHT, 0.0),
-        (&TAPS_HIGH[..], 64.448, LEFT, 34.172),
-        (&TAPS_HIGH[..], 64.384, RIGHT, 11.429),
-    ] {
-        let found = source(taps, ms, side);
-        assert!((found - expected).abs() < 0.02, "{ms} ms: {found} against {expected}");
+    assert_eq!(families(&FILTERED_SPARSE), [1, 2, 4, 5]);
+    assert_eq!(families(&FILTERED_LOW), [0, 1, 2, 3, 4, 5]);
+    assert_eq!(families(&FILTERED_MID), [0, 1, 2, 3, 4, 5, 6, 9]);
+    assert_eq!(families(&FILTERED_HIGH), (0..FAMILY_COUNT).collect::<Vec<_>>());
+    // As Live's renders with Spin show: the faint right taps at 63.95 ms (Mid) and 56.58 ms
+    // (High) follow the ones at 7.37 and 0 ms (the 2497 family), and of the two taps at 64.44 ms
+    // the left follows the right one at 34.17 ms (the 1337 family) and the right the left one at
+    // 11.43 ms (the 2337 family).
+    for (table, family, direct) in
+        [(&FILTERED_MID, 9, 1), (&FILTERED_HIGH, 9, 0), (&FILTERED_HIGH, 3, 6), (&FILTERED_HIGH, 5, 2)]
+    {
+        assert_ne!(table[family][direct], 0.0, "family {family}, direct reflection {direct}");
+    }
+    for taps in TAP_TABLES {
+        assert!(taps.len() <= DIRECT_TAPS);
     }
 }
 
