@@ -754,11 +754,15 @@ What is further off, and why it is left:
   Read sample by sample there, Fast's first passes keep None's levels, but every line is 5 to 19
   frames shorter, following the same constants without the 8-frame blocks; the allpasses are
   whole frames, and A's and B's delays keep a fraction of a frame read by linear
-  interpolation. After the first passes Live's lengths keep moving (the strongest repeat
-  shortens by 4 frames over 8 s at Size 1.53 and wanders ±0.3 frame), so a fixed network with
-  those fractions loses the highs too fast (late 8 to 16 kHz −5.7 dB/s against the mids, Live
-  −2.0, at Size 1.53). Slow renders exactly as Fast. How the lengths move was not read, so this
-  device keeps its fitted loss for Fast.
+  interpolation. The lengths do not move (`reverb-network-fast-train`: the same to 0.01 frame
+  at 39 impulses over 20 s). The input reaches the lines 770 frames after each reflection, not
+  775, and each line's loop is its first pass's length + 5 frames; the copies come at whole
+  frames 0 to 6 earlier than None's. A network built so matches Live's Fast renders to −37 to
+  −41 dB over 0.5 s at Size 1.53, 10.54 and 100, and its 8 to 16 kHz decay against the mids in
+  every window to 9 s within 0.06 dB/s from 2 s on: Fast's loss of the highs is A's and B's
+  linear reads, which this device does not run (it keeps None's lengths and a fitted shelf,
+  `MEASURED_AIR_ROOM`). Slow renders exactly as Fast. The lengths were read at three Sizes and
+  Scale 40 % (and Scale 5 and 100 % at Size 1.53), not enough for a law at every Size.
 - **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
   the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
   reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's
