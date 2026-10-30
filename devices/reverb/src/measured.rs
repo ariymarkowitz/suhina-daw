@@ -449,6 +449,9 @@ pub(crate) struct Design {
     laws: Laws,
     /// How much of the Diffusion setting the allpasses take.
     pub diffusion: f32,
+    /// How many times as much of the damping shelves' loss a line takes per second as Low's law
+    /// gives ([`Lengths::trips`]).
+    trip_scale: f64,
 }
 
 /// `row` padded with zeros to `M` values.
@@ -497,6 +500,7 @@ static LOW: Design = Design {
     fractions: pad(FRACTION),
     laws: Laws::Low,
     diffusion: 1.0,
+    trip_scale: 1.0,
 };
 /// Sparse's network.
 static SPARSE: Design = Design {
@@ -512,6 +516,10 @@ static SPARSE: Design = Design {
     laws: Laws::Read(&SPARSE_LENGTHS, 0.0),
     // The fifth that the Householder network took (Decision 17), not read from the measured one.
     diffusion: 0.2,
+    // Fitted to the High and Low Shelves at 4 kHz, 1 kHz and 500 Hz and the default damping at
+    // Size 1.53, 10.54 and 100 (`reverb-network-density-filters`); the exponent of the length came
+    // out at 0.99.
+    trip_scale: 1.37,
 };
 /// Mid's network.
 static MID: Design = Design {
@@ -526,6 +534,7 @@ static MID: Design = Design {
     fractions: [0.0; MAX_LINES],
     laws: Laws::Read(&MID_LENGTHS, 1.0),
     diffusion: 1.0,
+    trip_scale: 1.0,
 };
 /// High's network.
 static HIGH: Design = Design {
@@ -540,6 +549,7 @@ static HIGH: Design = Design {
     fractions: [0.0; MAX_LINES],
     laws: Laws::Read(&HIGH_LENGTHS, 1.0),
     diffusion: 1.0,
+    trip_scale: 1.0,
 };
 
 /// The measured network of Density `density` (0 Sparse to 3 High); an unknown one runs Low's.
@@ -668,7 +678,7 @@ impl Lengths {
             // as fast as the rest (as Live's tail does at every Diffusion).
             self.gains[k] = gain(line / sample_rate);
             self.losses[k] = gain(allpass / sample_rate);
-            self.trips[k] = (line + allpass) / sample_rate / trip_seconds;
+            self.trips[k] = design.trip_scale * (line + allpass) / sample_rate / trip_seconds;
             let front = if fast { fast_front(k, room, settled) } else { front_of(design.offsets[k], room, settled) };
             self.fronts[k] = whole(front * frames);
         }

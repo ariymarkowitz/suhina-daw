@@ -620,17 +620,18 @@ const REFLECTION_POWER: f64 = 0.886;
 const TOP_CUT: f64 = 18_000.0;
 
 /// Density Low, whose late reverb is the measured network read most closely ([`measured`]): its
-/// Size level and Smooth Fast are measured, Sparse's, Mid's and High's not.
+/// Smooth Fast is measured, Sparse's, Mid's and High's not.
 const LOW: usize = 1;
 /// Level of the measured network's input against the direct reflections': with it, each line's
 /// first pass is [`measured`]'s gain times the direct reflection it comes from,
 /// as Live's is (`reverb-network-exact`).
 const MEASURED_GAIN: f64 = 0.2383;
-/// Density Low's reflections are this much of their reference-room level at Size 0, and grow by
+/// Every Density's reflections are this much of their reference-room level at Size 0, and grow by
 /// [`LOW_SIZE_LEVEL_PER_SIZE`] per unit of Size: a pure gain on the Size 100 response, read at
-/// Sizes 0.22 to 500 (`reverb-network-small`). The measured network's input takes it twice.
+/// Sizes 0.22 to 500 for Low (`reverb-network-small`) and 1.53 to 100 for Sparse, Mid and High
+/// (`reverb-network-density-filters`). The measured network's input takes it twice.
 const LOW_SIZE_LEVEL: f64 = 0.92594;
-/// How much louder Density Low's reflections are per unit of Size.
+/// How much louder the reflections are per unit of Size.
 const LOW_SIZE_LEVEL_PER_SIZE: f64 = 0.000_740_59;
 
 /// Level of the late reverb against the input.
@@ -1479,8 +1480,7 @@ impl Reverb {
         let low = density_index == LOW;
         // Smooth Slow renders as Fast (`reverb-network-fast`).
         let fast = self.value(param::SMOOTH) as usize != 0;
-        let size_level =
-            if low { LOW_SIZE_LEVEL + LOW_SIZE_LEVEL_PER_SIZE * REFERENCE_SIZE * room.powi(3) } else { 1.0 };
+        let size_level = LOW_SIZE_LEVEL + LOW_SIZE_LEVEL_PER_SIZE * REFERENCE_SIZE * room.powi(3);
         // The network is fed by the direct reflections, each at its own level and fade.
         let norm = taps.iter().filter(|tap| !tap.filtered).map(|tap| tap.gain * tap.gain).sum::<f64>().sqrt().max(1e-9);
         let t = &mut self.to;
