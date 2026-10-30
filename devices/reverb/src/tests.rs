@@ -97,14 +97,14 @@ fn the_measured_network_decays_in_the_decay_time_at_every_diffusion() {
 
 #[test]
 fn the_smallest_room_still_decays_at_the_longest_decay() {
-    // At Size 0.22 and Decay 60 s a trip through a line loses under 0.1 %, so no line may pass
+    // At Size 0.222 and Decay 60 s a trip through a line loses under 0.1 %, so no line may pass
     // more than it takes in, or the mode that lives in it grows without end.
     let sr = 44_100.0;
     let mut r = reverb(
         sr,
         &[
             (param::DENSITY, LOW as f64),
-            (param::SIZE, 0.22),
+            (param::SIZE, 0.222),
             (param::SMOOTH, 0.0),
             (param::DECAY, 60.0),
             (param::DIFFUSION, 0.001),

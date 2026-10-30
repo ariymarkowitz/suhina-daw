@@ -52,7 +52,7 @@ Values are plain values in their unit (ADR 0004). Ids are stable.
 | 18 | `chorus` | Chorus | off/on | on | toggle |
 | 19 | `chorusRate` | Chorus Rate | 0.01 – 8 Hz | 0.02 Hz | hertz, logarithmic |
 | 20 | `chorusAmount` | Chorus Amount | 0.01 – 4 | 0.02 | plain number, linear |
-| 21 | `size` | Size | 0.22 – 500 | 100 | plain number (a room volume), logarithmic |
+| 21 | `size` | Size | 0.222 – 500 (shown as 0.22) | 100 | plain number (a room volume), logarithmic |
 | 22 | `smooth` | Smooth | None, Slow, Fast | Fast | choice |
 | 23 | `decay` | Decay | 0.2 – 60 s | 1.2 s | seconds, logarithmic |
 | 24 | `freeze` | Freeze | off/on | off | toggle |
@@ -156,10 +156,12 @@ matrix, and each line has its own mix of the direct taps as input.
   that line's output into the mix.
 - **Lengths.** A line's delay and allpass are whole numbers of 8-frame blocks plus a frame (Live
   builds them so). At Low: the delay is `8 × floor(y × size factor + 0.85) + 1` frames, the allpass
-  `8 × floor(c × Scale × size factor + 0.9) + 1` (Scale in %), with y 286.875, 339.649, 423.336,
-  459.936 and 846.683 for A, B, C, D and F and c 0.63406, 1.22440, 0.87055, 3.97925, 2.18381 and
-  0.80374 for A, B, C, D, F and R. C first runs its family's offset as a plain delay; R runs A's
-  delay, then `8 × floor(934.943 × size factor − 0.411)` frames more, then its own allpass. At the
+  `8 × floor(c × Scale × size factor + 0.9) + 1` (Scale in %), with y 287.0993, 340.0779, 628.6862,
+  459.9587, 846.774 and 1220.6339 and c 0.63406, 1.22440, 0.87055, 3.97925, 2.18381 and 0.80374 for
+  A, B, C, D, F and R: Smooth Fast's lengths, rounded to blocks. C's delay is its family's offset
+  and a plain delay, and R's is A's delay and a delay G, but each rounds as one length: at Size
+  0.222 rounding the parts on their own makes C a block longer and R a block shorter, which takes
+  the tail's waveform apart from Live's after 20 ms. At the
   default Scale in the reference room A, B, D and F are 57, 71, 113 and 170 ms, C 1640 frames then
   83 ms, R 228 ms. Sparse, Mid and High lengths were read at Size 100 for Scale 5 to 100 % and are
   joined linearly between the Scales read; at other Sizes every part takes the size factor. A Mid
@@ -244,7 +246,7 @@ Live's Reverb is the element `Reverb`; every value is `<Element>/Manual@Value`
 | `ShelfLowOn`, `ShelfLoFreq`, `ShelfLoGain` | flag, Hz, 0.2 … 1 | `lowDamping`, `lowDampingFrequency`, `lowDampingGain` |
 | `AllPassGain`, `AllPassSize` | 0.001 … 0.96, 0.05 … 1 | `diffusion`, `scale` |
 | `ChorusOn`, `SizeModFreq`, `SizeModDepth` | flag, Hz, 0.01 … 4 | `chorus`, `chorusRate`, `chorusAmount` |
-| `RoomSize`, `SizeSmoothing` | 0.22 … 500, 0 None / 1 Slow / 2 Fast | `size`, `smooth` |
+| `RoomSize`, `SizeSmoothing` | 0.222 … 500, 0 None / 1 Slow / 2 Fast | `size`, `smooth` |
 | `FreezeOn`, `FlatOn`, `CutOn` | true/false | `freeze`, `flat`, `cut` |
 | `StereoSeparation` | 0 … 120 | `stereo` |
 | `RoomType` | 0 Sparse … 3 High | `density` |
@@ -281,7 +283,7 @@ Why the device is built as it is.
   block at a time.
 - **Nothing is lost on a pass but the decay.** Live's tail falls a fixed dB per second at every
   frequency the damping does not touch, at every Size. A loss per pass cannot be told apart from a
-  loss per second at one Size, but at Size 0.22 it let the tail grow without end. The network's mix
+  loss per second at one Size, but at Size 0.222 it let the tail grow without end. The network's mix
   is exactly orthogonal, every path fades with its whole time (an allpass holds echoes back for
   several of its delays, so it loses its own), and the one real loss of the highs is A's and B's
   hundredth of a frame, read by linear interpolation. This reproduces Live's tail in every band to
@@ -326,7 +328,7 @@ Why the device is built as it is.
   Live's reflections alone at every Density and Decay 0.2 to 60 s: a cookbook low-pass of Q 0.50
   whose pole follows the law above (15 Hz rms over all 24 cases). High Cut does not change it.
 - **Level follows Size** as `0.92594 + 0.00074059 × Size`, a pure gain on the reference
-  response read at Sizes 0.22 to 500, and the network's input takes it twice. This one law fits all
+  response read at Sizes 0.222 to 500, and the network's input takes it twice. This one law fits all
   four Densities.
 - **High Cut delays everything 8 frames more than its low-pass does**, and Live's reflections are one
   frame before the predelay, not after it; both were read from the reflections alone.
@@ -358,9 +360,8 @@ Measured against Live's renders of the same settings, imported and rendered by `
 - **Sparse, Mid and High away from Size 100 and the defaults.** Their lengths at other Sizes, their
   Smooth Fast loss of the highs and (Mid and High) their damping at Decay 1 s were not read: at the
   default damping the 8 to 16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
-- **Low beyond the settings read.** Lengths and levels were read at Size 0.22 to 100, Diffusion 0.1
-  to 60 % and Decay 60 and 0.83 s. At Size 0.22 the waveform matches only the first 200 frames
-  (energy is within 0.4 dB to 9 s); under Smooth Fast the entry was read at Shape 0.5 only, and
+- **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100, Diffusion 0.1
+  to 60 % and Decay 60 and 0.83 s. Under Smooth Fast the entry was read at Shape 0.5 only, and
   Live's Fast also moves the reflections earlier by 4 to 10 frames with High Cut on, which this
   device does not.
 - **High Cut's delay under Smooth None.** Live's reflections with High Cut on come at the same frames

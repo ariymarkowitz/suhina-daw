@@ -510,7 +510,7 @@ const LOW: usize = 1;
 const MEASURED_GAIN: f64 = 0.2383;
 /// Every Density's reflections are this much of their reference-room level at Size 0, and grow by
 /// [`LOW_SIZE_LEVEL_PER_SIZE`] per unit of Size: a pure gain on the Size 100 response, read at
-/// Sizes 0.22 to 500 for Low (`reverb-network-small`) and 1.53 to 100 for Sparse, Mid and High
+/// Sizes 0.222 to 500 for Low (`reverb-network-small`) and 1.53 to 100 for Sparse, Mid and High
 /// (`reverb-network-density-filters`). The measured network's input takes it twice.
 const LOW_SIZE_LEVEL: f64 = 0.92594;
 /// How much louder the reflections are per unit of Size.
@@ -694,7 +694,7 @@ const PARAMS: [ParamInfo; param::COUNT] = [
         .in_group("Diffusion"),
     ParamInfo::continuous("chorusAmount", "Chorus Amount", (0.01, 4.0), 0.02, Unit::None, Scale::Linear)
         .in_group("Diffusion"),
-    ParamInfo::continuous("size", "Size", (0.22, 500.0), 100.0, Unit::None, Scale::Logarithmic).in_group("Decay"),
+    ParamInfo::continuous("size", "Size", (0.222, 500.0), 100.0, Unit::None, Scale::Logarithmic).in_group("Decay"),
     ParamInfo::choice("smooth", "Smooth", &["None", "Slow", "Fast"], 2).in_group("Decay"),
     ParamInfo::continuous("decay", "Decay", (0.2, 60.0), 1.2, Unit::Seconds, Scale::Logarithmic).in_group("Decay"),
     ParamInfo::toggle("freeze", "Freeze", false).in_group("Decay"),
@@ -1417,7 +1417,7 @@ impl Reverb {
 
         // The measured network has no loss of the highs of its own: with Smooth None its only loss
         // is A's and B's hundredth of a frame, and under Fast or Slow their larger fractions
-        // (`measured::FAST_DELAYS`), read from `reverb-network-fast-train`.
+        // (`measured::DELAYS`), read from `reverb-network-fast-train`.
         let r = &self.ramps;
         let (high_f, high_g) = (2.0f64.powf(f64::from(r.high_frequency.current())), f64::from(r.high_gain.current()));
         let (low_f, low_g) = (2.0f64.powf(f64::from(r.low_frequency.current())), f64::from(r.low_gain.current()));

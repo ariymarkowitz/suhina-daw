@@ -21,7 +21,7 @@
 //! blocks and one frame: the delay's blocks grow with the room's size factor, the allpass's with
 //! the size factor times Scale (%), each rounding down at its own edge ([`length_at`]). The input
 //! reaches the lines [`ENTRY_MS`] after each direct reflection, whatever the Size. Under Smooth Fast
-//! or Slow the lengths keep to no blocks and A and B are read between frames ([`FAST_DELAYS`]).
+//! or Slow the lengths keep to no blocks and A and B are read between frames ([`DELAYS`]).
 //! Every value was read from `reverb-network-exact` (Hi Cut off, Diffusion 0.1 %, Decay 60 s,
 //! Stereo 120, Scale 5 to 100 %): with the input's fixed filter divided out each arrival is one
 //! sample, and a simulation of this structure with these values matches Live's renders to −41 dB
@@ -46,14 +46,14 @@ const RATE: f64 = 44_100.0;
 
 /// Live builds every length of the network from blocks of 8 frames (at 44.1 kHz).
 const BLOCK: f64 = 8.0;
-/// Each line's delay before its allpass in the reference room (blocks) for A, B, C, D and F, and
-/// G, the delay R runs after A's: a delay is `BLOCK * floor(blocks * room + DELAY_EDGE) + 1`
-/// frames, G's `BLOCK * floor(blocks * room + G_EDGE)` with no frame more.
-const DELAYS: [f64; LOOP] = [286.875, 339.649, 423.336, 459.936, 846.683, 934.943];
-/// Where a delay rounds up to its next block (blocks).
+/// Each line's delay before its allpass in the reference room (blocks), A, B, C, D, F and R, under
+/// every Smooth. With Smooth None it is `BLOCK * floor(blocks * room + DELAY_EDGE) + 1` frames: C's
+/// takes in its family's offset and R's A's delay and G's, each as one rounded length (the lengths
+/// read at Size 1.53 to 100, and at Size 0.222 C's 82 blocks and R's 160, where rounding the parts
+/// on their own gives 83 and 159). Smooth Fast is below.
+const DELAYS: [f64; LOOP] = [287.0993, 340.0779, 628.6862, 459.9587, 846.774, 1220.6339];
+/// Where a delay rounds up to its next block (blocks): every read fits 0.813 to 0.901.
 const DELAY_EDGE: f64 = 0.85;
-/// Where G rounds up to its next block (blocks).
-const G_EDGE: f64 = -0.411;
 /// Each line's allpass, A, B, C, D, F and R, in blocks per % of Scale in the reference room: it
 /// is `BLOCK * floor(blocks * Scale * room + ALLPASS_EDGE) + 1` frames.
 const ALLPASSES: [f64; LOOP] = [0.63406, 1.22440, 0.87055, 3.97925, 2.18381, 0.80374];
@@ -62,12 +62,11 @@ const ALLPASS_EDGE: f64 = 0.9;
 
 /// Under Smooth Fast (and Slow, which renders as Fast) no length keeps to blocks
 /// (`reverb-network-fast`, `reverb-network-fast-train`): each line's delay is `8 × y × room + 1`
-/// frames, with y these (blocks), and its allpass `floor(8 × c × Scale × room +
+/// frames, with y [`DELAYS`], and its allpass `floor(8 × c × Scale × room +
 /// FAST_ALLPASS_EDGE) + 1`. A's and B's delays keep their fraction of a frame and are read
 /// between frames, linearly; C's, D's and F's round down to whole frames, and R's (A's delay and
 /// G's together) rounds down past [`FAST_R_EDGE`]. Read at Size 1.53, 10.54 and 100 (Scale 40 %)
 /// and Scale 5 and 100 % at Size 1.53: A and B to 0.005 frame, the rest to the frame.
-const FAST_DELAYS: [f64; LOOP] = [287.0993, 340.0779, 628.6862, 459.9587, 846.774, 1220.6339];
 /// Where R's delay rounds up to its next frame under Smooth Fast (frames).
 const FAST_R_EDGE: f64 = 0.494;
 /// Each line's allpass under Smooth Fast, as [`ALLPASSES`]: C's and R's are 0.1 and 0.2 % below
@@ -93,7 +92,7 @@ fn frames(x: f64, edge: f64, settled: bool) -> f64 {
 
 /// Line `k`'s delay and allpass under Smooth Fast, as [`length_at`].
 fn fast_length_at(k: usize, room: f64, percent: f64, settled: bool) -> (f64, f64) {
-    let x = BLOCK * FAST_DELAYS[k] * room;
+    let x = BLOCK * DELAYS[k] * room;
     let line = match k {
         0 | 1 => x + 1.0,
         5 => frames(x, FAST_R_EDGE, settled),
@@ -109,16 +108,11 @@ fn blocks(x: f64, edge: f64, settled: bool) -> f64 {
 }
 
 /// Line `k`'s delay and allpass (frames at 44.1 kHz) for size factor `room` and Scale `percent`,
-/// in whole blocks when `settled`. C first runs its family's offset as a plain delay, and R is
-/// A's delay, then G's, then its own allpass (`reverb-network-small`, `reverb-network-sections`).
+/// in whole blocks when `settled`. C's delay takes in its family's offset, and R's A's delay and
+/// G's, each as one length ([`DELAYS`], `reverb-network-small`, `reverb-network-sections`).
 fn length_at(k: usize, room: f64, percent: f64, settled: bool) -> (f64, f64) {
-    let delay = |row: usize| blocks(DELAYS[row] * room, DELAY_EDGE, settled) + 1.0;
+    let line = blocks(DELAYS[k] * room, DELAY_EDGE, settled) + 1.0;
     let allpass = blocks(ALLPASSES[k] * percent * room, ALLPASS_EDGE, settled) + 1.0;
-    let line = match k {
-        2 => front(2, room, settled) + delay(2),
-        5 => delay(0) + blocks(DELAYS[5] * room, G_EDGE, settled),
-        _ => delay(k),
-    };
     (line, allpass)
 }
 
@@ -230,7 +224,7 @@ pub(crate) const MIX: [[f64; LOOP]; LOOP] = [
 /// interpolation (0.99 of the frame and 0.01 of the next): a slight loss of the highs on every
 /// pass (0.18 dB at the top) and none of the lows. The other lines are whole. No line loses
 /// anything else on a pass: the whole tail falls with the decay's loss per second, at every Size
-/// (docs/spec/reverb.md › Design notes). Under Smooth Fast A's and B's fractions are larger ([`FAST_DELAYS`]), and they
+/// (docs/spec/reverb.md › Design notes). Under Smooth Fast A's and B's fractions are larger ([`DELAYS`]), and they
 /// are all of Fast's loss of the highs.
 const FRACTION: [f64; LOOP] = [0.01, 0.01, 0.0, 0.0, 0.0, 0.0];
 /// The side each line is heard on (0 left, 1 right), all at one level before Stereo's rotation.
@@ -1043,6 +1037,15 @@ mod tests {
     }
 
     #[test]
+    fn the_smallest_rooms_c_and_r_are_their_measured_lengths() {
+        // Read from Live's tail at Size 0.222 (`reverb-network-small`): C's family offset and
+        // delay, and R's A delay and G, are each one rounded length, not two.
+        let room = (0.222 / 100.0f64).cbrt();
+        assert_eq!(length_at(2, room, 40.0, true).0, 8.0 * 82.0 + 1.0);
+        assert_eq!(length_at(5, room, 40.0, true).0, 8.0 * 160.0 + 1.0);
+    }
+
+    #[test]
     fn under_smooth_fast_a_line_is_its_measured_loop() {
         // Live's loops under Smooth Fast (frames: each line's first pass and 5), read at each
         // (Size, Scale %) of `reverb-network-fast`.
@@ -1087,7 +1090,7 @@ mod tests {
         let measured = [
             (100.0, [401.0, 3193.0, 1641.0, 1337.0, 2985.0, 2337.0]),
             (10.54, [193.0, 1513.0, 777.0, 633.0, 1409.0, 1105.0]),
-            (0.22, [57.0, 417.0, 217.0, 177.0, 393.0, 305.0]),
+            (0.222, [57.0, 417.0, 217.0, 177.0, 393.0, 305.0]),
         ];
         for (size, peaks) in measured {
             let room = (size / 100.0f64).cbrt();
