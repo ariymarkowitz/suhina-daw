@@ -769,13 +769,25 @@ Each entry: what was chosen, what it costs, why.
     delay `8 n + 2`, the allpass `8 n`) at each Scale, kept as read and joined linearly: X 2954 to
     4826, Y 3594 to 4434, Z 4522 to 5082 and W 9538 to 10586 frames at Scale 5 to 100 % after the
     entry. The families' filtered reflections peak 2985, 3193, 2337 and 1641 frames after their
-    direct ones (X, Y, Z, W), and the mix is orthogonal. The four direct reflections are 1.5 times
-    as loud as Low's, so the input takes 0.9487 of the weights read, as the input normalises by
-    the root of their squares. Against Live's `reverb-network-density` renders the waveform
+    direct ones (X, Y, Z, W), and the mix is orthogonal. Its inputs take 0.9965 of the weights read (Decision 30). Against Live's `reverb-network-density` renders the waveform
     matches to 11 to 12 dB below Live's energy from 0.15 s to 4 s at Scale 5, 40 and 100 %, as Mid
     does, with the same 1.5 dB shortfall in level. Not measured: other Sizes (both parts of a line
     take the size factor), Diffusion, Smooth Fast and Slow (Sparse runs as with None), and Hi Cut
     and damping (Low's, taken to be the same). With this, no Density runs the Householder network.
+
+30. **The copies of Sparse, Mid and High are 1.8 to 1.9 times what they were read as.** Their
+    filtered-reflection copies were fitted against a three-sample shape with a peak of 1
+    (0.53, 1, 0.39), but the device plays them through the reflections' unit-gain low-pass, whose
+    taps sum to 1.92 times its peak, so they ran at 0.55 of their line's input, where Low's copy
+    is its input. Fitted to Live's `reverb-network-density` renders (Scale 5, 40 and 100 %, a
+    least-squares search over the input gain, the copy gain and the loop gain, which came out at
+    1.00): copies times 1.79 (Sparse), 1.909 (Mid) and 1.903 (High), inputs times 0.9965 for Sparse
+    and 1.057 for Mid and High. The level from 0.15 s to 4 s went from −1.4 to −1.6 dB to within
+    0.25 dB of Live's, and the waveform match from 11 dB to 33–38 dB below Live's energy over
+    0.15 to 1 s. In Live's white-noise renders with the bare network (Diffusion 0.1 %, Decay 60 s)
+    the tail went from 2.1 dB under Live's to within 0.1 dB, flat across the octave bands. Not
+    fixed: at the default damping the highs decay too slowly (8 to 16 kHz by 1.5 dB/s at Mid and
+    High, and 4 to 16 kHz by 2.5 to 3.6 dB/s at Sparse); the damping was measured only at Low.
 
 ## Known differences
 

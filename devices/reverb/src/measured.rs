@@ -262,16 +262,16 @@ const SPARSE_INPUTS: [[f64; 4]; 4] = [
     [1.6190, -0.8600, -1.5630, 0.5690],
     [0.7570, -0.7360, 1.6880, 1.3990],
 ];
-/// Sparse's direct reflections are 1.5 times as loud as the others' and four, where the input
-/// normalises by the root of the sum of their squares: this much of the 3.16 that Low's ten have.
-const SPARSE_INPUT_GAIN: f64 = 0.9487;
-/// Each of Sparse's lines' family, as [`MID_COPIES`].
+/// Sparse's inputs times this, fitted to Live's renders at Scale 5, 40 and 100 % (0.9487 from
+/// the root of the sum of its four direct reflections' squares against Low's ten, and 5 % more).
+const SPARSE_INPUT_GAIN: f64 = 0.9965;
+/// Each of Sparse's lines' family, as [`MID_COPIES`], times 1.79 (the fit) instead.
 #[allow(clippy::approx_constant, reason = "a fitted value that is near π/8 by chance")]
 const SPARSE_COPIES: [[f64; 4]; 4] = [
-    [-0.7930, 0.0336, 0.6542, -0.8982],
-    [0.3394, -1.2442, -0.0412, -0.4358],
-    [0.9219, 0.5558, -0.0835, -0.8390],
-    [0.5325, -0.0322, 1.1925, 0.3927],
+    [-1.4195, 0.0601, 1.1710, -1.6078],
+    [0.6075, -2.2271, -0.0737, -0.7801],
+    [1.6502, 0.9949, -0.1495, -1.5018],
+    [0.9532, -0.0576, 2.1346, 0.7029],
 ];
 /// Where each of Sparse's families' copy starts: it peaks 2985, 3193, 2337 and 1641 frames after
 /// its direct reflections, in Low's blocks.
@@ -297,6 +297,9 @@ const fn pad_groups<const N: usize>(groups: [usize; N]) -> [usize; DIRECT_TAPS] 
     out
 }
 
+/// Mid's and High's inputs times this, fitted to Live's renders as Sparse's.
+const MID_HIGH_INPUT_GAIN: f64 = 1.057;
+
 /// Mid's direct reflections reach the lines in 8 groups: the first and the fourth reflection as
 /// one, with weights equal and opposite to their levels, and so the second and the seventh.
 const MID_TAP_GROUPS: [usize; DIRECT_TAPS] = [0, 1, 2, 0, 3, 4, 1, 5, 6, 7];
@@ -312,17 +315,19 @@ const MID_INPUTS: [[f64; 8]; 8] = [
     [-1.4164, 0.8425, -0.4587, 0.6245, 0.5737, 0.7272, -1.3265, 0.2895],
     [-0.9832, -1.1993, 0.1881, 0.3803, 0.1573, 0.8441, 0.6337, -1.4033],
 ];
-/// Each of Mid's lines' family, as it joins the line's output: 1.84 times the family's filtered
-/// reflections against their direct ones, as Low's [`FAMILY_GAINS`] are.
+/// Each of Mid's lines' family, as it joins the line's output, in Low's units (a copy as loud as
+/// its line's input, through the unit-gain reflection filter). They were read as the peak of the
+/// filter's three taps (0.53, 1, 0.39), which sum to 1.92 of it; the weights here are those times
+/// 1.909, the fit to Live's renders at Scale 5, 40 and 100 %.
 const MID_COPIES: [[f64; 8]; 8] = [
-    [-0.5279, 0.1311, 0.7484, 0.5700, 0.0491, 0.5809, 0.5327, 0.0836],
-    [-0.0887, 0.9085, 0.2623, -0.4871, 0.3573, 0.3796, -0.5605, -0.2580],
-    [0.3048, -0.6822, -0.0194, 0.0000, 0.9165, 0.4822, 0.0134, -0.4271],
-    [0.7103, 0.4840, -0.5156, 0.4487, -0.3001, 0.5026, 0.3616, -0.3816],
-    [0.1273, -0.4879, 0.4566, -0.0889, -0.8140, 0.3788, -0.5535, -0.4727],
-    [0.6341, -0.0710, 0.2364, -0.2251, -0.0330, 0.4529, -0.1009, 1.0362],
-    [-0.5791, -0.1232, -0.7189, 0.4483, 0.0072, 0.5108, -0.6251, 0.3192],
-    [-0.4236, -0.1177, -0.3877, -0.8803, -0.2954, 0.4799, 0.6006, -0.0194],
+    [-1.0078, 0.2503, 1.4287, 1.0881, 0.0937, 1.1089, 1.0169, 0.1596],
+    [-0.1693, 1.7343, 0.5007, -0.9299, 0.6821, 0.7247, -1.0700, -0.4925],
+    [0.5819, -1.3023, -0.0370, 0.0000, 1.7496, 0.9205, 0.0256, -0.8153],
+    [1.3560, 0.9240, -0.9843, 0.8566, -0.5729, 0.9595, 0.6903, -0.7285],
+    [0.2430, -0.9314, 0.8716, -0.1697, -1.5539, 0.7231, -1.0566, -0.9024],
+    [1.2105, -0.1355, 0.4513, -0.4297, -0.0630, 0.8646, -0.1926, 1.9781],
+    [-1.1055, -0.2352, -1.3724, 0.8558, 0.0137, 0.9751, -1.1933, 0.6094],
+    [-0.8087, -0.2247, -0.7401, -1.6805, -0.5639, 0.9161, 1.1465, -0.0370],
 ];
 /// Where each of Mid's families' copy starts (blocks, reference room): it peaks 3193, 2985, 961,
 /// 1337, 2497, 1641, 2337 and 401 frames after its direct reflections at Size 100, those Low has
@@ -367,18 +372,18 @@ const HIGH_INPUTS: [[f64; 10]; 10] = [
     [0.7784, 1.0137, -0.2645, -0.7414, -0.2340, -1.1961, -1.1568, -0.2559, -0.4088, 0.6124],
     [-1.1453, 0.7659, -0.3891, -0.0994, 0.6801, -0.5935, 0.0942, 0.8846, -0.9501, -1.0664],
 ];
-/// Each of High's lines' family, as [`MID_COPIES`].
+/// Each of High's lines' family, as [`MID_COPIES`], times 1.903.
 const HIGH_COPIES: [[f64; 10]; 10] = [
-    [0.2995, -0.6917, -0.2195, 0.6124, 0.2888, -0.5071, -0.0015, 0.2651, 0.5601, 0.2923],
-    [-0.4620, -0.5734, -0.3215, 0.1208, -0.3785, 0.4638, 0.3233, -0.7983, 0.2007, 0.1312],
-    [-0.0337, -0.2706, 0.6835, -0.0384, 0.3726, -0.1296, -0.7833, -0.6487, 0.1161, -0.2414],
-    [0.6603, -0.2093, -0.4159, -0.3505, 0.6107, 0.3185, 0.3194, -0.2003, 0.0210, -0.6625],
-    [0.0204, -0.7125, -0.3447, -0.5079, -0.5377, -0.1207, -0.5633, 0.3839, -0.3476, -0.2346],
-    [-0.5555, -0.2500, 0.3440, 0.1707, -0.0013, -0.5266, 0.5881, 0.1393, -0.1951, -0.7866],
-    [-0.4775, 0.1863, -0.2334, 0.3818, 0.1013, 0.6029, -0.4544, 0.4569, 0.5311, -0.5420],
-    [0.3548, -0.2258, 0.7600, -0.3432, -0.4446, 0.3560, 0.3205, 0.3014, 0.6396, -0.0254],
-    [-0.6510, -0.1396, -0.0624, -0.7974, 0.6341, -0.0779, 0.1094, 0.2235, 0.2998, 0.4018],
-    [-0.0424, -0.4754, 0.3909, 0.3332, 0.4051, 0.6567, 0.0896, 0.3525, -0.6984, 0.2841],
+    [0.5699, -1.3163, -0.4177, 1.1654, 0.5496, -0.9650, -0.0029, 0.5045, 1.0659, 0.5562],
+    [-0.8792, -1.0912, -0.6118, 0.2299, -0.7203, 0.8826, 0.6152, -1.5192, 0.3819, 0.2497],
+    [-0.0641, -0.5150, 1.3007, -0.0731, 0.7091, -0.2466, -1.4906, -1.2345, 0.2209, -0.4594],
+    [1.2566, -0.3983, -0.7915, -0.6670, 1.1622, 0.6061, 0.6078, -0.3812, 0.0400, -1.2607],
+    [0.0388, -1.3559, -0.6560, -0.9665, -1.0232, -0.2297, -1.0720, 0.7306, -0.6615, -0.4464],
+    [-1.0571, -0.4758, 0.6546, 0.3248, -0.0025, -1.0021, 1.1192, 0.2651, -0.3713, -1.4969],
+    [-0.9087, 0.3545, -0.4442, 0.7266, 0.1928, 1.1473, -0.8647, 0.8695, 1.0107, -1.0314],
+    [0.6752, -0.4297, 1.4463, -0.6531, -0.8461, 0.6775, 0.6099, 0.5736, 1.2172, -0.0483],
+    [-1.2389, -0.2657, -0.1187, -1.5175, 1.2067, -0.1482, 0.2082, 0.4253, 0.5705, 0.7646],
+    [-0.0807, -0.9047, 0.7439, 0.6341, 0.7709, 1.2497, 0.1705, 0.6708, -1.3291, 0.5406],
 ];
 /// Where each of High's families' copy starts, as [`MID_OFFSETS`]: it peaks 3193, 2393, 2985,
 /// 961, 1337, 2497, 1641, 2337, 401 and 2073 frames after its direct reflections.
@@ -513,7 +518,7 @@ static MID: Design = Design {
     lines: 8,
     tap_groups: MID_TAP_GROUPS,
     inputs: pad_rows(MID_INPUTS),
-    input_gains: [1.0; MAX_LINES],
+    input_gains: [MID_HIGH_INPUT_GAIN; MAX_LINES],
     copies: Some(pad_rows(MID_COPIES)),
     offsets: pad(MID_OFFSETS),
     mix: pad_rows(MID_MIX),
@@ -527,7 +532,7 @@ static HIGH: Design = Design {
     lines: 10,
     tap_groups: HIGH_TAP_GROUPS,
     inputs: pad_rows(HIGH_INPUTS),
-    input_gains: [1.0; MAX_LINES],
+    input_gains: [MID_HIGH_INPUT_GAIN; MAX_LINES],
     copies: Some(pad_rows(HIGH_COPIES)),
     offsets: pad(HIGH_OFFSETS),
     mix: pad_rows(HIGH_MIX),
