@@ -14,8 +14,8 @@
 //! ```
 //!
 //! At Low a line's family is its input. Its six lines are A, B, C, D, F and R: A, C and R heard
-//! on the right, B, D and F on the left, all at one level. Mid's and High's lines are read
-//! only at Size 100 (`reverb-network-density`), as below.
+//! on the right, B, D and F on the left, all at one level. Sparse's, Mid's and High's lines take
+//! their lengths by family from one table ([`SHARED_LINES`]), by Low's law.
 //!
 //! Times are frames at 44.1 kHz. A line of Low is a delay and an allpass, each a whole number of 8-frame
 //! blocks and one frame: the delay's blocks grow with the room's size factor, the allpass's with
@@ -133,36 +133,29 @@ fn front(k: usize, room: f64, settled: bool, fast: bool) -> f64 {
     }
 }
 
-/// A line of Sparse, Mid or High, delay and allpass (frames at 44.1 kHz), from its `row` of
-/// [`SPARSE_LENGTHS`], [`MID_LENGTHS`] or [`HIGH_LENGTHS`], for size factor `room` and Scale
-/// `percent`; the allpass is `extra` frames more than its blocks.
-fn read_length_at(row: &[f64; 7], extra: f64, room: f64, percent: f64, settled: bool) -> (f64, f64) {
-    let delay = row[0];
-    let n = read_blocks(row, percent);
-    (blocks(delay * room, 0.5, settled) + 2.0, blocks((n - delay).max(0.0) * room, 0.5, settled) + extra)
-}
-
-/// The blocks of `row` at Scale `percent`: as read at [`READ_SCALES`], linearly between them
-/// (and on past the last two).
-fn read_blocks(row: &[f64; 7], percent: f64) -> f64 {
-    let at = |i: usize| (READ_SCALES[i], row[i]);
-    let i = READ_SCALES.iter().rposition(|&s| s <= percent).unwrap_or(0).min(READ_SCALES.len() - 2);
-    let ((s0, n0), (s1, n1)) = (at(i), at(i + 1));
-    n0 + (n1 - n0) * (percent - s0) / (s1 - s0)
-}
-
-/// A line of Mid or High (frames at 44.1 kHz): its delay, then two allpasses in series, each a
-/// whole number of blocks and one frame, from its `row` of [`MID_LENGTHS`] or [`HIGH_LENGTHS`]
-/// and the shorter allpass's blocks at Scale 40 % (`shorter`), for size factor `room` and Scale
-/// `percent`. The shorter keeps its share of the Scale part at every Scale, which is not
-/// measured: only Scale 40 % was read above Diffusion 0.1 %.
-fn paired_length_at(row: &[f64; 7], shorter: f64, room: f64, percent: f64, settled: bool) -> (f64, f64, f64) {
-    let delay = row[0];
-    let part = (read_blocks(row, percent) - delay).max(0.0);
-    let first = shorter / (row[3] - delay) * part;
-    let round = |x: f64| blocks(x * room, 0.5, settled);
-    // The longer takes what the shorter leaves, so the line is as long as it was read.
-    (round(delay) + 1.0, round(first) + 1.0, round(part) - round(first) + 1.0)
+/// A line of Sparse, Mid or High (frames at 44.1 kHz): the delay of family `delay` and the
+/// allpasses of family `family` in [`SHARED_LINES`] (the shorter, then the longer when `second`), for
+/// size factor `room` and Scale `percent`. Each part is Low's ([`length_at`], [`fast_length_at`]): its
+/// blocks times `room` (an allpass's also times Scale) rounded down past [`DELAY_EDGE`] or
+/// [`ALLPASS_EDGE`] to whole blocks, or under Smooth Fast to whole frames, where the delay of a line
+/// of family A or B keeps its fraction; and a frame.
+#[allow(clippy::too_many_arguments)]
+fn shared_length_at(
+    delay: usize,
+    family: usize,
+    second: bool,
+    room: f64,
+    percent: f64,
+    settled: bool,
+    fast: bool,
+) -> (f64, f64, f64) {
+    let [blocks_delay, _, _] = SHARED_LINES[delay];
+    let [_, shorter, longer] = SHARED_LINES[family];
+    let part = |x: f64, edge: f64| if fast { frames(BLOCK * x, 0.0, settled) } else { blocks(x, edge, settled) };
+    let line = if fast && family < 2 { BLOCK * blocks_delay * room } else { part(blocks_delay * room, DELAY_EDGE) };
+    let first = part(shorter * percent * room, ALLPASS_EDGE) + 1.0;
+    let second = if second { part(longer * percent * room, ALLPASS_EDGE) + 1.0 } else { 0.0 };
+    (line + 1.0, first, second)
 }
 
 /// A line's lengths with no second allpass.
@@ -232,62 +225,32 @@ pub(crate) const ALLPASS_SECONDS: f64 = 0.45;
 /// Longest family offset (seconds, with room for Size 500).
 const FRONT_SECONDS: f64 = 0.2;
 
-/// Density Mid's and High's lines, in [`Design`] order: the delay (blocks, its length `8 n + 1`
-/// frames), then the delay and both allpasses together (blocks, `8 n + 3` frames) at each Scale
-/// of [`READ_SCALES`], read at Size 100 (`reverb-network-density`, first passes and the second
-/// passes through each pair of lines, at Diffusion 0.1 %). The allpasses are the part that grows
-/// with Scale; at other Sizes every part takes the size factor, as Low's do, which is not
-/// measured. The steps between Scales are not one rounding of a straight line (some 20 % steps
-/// are a block short), so the blocks are kept as read and joined linearly. Where the delay ends
-/// and the allpasses start shows only above Diffusion 0.1 % (`reverb-network-density-decay`,
-/// Diffusion 60 %, Scale 40 %): see [`MID_SHORTER`].
-const MID_LENGTHS: [[f64; 7]; 8] = [
-    [443.0, 468.0, 540.0, 637.0, 733.0, 829.0, 926.0],
-    [356.0, 398.0, 521.0, 684.0, 847.0, 1010.0, 1174.0],
-    [622.0, 656.0, 757.0, 892.0, 1026.0, 1160.0, 1295.0],
-    [1027.0, 1054.0, 1131.0, 1235.0, 1339.0, 1442.0, 1546.0],
-    [502.0, 527.0, 603.0, 703.0, 802.0, 902.0, 1002.0],
-    [437.0, 474.0, 584.0, 731.0, 877.0, 1024.0, 1171.0],
-    [561.0, 607.0, 743.0, 925.0, 1107.0, 1288.0, 1469.0],
-    [1185.0, 1253.0, 1454.0, 1723.0, 1993.0, 2261.0, 2530.0],
+/// Each family's line in Sparse, Mid and High: its delay (blocks), and its two allpasses' blocks
+/// per Scale %, the shorter first ([`shared_length_at`]). Read from every line's first pass at Size
+/// 0.222, 100 and 500 with Smooth None and Fast, and at Scale 0 to 100 % at Size 100
+/// (`reverb-network-density-size`, `reverb-network-density`), each in the middle of what all of
+/// them allow: Mid's lines are High's, and Sparse's Mid's with one allpass. Where the shorter allpass
+/// ends shows only above Diffusion 0.1 % (`reverb-network-density-decay`, Diffusion 60 %, Scale 40 %):
+/// a Mid or High line runs two allpasses in series, each with the Diffusion as its gain, so each
+/// line's first pass comes as g² at its delay, −g(1 − g²) one allpass later and again the other
+/// allpass later, and (1 − g²)² where Diffusion 0.1 % has it (0.41 of that level; one allpass would
+/// give 0.64), and matches Live's render to −39 dB over 0.07 to 0.3 s and −36 dB to 1 s.
+const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
+    [1184.4905, 0.6886, 12.7517],
+    [442.6705, 1.1045, 3.7123],
+    [436.2265, 1.3804, 5.9511],
+    [1026.769, 1.7387, 3.4422],
+    [356.0745, 2.4623, 5.7064],
+    [560.7845, 0.7399, 8.3358],
+    [621.4635, 2.9624, 3.7537],
+    [1983.288, 0.7649, 2.6864],
+    [379.8665, 0.8037, 5.6726],
+    [501.207, 1.183, 3.8067],
 ];
-/// Each Mid line's shorter allpass at Scale 40 % (blocks; the other takes the rest of the Scale
-/// part). A Mid or High line runs two allpasses in series, each with the Diffusion as its gain:
-/// at Diffusion 60 % each line's first pass comes as g² at its delay, −g(1 − g²) one allpass
-/// later and again the other allpass later, and (1 − g²)² where Diffusion 0.1 % has it (0.41 of
-/// that level; one allpass would give 0.64). Fitted line by line to Live's render
-/// (`reverb-network-density-decay mid-decay-default-diffusion-60-damping-off`): with these the
-/// network matches it to −39 dB over 0.07 to 0.3 s and −36 dB to 1 s, as close as Diffusion
-/// 0.1 % does; with one allpass a line it did not match at all (+2 dB).
-const MID_SHORTER: [f64; 8] = [45.0, 99.0, 119.0, 70.0, 48.0, 56.0, 30.0, 28.0];
-/// High's lines, as [`MID_LENGTHS`]: Mid's and two more, the second and the last.
-const HIGH_LENGTHS: [[f64; 7]; 10] = [
-    [443.0, 468.0, 540.0, 637.0, 733.0, 829.0, 926.0],
-    [380.0, 413.0, 510.0, 640.0, 770.0, 899.0, 1029.0],
-    [356.0, 398.0, 521.0, 684.0, 847.0, 1010.0, 1174.0],
-    [622.0, 656.0, 757.0, 892.0, 1026.0, 1160.0, 1295.0],
-    [1027.0, 1054.0, 1131.0, 1235.0, 1339.0, 1442.0, 1546.0],
-    [502.0, 527.0, 603.0, 703.0, 802.0, 902.0, 1002.0],
-    [437.0, 474.0, 584.0, 731.0, 877.0, 1024.0, 1171.0],
-    [561.0, 607.0, 743.0, 925.0, 1107.0, 1288.0, 1469.0],
-    [1185.0, 1253.0, 1454.0, 1723.0, 1993.0, 2261.0, 2530.0],
-    [1984.0, 2002.0, 2054.0, 2123.0, 2192.0, 2261.0, 2330.0],
-];
-/// High's shorter allpasses, as [`MID_SHORTER`]: Mid's and the two more lines' (to −41 dB over
-/// 0.07 to 0.3 s and −34 to −38 dB to 1 s, `high-decay-default-diffusion-60-damping-off`).
-const HIGH_SHORTER: [f64; 10] = [45.0, 33.0, 99.0, 119.0, 70.0, 48.0, 56.0, 30.0, 28.0, 31.0];
-/// The Scales (%) of [`MID_LENGTHS`]' columns: 0 is the delay alone.
-const READ_SCALES: [f64; 7] = [0.0, 5.0, 20.0, 40.0, 60.0, 80.0, 100.0];
 
-/// Sparse's lines X, Y, Z and W, as [`MID_LENGTHS`] but `8 n + 2` frames in all: the delay is
-/// `8 n + 2` and the allpass `8 n` (`reverb-network-density`). Y and Z are not Mid's lines;
-/// X, Z and W have Mid's fixed delays within a block.
-const SPARSE_LENGTHS: [[f64; 7]; 4] = [
-    [357.0, 369.0, 406.0, 455.0, 504.0, 553.0, 603.0],
-    [443.0, 449.0, 465.0, 488.0, 510.0, 532.0, 554.0],
-    [561.0, 565.0, 576.0, 591.0, 606.0, 621.0, 635.0],
-    [1185.0, 1192.0, 1213.0, 1241.0, 1268.0, 1296.0, 1323.0],
-];
+/// The family each of Sparse's lines takes its delay from: its own, but the last's (family C), which
+/// has A's (`reverb-network-density-size`).
+const SPARSE_DELAYS: [usize; 4] = [4, 1, 5, 0];
 /// Sparse's four direct reflections each reach the lines on their own.
 const SPARSE_TAP_GROUPS: [usize; DIRECT_TAPS] = pad_groups([0, 1, 2, 3]);
 /// Each of Sparse's lines' input, as [`MID_INPUTS`] (each weight is against a direct reflection of
@@ -435,11 +398,9 @@ const HIGH_SIDES: [usize; 10] = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
 enum Laws {
     /// Low's: [`length_at`], and [`fast_length_at`] under Smooth Fast.
     Low,
-    /// Read at Size 100 at each Scale ([`read_length_at`]), the same under Smooth Fast.
-    Read(&'static [[f64; 7]], f64),
-    /// The same with two allpasses a line, the shorter's blocks at Scale 40 % as given
-    /// ([`paired_length_at`]).
-    Paired(&'static [[f64; 7]], &'static [f64]),
+    /// [`shared_length_at`] for each line's family, with two allpasses a line when `true`, and
+    /// each line's delay from the family given, when not its own.
+    Shared(bool, Option<&'static [usize]>),
 }
 
 /// One Density's measured network.
@@ -542,7 +503,7 @@ static SPARSE: Design = Design {
     mix: pad_rows(SPARSE_MIX),
     sides: pad_sides(SPARSE_SIDES),
     fractions: [0.0; MAX_LINES],
-    laws: Laws::Read(&SPARSE_LENGTHS, 0.0),
+    laws: Laws::Shared(false, Some(&SPARSE_DELAYS)),
     // A fifth of the Diffusion setting, not read from Live's network.
     diffusion: 0.2,
     // Fitted to the High and Low Shelves at 4 kHz, 1 kHz and 500 Hz and the default damping at
@@ -561,7 +522,7 @@ static MID: Design = Design {
     mix: pad_rows(MID_MIX),
     sides: pad_sides(MID_SIDES),
     fractions: [0.0; MAX_LINES],
-    laws: Laws::Paired(&MID_LENGTHS, &MID_SHORTER),
+    laws: Laws::Shared(true, None),
     diffusion: 1.0,
     trip_scale: 1.0,
 };
@@ -576,7 +537,7 @@ static HIGH: Design = Design {
     mix: pad_rows(HIGH_MIX),
     sides: pad_sides(HIGH_SIDES),
     fractions: [0.0; MAX_LINES],
-    laws: Laws::Paired(&HIGH_LENGTHS, &HIGH_SHORTER),
+    laws: Laws::Shared(true, None),
     diffusion: 1.0,
     trip_scale: 1.0,
 };
@@ -693,8 +654,8 @@ impl Lengths {
 
     /// `design`'s lengths for size factor `room`, Scale `scale` (0..1) at `sample_rate`, under
     /// Smooth Fast (or Slow) when `fast`; `gain` gives a line's gain per trip from its length in
-    /// seconds. Whole frames when `settled`, but for A's and B's fractions under Fast. Only Low's
-    /// lines are measured under Fast: Mid's and High's keep None's lengths.
+    /// seconds. Whole frames when `settled`, but for the A and B lines' fractions under Fast, at
+    /// every Density.
     #[allow(clippy::too_many_arguments)]
     pub fn tune(
         &mut self,
@@ -710,25 +671,30 @@ impl Lengths {
         let frames = sample_rate / RATE;
         let whole = |x: f64| if settled { x.round() } else { x }.max(2.0);
         let percent = scale * 100.0;
-        let low = design.laws == Laws::Low;
-        let fast = fast && low;
+        let low_fast = fast && design.laws == Laws::Low;
         for k in 0..design.lines {
+            // Under Fast the lines of families A and B keep their fractions, at every Density
+            // (Sparse's B line, `reverb-network-density-size`).
+            let between = fast && design.families[k] < 2;
             let (line, allpass, second) = match design.laws {
-                Laws::Low if fast => with_no_second(fast_length_at(k, room, percent, settled)),
+                Laws::Low if low_fast => with_no_second(fast_length_at(k, room, percent, settled)),
                 Laws::Low => with_no_second(length_at(k, room, percent, settled)),
-                Laws::Read(rows, extra) => with_no_second(read_length_at(&rows[k], extra, room, percent, settled)),
-                Laws::Paired(rows, shorter) => paired_length_at(&rows[k], shorter[k], room, percent, settled),
+                Laws::Shared(second, delays) => {
+                    let family = design.families[k];
+                    let delay = delays.map_or(family, |d| d[k]);
+                    shared_length_at(delay, family, second, room, percent, settled, fast)
+                }
             };
             let (line, allpass, second) = (line * frames, allpass * frames, second * frames);
             self.seconds[k] = if second > 0.0 { whole(second) } else { 0.0 };
             self.second_losses[k] = gain(second / sample_rate);
-            if fast && k < 2 {
+            if between {
                 // Read between frames, linearly, moving or not.
                 self.lines[k] = line.floor().max(2.0);
                 self.fractions[k] = line - self.lines[k];
             } else {
                 self.lines[k] = whole(line);
-                self.fractions[k] = if fast { 0.0 } else { design.fractions[k] };
+                self.fractions[k] = if low_fast { 0.0 } else { design.fractions[k] };
             }
             self.allpasses[k] = whole(allpass);
             // The allpass loses its own time on each pass, so the echoes it holds back decay
@@ -754,8 +720,10 @@ impl Lengths {
     pub fn longest(design: &Design, room: f64, sample_rate: f64) -> f64 {
         let line = |k: usize| match design.laws {
             Laws::Low => length_at(k, room, 100.0, false).0,
-            Laws::Read(rows, extra) => read_length_at(&rows[k], extra, room, 100.0, false).0,
-            Laws::Paired(rows, shorter) => paired_length_at(&rows[k], shorter[k], room, 100.0, false).0,
+            Laws::Shared(second, delays) => {
+                let family = design.families[k];
+                shared_length_at(delays.map_or(family, |d| d[k]), family, second, room, 100.0, false, false).0
+            }
         };
         (0..design.lines).map(line).fold(0.0, f64::max) * sample_rate / RATE
     }
@@ -933,10 +901,11 @@ mod tests {
             [4522.0, 4610.0, 4730.0, 4850.0, 4970.0, 5082.0],
             [9538.0, 9706.0, 9930.0, 10146.0, 10370.0, 10586.0],
         ];
-        for (k, (row, lengths)) in SPARSE_LENGTHS.iter().zip(measured).enumerate() {
+        for (k, lengths) in measured.into_iter().enumerate() {
             for (percent, want) in [5.0, 20.0, 40.0, 60.0, 80.0, 100.0].into_iter().zip(lengths) {
-                let (line, allpass) = read_length_at(row, 0.0, 1.0, percent, true);
-                assert_eq!(line + allpass, want, "line {k} at Scale {percent} %");
+                let (line, allpass, second) =
+                    shared_length_at(SPARSE_DELAYS[k], SPARSE.families[k], false, 1.0, percent, true, false);
+                assert_eq!(line + allpass + second, want, "line {k} at Scale {percent} %");
             }
         }
     }
@@ -957,16 +926,62 @@ mod tests {
             [10027.0, 11635.0, 13787.0, 15947.0, 18091.0, 20243.0],
             [16019.0, 16435.0, 16987.0, 17539.0, 18091.0, 18643.0],
         ];
-        for (k, (row, lengths)) in HIGH_LENGTHS.iter().zip(measured).enumerate() {
+        for (k, lengths) in measured.into_iter().enumerate() {
+            let family = HIGH.families[k];
             for (percent, want) in [5.0, 20.0, 40.0, 60.0, 80.0, 100.0].into_iter().zip(lengths) {
-                let (line, first, second) = paired_length_at(row, HIGH_SHORTER[k], 1.0, percent, true);
+                let (line, first, second) = shared_length_at(family, family, true, 1.0, percent, true, false);
                 assert_eq!(line + first + second, want, "line {k} at Scale {percent} %");
             }
         }
         // Mid's are High's but the second and the last.
-        let mid: Vec<_> =
-            HIGH_LENGTHS.iter().enumerate().filter(|(k, _)| ![1, 9].contains(k)).map(|(_, r)| *r).collect();
-        assert_eq!(mid, MID_LENGTHS);
+        let mid: Vec<_> = HIGH.families[..HIGH.lines].iter().filter(|f| ![8, 7].contains(*f)).copied().collect();
+        assert_eq!(mid, MID.families[..MID.lines]);
+    }
+
+    #[test]
+    fn every_densitys_lines_are_their_measured_lengths_at_the_ends_of_the_size_range() {
+        // Live's first passes less the entry (frames), Scale 40 %, at Size 0.222 and 500, with
+        // Smooth None and Fast (`reverb-network-density-size`); under Fast the A and B lines' are
+        // between frames.
+        let small = (0.222f64 / 100.0).cbrt();
+        let large = (500.0f64 / 100.0).cbrt();
+        let high: [[f64; 4]; 10] = [
+            [675.0, 8699.0, 664.92, 8693.68],
+            [683.0, 8747.0, 668.0, 8742.0],
+            [723.0, 9355.0, 714.0, 9343.0],
+            [939.0, 12187.0, 930.0, 12178.0],
+            [1291.0, 16891.0, 1289.0, 16883.0],
+            [747.0, 9595.0, 733.0, 9588.0],
+            [771.0, 9987.0, 763.0, 9981.0],
+            [979.0, 12651.0, 965.0, 12639.0],
+            [1811.0, 23571.0, 1799.16, 23559.6],
+            [2219.0, 29035.0, 2215.0, 29020.0],
+        ];
+        // Sparse's last line at Size 0.222 under Fast overlaps others and is not read.
+        let sparse: [[f64; 4]; 4] = [
+            [482.0, 6226.0, 475.0, 6220.0],
+            [514.0, 6666.0, 509.98, 6661.68],
+            [626.0, 8082.0, 617.0, 8077.0],
+            [1306.0, 16970.0, f64::NAN, 16960.0],
+        ];
+        let check = |name: &str, k: usize, delay: usize, family: usize, second: bool, want: [f64; 4]| {
+            for ((room, fast), want) in
+                [(small, false), (large, false), (small, true), (large, true)].into_iter().zip(want)
+            {
+                if want.is_nan() {
+                    continue;
+                }
+                let (line, first, second) = shared_length_at(delay, family, second, room, 40.0, true, fast);
+                let got = line + first + second;
+                assert!((got - want).abs() < 0.06, "{name} line {k}, room {room}, fast {fast}: {got} against {want}");
+            }
+        };
+        for (k, want) in high.into_iter().enumerate() {
+            check("High", k, HIGH.families[k], HIGH.families[k], true, want);
+        }
+        for (k, want) in sparse.into_iter().enumerate() {
+            check("Sparse", k, SPARSE_DELAYS[k], SPARSE.families[k], false, want);
+        }
     }
 
     #[test]

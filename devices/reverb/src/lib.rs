@@ -1348,7 +1348,6 @@ impl Reverb {
         let density_index = self.value(param::DENSITY) as usize;
         let predelay_gain = db_to_gain(-PREDELAY_FADE * predelay_ms / setting);
         let taps = self.taps;
-        let low = density_index == LOW;
         // Smooth Slow renders as Fast (`reverb-network-fast`).
         let fast = self.value(param::SMOOTH) as usize != 0;
         let size_level = LOW_SIZE_LEVEL + LOW_SIZE_LEVEL_PER_SIZE * REFERENCE_SIZE * room.powi(3);
@@ -1395,8 +1394,8 @@ impl Reverb {
         let (entry, below, above) = measured::ENTRY_MS;
         let per_shape = if shape < 0.5 { below } else { above };
         t.entry = (entry + per_shape * (shape - 0.5) * room) * ms;
-        // Only Low's network is measured under Fast: Mid's and High's run as with None.
-        if fast && low {
+        // Under Fast every Density's network hears its input sooner (`reverb-network-density-size`).
+        if fast {
             t.entry -= measured::FAST_EARLIER * sr / REFERENCE_RATE;
         }
         let tail_gain = TAIL_GAIN * predelay_gain;
