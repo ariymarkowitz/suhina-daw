@@ -17,7 +17,8 @@ network, freeze and a stereo width. Live's Reverb imports into it parameter for 
 ([`device-import.md`](device-import.md)), and the device is built to sound like Live's: its tap
 patterns, network lengths and filter laws are read from Live's renders, not designed.
 
-- **Observed with:** Live 12.4.6 at 44.1 kHz. The parameters come from a parameter dump and a saved
+- **Observed with:** Live 12.4.6 at 44.1 kHz; the lengths and their rounding also in Live 12.4.15
+  at 48 and 96 kHz. The parameters come from a parameter dump and a saved
   set; the sound from renders of many hundreds of cases (impulses, noise, tones and clicks) analysed
   by the measurement harness of the Suhina device notes (`live-12/audio-effects/29.32-reverb.md`
   and `measurements/29.32-reverb/` in the device-specs repository, which hold the cases, the fits
@@ -78,7 +79,9 @@ in -> mono sum -> roll-off -> Low Cut -> High Cut -> predelay line -+-> direct t
 
 **Everything scales with the room.** The *size factor* is `(Size / 100)^(1/3)`, as for a room's
 volume; Size 100 is the *reference room*, in which every delay below is given. Delays are quoted in
-frames of 44.1 kHz and convert to the session rate.
+frames of 44.1 kHz. At another rate each converts to the session's frames by time first and is
+rounded after, so the blocks, the added frame and the hundredth below are the session's frames
+(read at 44.1, 48 and 96 kHz).
 
 ### Input
 
@@ -104,15 +107,18 @@ frame a frame: faster, a line is read backwards and buzzes.
 **Rounding.** Live rounds every delay below that is said to be *rounded* (the network's lines,
 allpasses and families, the Shape entry and Stereo's delay) the same way: under Smooth Fast and
 Slow (Slow renders as Fast) down to a whole frame, `floor(x)`; under None to whole 8-frame blocks,
-up unless it is less than a tenth of a block past one, `8 × floor(x / 8 + 0.9)`. While Size or
-Scale move, a length follows the straight line through the middle of its steps.
+up unless it is less than a tenth of a block past one, `8 × floor(x / 8 + 0.9)`. `x` is the length
+in the session's frames: at 48 kHz Low's A line is 2499.91 frames per unit of size factor, not a
+round 2500, and keeps its fraction under Fast at every rate. While Size or Scale move, a length
+follows the straight line through the middle of its steps.
 
 ### Early reflections
 
 - **Direct taps.** Each Density has Live's own: 4 at Sparse, the same ten times at Low, Mid and High,
   each with a side and a level. Each time is a whole number of frames plus the fraction of a frame at
   which Live rounds it, and the predelay and a tap's time round to a frame together. The first tap
-  arrives one frame before the predelay at a gain of 0.0942.
+  arrives one frame before the predelay, at every rate (frame 119 at 48 kHz and 239 at 96 kHz at the
+  default 2.5 ms), at a gain of 0.0942.
 - **Level.** Every tap is `0.92594 + 0.00074059 × Size` of its reference level (0.926 at the
   smallest Size, 1.296 at 500), and fades by `(0.0328 + 0.0668 × Shape) / decay` dB per ms of its
   delay.
@@ -130,8 +136,10 @@ Scale move, a length follows the straight line through the middle of its steps.
   reflections (at Size 100, Low 8.5 kHz at 0.2 s and 11.3 at 1.2 s; Mid 1.4 and 8.4 kHz), and a
   smaller room's reflections are brighter.
 - **Stereo's delay.** Below Stereo 120 the reflections heard, not the tail and not the network's
-  input, come `27.5625 × (1 − stereo / 120)` frames later, rounded (4 and 8 frames at the default
-  100 under Fast and None).
+  input, come `0.625 ms × (1 − stereo / 120)` later in the session's frames, rounded (4 and 8 frames
+  at the default 100 under Fast and None at 44.1 kHz). Where that is a whole number of frames,
+  Fast's is one frame less: at Stereo 0 and 60, 29 and 14 frames at 48 kHz, 59 and 29 at 96 kHz
+  (None's 32, 16, 64 and 32).
 - **Spin** swings each direct tap's whole delay `T` (predelay included) by
   `0.01 × amount × reach(predelay) × T × sin(2π × m × rate × t + φ)`, where `reach` is 1 up to 5 ms
   of predelay and `2 / (predelay − 3)` above it (predelay in ms), so a long predelay swings every
@@ -283,7 +291,10 @@ Why the device is built as it is. Where each constant was read is in its doc com
   under None it is Fast's length rounded up to whole blocks, but for the last tenth of a block. Each
   length's constant is the middle of what both settings' reads allow. Lengths settle on whole frames
   without interpolation: fractional delays in the loop cut the 8 kHz octave's decay time by 10 to
-  38 %.
+  38 %. The rounding happens in the session's frames, after the conversion: rounded at 44.1 kHz and
+  converted after, Low's A line at Size 100 under None was 3571 frames from its first reflection
+  at 48 kHz against Live's 3569, and up to 26 frames long at 96 kHz; converted first, all 30 reads of
+  A's and B's first passes at 44.1, 48 and 96 kHz are within 0.01 frame.
 - **Families are one signal.** A family's reflections and the copy the network hears are a direct
   tap delayed again by the family's delay, through the same low-pass, at a fixed ratio of 1.70. So
   each Density keeps one table of family levels and derives the copies from it. Sparse's, Mid's and
@@ -373,7 +384,13 @@ network's level within 0.05 dB from Size 0.222 to 500.
 - **Low beyond the settings read.** Between Size 100 and 250 only Size 200's reflections were read.
   The Shape entry was read at Size 100 and Density Low only; that it holds at every Size is inferred
   from Shape 0.5's being the same at every Size.
-- **Stereo's delay** was read at 44.1 kHz only, and not while Stereo is automated.
+- **Stereo's delay** was read at 44.1, 48 and 96 kHz, and not while Stereo is automated. Why Fast's
+  is a frame short where it is whole is not known; the device floors it a millionth of a frame
+  low.
+- **Other rates.** Low's lines, the reflections' times, the Shape entry and Stereo's delay were read
+  at 48 and 96 kHz and follow the laws above; Mid's and High's two allpasses a line were rendered
+  there but not read, and families and the other Densities' lines are inferred to follow the same
+  law.
 - **Low Cut** is extrapolated for edges between 44.2 and 132 Hz and above 841 Hz.
 - **Spin.** Clicks through the moving reflections are about −41 dB from Live's at Amount 17.5 and
   Predelay 100 ms, at 0.07 Hz too, and white noise −21 to −27 dB at the default. Still off:

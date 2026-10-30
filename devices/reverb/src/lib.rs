@@ -161,14 +161,19 @@ const TAP_TABLES: [&[Tap]; 4] = [&TAPS_SPARSE, &TAPS_LOW, &TAPS_MID, &TAPS_HIGH]
 /// The filtered reflections in Density order.
 const FILTERED_TABLES: [&[[f64; DIRECT_TAPS]; FAMILY_COUNT]; 4] =
     [&FILTERED_SPARSE, &FILTERED_LOW, &FILTERED_MID, &FILTERED_HIGH];
-/// The reflections are read this long after the predelay (seconds): one frame before it, as
-/// Live's are at Stereo 120 (`reverb-network-exact`); below 120 Stereo delays them
-/// ([`stereo_delay`]).
-const TAP_OFFSET_SECONDS: f64 = -1.0 / 44_100.0;
-/// Below Stereo 120 the reflections, not the tail, come later: `STEREO_DELAY_FRAMES × (1 − Stereo /
-/// 120)` frames, [`network::rounded`] (`reverb-er-stereo`: 27 and 32 frames at Stereo 0 under Fast
-/// and None, 4 and 8 at 100). Read at 44.1 kHz; 0.625 ms.
-const STEREO_DELAY_FRAMES: f64 = 27.5625;
+/// The reflections are read this many frames after the predelay: one before it, as Live's are at
+/// Stereo 120 (`reverb-network-exact`), at every rate (the first reflection at the default 2.5 ms
+/// is at frame 119 at 48 kHz and 239 at 96 kHz: `reverb-rate-48k`, `reverb-rate-96k`); below 120
+/// Stereo delays them ([`stereo_delay`]).
+const TAP_OFFSET_FRAMES: f64 = -1.0;
+/// Below Stereo 120 the reflections, not the tail, come later: `STEREO_DELAY_SECONDS × (1 − Stereo
+/// / 120)` in frames at the session's rate, [`network::rounded`] (`reverb-er-stereo`: 27 and 32
+/// frames at Stereo 0 under Fast and None, 4 and 8 at 100; `reverb-rate-48k`: 29 and 32 at
+/// Stereo 0, 14 and 16 at 60; `reverb-rate-96k`: 59 and 64, 29 and 32). 27.5625 frames at 44.1 kHz.
+const STEREO_DELAY_SECONDS: f64 = 0.000_625;
+/// Under Smooth Fast, where Stereo's delay is a whole number of frames Live's is a frame less
+/// (30, 15, 60 and 30 at 48 and 96 kHz come out 29, 14, 59 and 29): it is floored this far below.
+const STEREO_FLOOR_SLACK: f64 = 1e-6;
 /// Level of the first reflection against the input, before the predelay's fade.
 const TAP_GAIN: f64 = 0.0942;
 /// How fast the reflections fade, in dB per ms of their delay, times the Decay setting in
@@ -826,10 +831,11 @@ fn db_to_gain(db: f64) -> f64 {
 }
 
 /// How much later than at Stereo 120 the reflections are heard at `stereo` (frames at
-/// `sample_rate`), under Smooth Fast or Slow when `fast` ([`STEREO_DELAY_FRAMES`]).
+/// `sample_rate`), under Smooth Fast or Slow when `fast` ([`STEREO_DELAY_SECONDS`]).
 fn stereo_delay(stereo: f64, fast: bool, sample_rate: f64) -> f64 {
-    let frames = network::rounded((STEREO_DELAY_FRAMES * (1.0 - stereo / 120.0)).max(0.0), fast, true);
-    frames * sample_rate / REFERENCE_RATE
+    let frames = STEREO_DELAY_SECONDS * sample_rate * (1.0 - stereo / 120.0);
+    let frames = if fast { frames - STEREO_FLOOR_SLACK } else { frames };
+    network::rounded(frames, fast, true).max(0.0)
 }
 
 /// How far Spin reaches with `predelay_ms` of predelay, as a share of [`SPIN_FRACTION`]: all of
@@ -927,8 +933,7 @@ impl Reverb {
     fn allocate(&mut self) {
         let sr = self.sample_rate;
         self.input = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
-        self.stereo_lines =
-            std::array::from_fn(|_| DelayLine::for_seconds(2.0 * STEREO_DELAY_FRAMES / REFERENCE_RATE, sr));
+        self.stereo_lines = std::array::from_fn(|_| DelayLine::for_seconds(2.0 * STEREO_DELAY_SECONDS, sr));
         self.group_lines = std::array::from_fn(|_| DelayLine::for_seconds(ENTRY_LINE_SECONDS, sr));
         self.family_lines = std::array::from_fn(|_| DelayLine::for_seconds(FAMILY_LINE_SECONDS, sr));
         self.network = network::Network::new(sr);
@@ -1119,7 +1124,7 @@ impl Reverb {
             .zip(self.taps)
         {
             let time = tap.ms * room;
-            *delay = time * ms + TAP_OFFSET_SECONDS * sr;
+            *delay = time * ms + TAP_OFFSET_FRAMES;
             let faded = db_to_gain(-fade * time);
             *reflection = level * faded;
             *gain = tap.gain * *reflection;
@@ -1128,7 +1133,7 @@ impl Reverb {
         // A family's filtered reflections peak where the network hears its copy, in Live's 8-frame
         // blocks or under Smooth Fast in whole frames, and fade over that delay as the reflections do.
         for (family, (delay, gain)) in t.family_delays.iter_mut().zip(&mut t.family_gains).enumerate() {
-            let frames = network::front(family, room, settled, fast) * sr / REFERENCE_RATE;
+            let frames = network::front(family, room, settled, fast, sr / REFERENCE_RATE);
             *delay = if settled { frames.round() } else { frames }.max(2.0);
             *gain = db_to_gain(-fade * network::peak(family, room, false, false) * 1_000.0 / REFERENCE_RATE);
         }
@@ -1141,7 +1146,7 @@ impl Reverb {
         };
         let design = network::design(density);
         t.network.tune(design, room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
-        t.entry = network::entry(shape, settled, fast) * sr / REFERENCE_RATE;
+        t.entry = network::entry(shape, settled, fast, sr / REFERENCE_RATE);
         // The network's lines scale with the room's own size factor, small rooms too, and its input
         // with the reflections' level and its own ([`NETWORK_SIZE_LEVEL`]). Every path through it
         // fades with its whole time, so it needs no cut for short decays.
