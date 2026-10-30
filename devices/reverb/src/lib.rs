@@ -11,9 +11,9 @@
 //!                                                                      direct taps -> network -> Diffuse
 //! ```
 //!
-//! The early reflections are the measured tap pattern (docs/spec/reverb.md). At Densities Low,
-//! Mid and High the late reverb is Live's own network, as measured (`measured.rs`). At Sparse the
-//! network takes the direct taps again after the Shape delay, each into a line of its own: a
+//! The early reflections are the measured tap pattern (docs/spec/reverb.md). At every Density the
+//! late reverb is Live's own network, as measured (`measured.rs`). The Householder network
+//! below, which Sparse ran before, takes the direct taps again after the Shape delay, each into a line of its own: a
 //! feedback delay network of 8, 12 or 16 lines (Density) mixed by a Householder reflection, the
 //! textbook design (Jot and Chaigne, 1991), with a Schroeder allpass (Diffusion) in every line;
 //! each line's gain sets the same decay time whatever its length, and shelves in the loop take
@@ -667,8 +667,7 @@ const LARGE_ROOM_POWER: f64 = 0.75;
 /// Signs of the input into each line.
 const INPUT_SIGNS: [f64; 16] = [1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
 /// Density Low, whose late reverb is the measured network read most closely ([`measured`]): its
-/// Size level and Smooth Fast are measured, Mid's and High's not. Sparse runs the Householder
-/// network.
+/// Size level and Smooth Fast are measured, Sparse's, Mid's and High's not.
 const LOW: usize = 1;
 /// Level of the measured network's input against the Householder network's (the same feed): with
 /// it, each line's first pass is [`measured`]'s gain times the direct reflection it comes from,
