@@ -39,7 +39,7 @@ pub(crate) const GROUPS: usize = 6;
 pub(crate) const MAX_LINES: usize = 10;
 /// The most groups of direct reflections a network takes (High's).
 pub(crate) const MAX_GROUPS: usize = 10;
-/// Direct reflections in every Density but Sparse.
+/// Direct reflections in Densities Low, Mid and High (Sparse has four).
 pub(crate) const DIRECT_TAPS: usize = 10;
 /// The frame rate the lengths below are at.
 const RATE: f64 = 44_100.0;
@@ -146,16 +146,17 @@ fn front_of(offset: f64, room: f64, settled: bool) -> f64 {
     BLOCK * if settled { x.round() } else { x }
 }
 
-/// A line of Mid or High, delay and allpass (frames at 44.1 kHz), from its `row` of
-/// [`MID_LENGTHS`] or [`HIGH_LENGTHS`], for size factor `room` and Scale `percent`.
-fn read_length_at(row: &[f64; 7], room: f64, percent: f64, settled: bool) -> (f64, f64) {
+/// A line of Sparse, Mid or High, delay and allpass (frames at 44.1 kHz), from its `row` of
+/// [`SPARSE_LENGTHS`], [`MID_LENGTHS`] or [`HIGH_LENGTHS`], for size factor `room` and Scale
+/// `percent`; the allpass is `extra` frames more than its blocks.
+fn read_length_at(row: &[f64; 7], extra: f64, room: f64, percent: f64, settled: bool) -> (f64, f64) {
     // Blocks at the Scales read, linearly between them (and on past the last two).
     let at = |i: usize| (READ_SCALES[i], row[i]);
     let i = READ_SCALES.iter().rposition(|&s| s <= percent).unwrap_or(0).min(READ_SCALES.len() - 2);
     let ((s0, n0), (s1, n1)) = (at(i), at(i + 1));
     let n = n0 + (n1 - n0) * (percent - s0) / (s1 - s0);
     let delay = row[0];
-    (blocks(delay * room, 0.5, settled) + 2.0, blocks((n - delay).max(0.0) * room, 0.5, settled) + 1.0)
+    (blocks(delay * room, 0.5, settled) + 2.0, blocks((n - delay).max(0.0) * room, 0.5, settled) + extra)
 }
 
 /// Which group each direct reflection of Density Low belongs to, in table order.
@@ -241,6 +242,60 @@ const HIGH_LENGTHS: [[f64; 7]; 10] = [
 ];
 /// The Scales (%) of [`MID_LENGTHS`]' columns: 0 is the delay alone.
 const READ_SCALES: [f64; 7] = [0.0, 5.0, 20.0, 40.0, 60.0, 80.0, 100.0];
+
+/// Sparse's lines X, Y, Z and W, as [`MID_LENGTHS`] but `8 n + 2` frames in all: the delay is
+/// `8 n + 2` and the allpass `8 n` (`reverb-network-density`). Y and Z are not Mid's lines;
+/// X, Z and W have Mid's fixed delays within a block.
+const SPARSE_LENGTHS: [[f64; 7]; 4] = [
+    [357.0, 369.0, 406.0, 455.0, 504.0, 553.0, 603.0],
+    [443.0, 449.0, 465.0, 488.0, 510.0, 532.0, 554.0],
+    [561.0, 565.0, 576.0, 591.0, 606.0, 621.0, 635.0],
+    [1185.0, 1192.0, 1213.0, 1241.0, 1268.0, 1296.0, 1323.0],
+];
+/// Sparse's four direct reflections each reach the lines on their own.
+const SPARSE_TAP_GROUPS: [usize; DIRECT_TAPS] = pad_groups([0, 1, 2, 3]);
+/// Each of Sparse's lines' input, as [`MID_INPUTS`] (each weight is against a direct reflection of
+/// the first one's level, whose sign it does not take).
+const SPARSE_INPUTS: [[f64; 4]; 4] = [
+    [-1.6120, -0.4120, -0.8280, 1.6400],
+    [0.5990, 2.1400, -0.1890, 1.0230],
+    [1.6190, -0.8600, -1.5630, 0.5690],
+    [0.7570, -0.7360, 1.6880, 1.3990],
+];
+/// Sparse's direct reflections are 1.5 times as loud as the others' and four, where the input
+/// normalises by the root of the sum of their squares: this much of the 3.16 that Low's ten have.
+const SPARSE_INPUT_GAIN: f64 = 0.9487;
+/// Each of Sparse's lines' family, as [`MID_COPIES`].
+#[allow(clippy::approx_constant, reason = "a fitted value that is near π/8 by chance")]
+const SPARSE_COPIES: [[f64; 4]; 4] = [
+    [-0.7930, 0.0336, 0.6542, -0.8982],
+    [0.3394, -1.2442, -0.0412, -0.4358],
+    [0.9219, 0.5558, -0.0835, -0.8390],
+    [0.5325, -0.0322, 1.1925, 0.3927],
+];
+/// Where each of Sparse's families' copy starts: it peaks 2985, 3193, 2337 and 1641 frames after
+/// its direct reflections, in Low's blocks.
+const SPARSE_OFFSETS: [f64; 4] = [FAMILY_OFFSETS[4], FAMILY_OFFSETS[1], FAMILY_OFFSETS[5], FAMILY_OFFSETS[2]];
+/// Sparse's mixing, as [`MID_MIX`].
+const SPARSE_MIX: [[f64; 4]; 4] = [
+    [-0.1673, -0.3341, 0.6631, -0.6486],
+    [0.8718, -0.0777, 0.4175, 0.2440],
+    [-0.3485, -0.6331, 0.2299, 0.6518],
+    [-0.3002, 0.6939, 0.5770, 0.3090],
+];
+/// Sparse's sides: X and Y on the left, Z and W on the right.
+const SPARSE_SIDES: [usize; 4] = [0, 0, 1, 1];
+
+/// `groups` for the first reflections, and none for the rest.
+const fn pad_groups<const N: usize>(groups: [usize; N]) -> [usize; DIRECT_TAPS] {
+    let mut out = [usize::MAX; DIRECT_TAPS];
+    let mut i = 0;
+    while i < N {
+        out[i] = groups[i];
+        i += 1;
+    }
+    out
+}
 
 /// Mid's direct reflections reach the lines in 8 groups: the first and the fourth reflection as
 /// one, with weights equal and opposite to their levels, and so the second and the seventh.
@@ -361,7 +416,7 @@ enum Laws {
     /// Low's: [`length_at`], and [`fast_length_at`] under Smooth Fast.
     Low,
     /// Read at Size 100 at each Scale ([`read_length_at`]), the same under Smooth Fast.
-    Read(&'static [[f64; 7]]),
+    Read(&'static [[f64; 7]], f64),
 }
 
 /// One Density's measured network.
@@ -435,6 +490,19 @@ static LOW: Design = Design {
     fractions: pad(FRACTION),
     laws: Laws::Low,
 };
+/// Sparse's network.
+static SPARSE: Design = Design {
+    lines: 4,
+    tap_groups: SPARSE_TAP_GROUPS,
+    inputs: pad_rows(SPARSE_INPUTS),
+    input_gains: pad([SPARSE_INPUT_GAIN; 4]),
+    copies: Some(pad_rows(SPARSE_COPIES)),
+    offsets: pad(SPARSE_OFFSETS),
+    mix: pad_rows(SPARSE_MIX),
+    sides: pad_sides(SPARSE_SIDES),
+    fractions: [0.0; MAX_LINES],
+    laws: Laws::Read(&SPARSE_LENGTHS, 0.0),
+};
 /// Mid's network.
 static MID: Design = Design {
     lines: 8,
@@ -446,7 +514,7 @@ static MID: Design = Design {
     mix: pad_rows(MID_MIX),
     sides: pad_sides(MID_SIDES),
     fractions: [0.0; MAX_LINES],
-    laws: Laws::Read(&MID_LENGTHS),
+    laws: Laws::Read(&MID_LENGTHS, 1.0),
 };
 /// High's network.
 static HIGH: Design = Design {
@@ -459,13 +527,13 @@ static HIGH: Design = Design {
     mix: pad_rows(HIGH_MIX),
     sides: pad_sides(HIGH_SIDES),
     fractions: [0.0; MAX_LINES],
-    laws: Laws::Read(&HIGH_LENGTHS),
+    laws: Laws::Read(&HIGH_LENGTHS, 1.0),
 };
 
-/// The measured network of Density `density` (0 Sparse to 3 High), if it has one: Sparse runs
-/// the Householder network still.
+/// The measured network of Density `density` (0 Sparse to 3 High), if it has one.
 pub(crate) fn design(density: usize) -> Option<&'static Design> {
     match density {
+        0 => Some(&SPARSE),
         1 => Some(&LOW),
         2 => Some(&MID),
         3 => Some(&HIGH),
@@ -578,7 +646,7 @@ impl Lengths {
             let (line, allpass) = match design.laws {
                 Laws::Low if fast => fast_length_at(k, room, percent, settled),
                 Laws::Low => length_at(k, room, percent, settled),
-                Laws::Read(rows) => read_length_at(&rows[k], room, percent, settled),
+                Laws::Read(rows, extra) => read_length_at(&rows[k], extra, room, percent, settled),
             };
             let (line, allpass) = (line * frames, allpass * frames);
             if fast && k < 2 {
@@ -613,7 +681,7 @@ impl Lengths {
     pub fn longest(design: &Design, room: f64, sample_rate: f64) -> f64 {
         let line = |k: usize| match design.laws {
             Laws::Low => length_at(k, room, 100.0, false).0,
-            Laws::Read(rows) => read_length_at(&rows[k], room, 100.0, false).0,
+            Laws::Read(rows, extra) => read_length_at(&rows[k], extra, room, 100.0, false).0,
         };
         (0..design.lines).map(line).fold(0.0, f64::max) * sample_rate / RATE
     }
@@ -758,7 +826,7 @@ mod tests {
 
     #[test]
     fn the_loop_mix_is_orthogonal_and_close_to_the_measured_one() {
-        for design in [&LOW, &MID, &HIGH] {
+        for design in [&SPARSE, &LOW, &MID, &HIGH] {
             let mix = orthonormal(design);
             let n = design.lines;
             for i in 0..n {
@@ -769,6 +837,23 @@ mod tests {
                     let read = design.mix[i][j];
                     assert!((mix[i][j] - read).abs() < 2e-3, "{n} lines, {i}, {j}: {} against {read}", mix[i][j]);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn sparses_lines_are_their_measured_lengths() {
+        // Live's first passes at Size 100 less the entry (frames), as below.
+        let measured: [[f64; 6]; 4] = [
+            [2954.0, 3250.0, 3642.0, 4034.0, 4426.0, 4826.0],
+            [3594.0, 3722.0, 3906.0, 4082.0, 4258.0, 4434.0],
+            [4522.0, 4610.0, 4730.0, 4850.0, 4970.0, 5082.0],
+            [9538.0, 9706.0, 9930.0, 10146.0, 10370.0, 10586.0],
+        ];
+        for (k, (row, lengths)) in SPARSE_LENGTHS.iter().zip(measured).enumerate() {
+            for (percent, want) in [5.0, 20.0, 40.0, 60.0, 80.0, 100.0].into_iter().zip(lengths) {
+                let (line, allpass) = read_length_at(row, 0.0, 1.0, percent, true);
+                assert_eq!(line + allpass, want, "line {k} at Scale {percent} %");
             }
         }
     }
@@ -791,7 +876,7 @@ mod tests {
         ];
         for (k, (row, lengths)) in HIGH_LENGTHS.iter().zip(measured).enumerate() {
             for (percent, want) in [5.0, 20.0, 40.0, 60.0, 80.0, 100.0].into_iter().zip(lengths) {
-                let (line, allpass) = read_length_at(row, 1.0, percent, true);
+                let (line, allpass) = read_length_at(row, 1.0, 1.0, percent, true);
                 assert_eq!(line + allpass, want, "line {k} at Scale {percent} %");
             }
         }

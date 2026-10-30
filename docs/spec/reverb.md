@@ -171,7 +171,7 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   the left, all at one level. Damping and chorus are as below. Every path fades with
   its whole time from the input: each line's gain covers its delay, and its allpass loses its own
   delay's gain on every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`).
-- **Network, Density Sparse.** (Density Mid and High run the measured network, Decision 28.) 8
+- **Network, Density Sparse.** (No longer run: every Density runs a measured network, Decisions 19, 28 and 29.) 8
   lines, 18 to 77 ms long in the reference room, 1.3 times that. Each line's output passes a Schroeder allpass with the
   Diffusion as its gain (0.2 of it at Sparse) and a delay of its own,
   3.6 to 15.2 ms times Scale and the size factor, on every trip. The lines are mixed after every
@@ -511,8 +511,8 @@ Each entry: what was chosen, what it costs, why.
     still signal's 0.012). Only near-instant jumps across most of the range glide more slowly than
     Smooth says.
 19. **Density Low runs Live's own network, identified from its renders,** in place of the
-    Householder network (which Sparse keeps; Mid and High have their own measured networks,
-    Decision 28). Live's impulse responses at Diffusion 0.1 % (the allpasses then pass the signal on
+    Householder network (Mid, High and Sparse have their own measured networks,
+    Decisions 28 and 29). Live's impulse responses at Diffusion 0.1 % (the allpasses then pass the signal on
     as plain delays) and Decay 60 s, at Size 100 and Scale 5 to 100 %, were read as sparse
     arrivals; each arrival moves with Scale by the allpass length on its path, which tells the
     lines apart, and the network (patterns, lines, plain delays, mixing, outputs) was fitted to
@@ -762,6 +762,21 @@ Each entry: what was chosen, what it costs, why.
     and High run as with None, not Fast's lengths), and each line's own allpass. Cost: 8 and 10
     lines against 12 and 16 for the Householder network; not remeasured at Mid and High.
 
+29. **Density Sparse runs a measured network of 4 lines,** read at Size 100 and laid out as Mid's
+    and High's, in place of the Householder network. Its four direct reflections (at 0, 26.5, 41.1
+    and 55.6 ms, signs + − + +) each reach the lines on their own, and X and Y are heard on the
+    left, Z and W on the right. Each line's delay and allpass together are `8 n + 2` frames (the
+    delay `8 n + 2`, the allpass `8 n`) at each Scale, kept as read and joined linearly: X 2954 to
+    4826, Y 3594 to 4434, Z 4522 to 5082 and W 9538 to 10586 frames at Scale 5 to 100 % after the
+    entry. The families' filtered reflections peak 2985, 3193, 2337 and 1641 frames after their
+    direct ones (X, Y, Z, W), and the mix is orthogonal. The four direct reflections are 1.5 times
+    as loud as Low's, so the input takes 0.9487 of the weights read, as the input normalises by
+    the root of their squares. Against Live's `reverb-network-density` renders the waveform
+    matches to 11 to 12 dB below Live's energy from 0.15 s to 4 s at Scale 5, 40 and 100 %, as Mid
+    does, with the same 1.5 dB shortfall in level. Not measured: other Sizes (both parts of a line
+    take the size factor), Diffusion, Smooth Fast and Slow (Sparse runs as with None), and Hi Cut
+    and damping (Low's, taken to be the same). With this, no Density runs the Householder network.
+
 ## Known differences
 
 Measured against Live's renders of the same sets imported and rendered by `suhina-cli render` at
@@ -796,9 +811,8 @@ single-frequency gain follows the network's modes. They fail until the network i
 
 What is further off, and why it is left:
 
-- **Live's network** is read only for Density Low (Decision 24); for Sparse, Mid and High this
-  device keeps its own network, tuned to Live's level, onset, decay and texture (Decisions 2 and
-  3).
+- **Live's network** is read for every Density (Decisions 24, 28 and 29); its Size, Diffusion and
+  Smooth Fast laws are read only for Low.
   Its tail's strongest repeat, at Diffusion 0.1 % (where an allpass is a plain delay) and
   across Scale, is one loop of `(62.9 + 22.1 × scale) ms × size factor`: 17.8 ms at Size 1.53,
   33.6 at 10.54, 70.6 at 100 (Scale 40 %), with the allpass's own 22.1 × Scale ms showing too
