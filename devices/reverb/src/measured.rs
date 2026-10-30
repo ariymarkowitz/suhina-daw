@@ -467,6 +467,24 @@ const fn pad_families<const N: usize>(families: [usize; N]) -> [usize; MAX_LINES
     out
 }
 
+/// [`FRACTION`]'s A and B hundredth of a frame on the lines of families A and B among `families`:
+/// with Smooth None Sparse's, Mid's and High's A and B lines run it as Low's do (Sparse's C line,
+/// which has A's delay, is whole). Without it, their tails at Size 0.222 keep up to 5 dB too much
+/// above 12 kHz by 2 to 3 s and drift to −4 to −7 dB of Live's; with it their None tails match as
+/// closely as their Fast ones, at Size 0.222 and 100 alike, and no other hundredth fits as well
+/// (`reverb-network-density-size`, `reverb-network-density` Scale 40 %).
+const fn family_fractions<const N: usize>(families: [usize; N]) -> [f64; MAX_LINES] {
+    let mut out = [0.0; MAX_LINES];
+    let mut i = 0;
+    while i < N {
+        if families[i] < 2 {
+            out[i] = FRACTION[families[i]];
+        }
+        i += 1;
+    }
+    out
+}
+
 const fn pad_sides<const N: usize>(sides: [usize; N]) -> [usize; MAX_LINES] {
     let mut out = [2; MAX_LINES];
     let mut i = 0;
@@ -502,7 +520,7 @@ static SPARSE: Design = Design {
     families: pad_families(SPARSE_FAMILIES),
     mix: pad_rows(SPARSE_MIX),
     sides: pad_sides(SPARSE_SIDES),
-    fractions: [0.0; MAX_LINES],
+    fractions: family_fractions(SPARSE_FAMILIES),
     laws: Laws::Shared(false, Some(&SPARSE_DELAYS)),
     // A fifth of the Diffusion setting, not read from Live's network.
     diffusion: 0.2,
@@ -521,7 +539,7 @@ static MID: Design = Design {
     families: pad_families(MID_FAMILIES),
     mix: pad_rows(MID_MIX),
     sides: pad_sides(MID_SIDES),
-    fractions: [0.0; MAX_LINES],
+    fractions: family_fractions(MID_FAMILIES),
     laws: Laws::Shared(true, None),
     diffusion: 1.0,
     trip_scale: 1.0,
@@ -536,7 +554,7 @@ static HIGH: Design = Design {
     families: pad_families(HIGH_FAMILIES),
     mix: pad_rows(HIGH_MIX),
     sides: pad_sides(HIGH_SIDES),
-    fractions: [0.0; MAX_LINES],
+    fractions: family_fractions(HIGH_FAMILIES),
     laws: Laws::Shared(true, None),
     diffusion: 1.0,
     trip_scale: 1.0,
@@ -874,6 +892,17 @@ impl Network {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_densitys_a_and_b_lines_run_a_hundredth_of_a_frame_long() {
+        // Sparse's C line has A's delay but is whole (`reverb-network-density-size`).
+        for (design, lines) in [(&LOW, &[0, 1][..]), (&SPARSE, &[1]), (&MID, &[0, 7]), (&HIGH, &[0, 8])] {
+            for k in 0..design.lines {
+                let want = if lines.contains(&k) { 0.01 } else { 0.0 };
+                assert_eq!(design.fractions[k], want, "line {k} of {} lines", design.lines);
+            }
+        }
+    }
 
     #[test]
     fn the_loop_mix_is_orthogonal_and_close_to_the_measured_one() {

@@ -189,7 +189,9 @@ matrix, and each line has its own mix of the direct taps as input.
   Size or Scale move, each length follows the straight line through the middle of its steps.
 - **Reading.** A and B are a hundredth of a frame longer, read by linear interpolation, which is
   all the highs the network loses on a pass; the other lines are whole frames and are not
-  interpolated. Lines with Chorus are read with cubic (Hermite) interpolation.
+  interpolated. So are Sparse's, Mid's and High's lines of families A and B under Smooth None
+  (Sparse's C line, with A's delay, is whole): without it their tails keep up to 5 dB too much
+  above 12 kHz by 3 s at Size 0.222, and no other hundredth fits as well. Lines with Chorus are read with cubic (Hermite) interpolation.
 - **Smooth Fast and Slow** (Slow renders as Fast) change Low's lengths: none keeps to 8-frame
   blocks. Each length is its continuous value rounded down to a frame, and a frame: the allpass
   `floor(8 × c × Scale × size factor) + 1`, the delay `floor(8 × y × size factor) + 1`, but A's and
@@ -382,17 +384,20 @@ Measured against Live's renders of the same settings, imported and rendered by `
   from 1 to 2 s at every Scale at Size 100, −33 to −38 dB at Sizes 1.53 to 50. Energy in windows to
   4.8 s is within 0.5 dB in 941 of 1,084 cases (median 0.10 dB), and the decay time within 10 % in
   every band to 8 kHz.
-- **Sparse, Mid and High:** waveform within −33 to −38 dB at Size 100 over 0.15 to 1 s and level
-  within 0.25 dB over 0.15 to 4 s. At Size 0.222 and 500, None and Fast (Diffusion 0.1 %, Decay
-  60 s): −28 to −37 dB to 0.3 s at Size 0.222, and about −23 dB at Size 500, where what is left is
-  level (0.6 dB loud, as Low's).
+- **Sparse, Mid and High:** waveform within −33 to −38 dB at Size 100 over 0.15 to 1 s (−29 to
+  −33 dB at 3 to 4 s at Sparse and Mid, −26 to −30 at High) and level within 0.25 dB over 0.15 to
+  4 s. At Size 0.222 and 500, None and Fast (Diffusion 0.1 %, Decay 60 s): −31 to −37 dB to 0.4 s
+  at Size 0.222, and about −23 dB at Size 500, where what is left is level (0.6 dB loud, as
+  Low's).
 
 ### What is further off
 
-- **Sparse, Mid and High away from Size 100 and the defaults.** At Size 0.222 with Smooth None
-  their tails drift from Live's after about a second (−8 to −12 dB at 1 to 3 s; under Fast −16 to
-  −21 dB): a fraction of a frame per trip, as Low's A and B have under None, is the likely cause
-  and is not read. Their damping at Decay 1 s was not read either: at the default damping the 8 to
+- **Sparse, Mid and High away from Size 100 and the defaults.** Their tails drift slowly from
+  Live's by the same amount per trip at every Size, so soonest at small Sizes (at Size 0.222 −16
+  dB by 2 to 3 s at Sparse and Mid, −11 at High, under None and Fast alike). What is left is the
+  same in every band from 50 Hz to 20 kHz with the level right, so it is not a length: it grows
+  as a 1 % error per trip in the mix or the lines' gains would, and their mixes were read only
+  to 1 %. Their damping at Decay 1 s was not read either: at the default damping the 8 to
   16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
 - **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100, Diffusion 0.1
   to 60 % and Decay 60 and 0.83 s; at Size 500 the waveform is within −24 dB, and the remaining
