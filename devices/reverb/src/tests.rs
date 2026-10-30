@@ -334,6 +334,26 @@ fn spin_reaches_less_far_as_the_predelay_grows() {
 }
 
 #[test]
+fn the_networks_input_grows_with_size_as_lives() {
+    // Live's network level against its reflections' (the reflections' size level divided out),
+    // at Low (`reverb-network-small`, `reverb-network-scale`, `reverb-network-size-level`).
+    let (a, b, c) = NETWORK_SIZE_LEVEL;
+    for (size, live) in [
+        (0.222, 0.9347),
+        (10.54, 0.9424),
+        (100.0, 1.0081),
+        (200.0, 1.0716),
+        (300.0, 1.1285),
+        (400.0, 1.1793),
+        (500.0, 1.2237),
+    ] {
+        let ours = a + b * size + c * size * size;
+        let db = 20.0 * (ours / live).log10();
+        assert!(db.abs() < 0.02, "Size {size}: {ours:.4} against {live} ({db:+.3} dB)");
+    }
+}
+
+#[test]
 fn a_smaller_rooms_reflections_are_brighter_at_the_same_decay() {
     // Live's filtered reflections at Low (`reverb-size` size-1.53-er and size-10.54-er,
     // `reverb-smooth-slow` none-10.54) fit `t / room` 0.053 to 0.066 s: the corner at size factor

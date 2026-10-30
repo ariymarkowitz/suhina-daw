@@ -156,8 +156,11 @@ matrix, and each line has its own mix of the direct taps as input.
   factor` ms (s 35.19 below Shape 0.5 and 34.83 above), at their reflection levels and fades, so
   Shape and Decay shape the tail's onset as they shape the reflections. The network is mono: it
   hears no side of the input, and the input passes no damping. The level is
-  `1.236 × 0.2383 × (Size level)²` times each line's input weight, where *Size level* is the
-  reflections' `0.92594 + 0.00074059 × Size` above. Each Density's inputs and filtered-reflection
+  `1.236 × 0.2383 × Size level × Network level` times each line's input weight, where *Size
+  level* is the reflections' `0.92594 + 0.00074059 × Size` above and *Network level* is
+  `0.935054 + 0.000751857 × Size − 0.000000350508 × Size²`: close to the reflections' law to
+  Size 100, 0.45 dB below it at 500 (read at Low at Size 0.222 to 500, every 50 from 200, to
+  0.012 dB, and the same at Mid and High at 300 and 400). Each Density's inputs and filtered-reflection
   copies are scaled to Live's levels (Sparse inputs ×0.9965, copies ×1.79; Mid and High inputs
   ×1.057, copies ×1.9).
 - **Families.** Each line's *family* of filtered reflections (a mix of the direct taps, one per
@@ -351,8 +354,8 @@ Why the device is built as it is.
   Live's reflections alone at every Density and Decay 0.2 to 60 s: a cookbook low-pass of Q 0.50
   whose pole follows the law above (15 Hz rms over all 24 cases). High Cut does not change it.
 - **Level follows Size** as `0.92594 + 0.00074059 × Size`, a pure gain on the reference
-  response read at Sizes 0.222 to 500, and the network's input takes it twice. This one law fits all
-  four Densities.
+  response read at Sizes 0.222 to 500, and the network's input takes it and a law of its own that
+  falls behind it above Size 100 (Input above). These laws fit all four Densities.
 - **Stereo, not High Cut, delays the reflections.** The 8 frames once read as High Cut's were the
   default Stereo's delay under None; with it on the reflections alone and the tail left where it
   was, every Decay case lines up with Live's to the frame. Live's reflections are one frame before
@@ -387,8 +390,8 @@ Measured against Live's renders of the same settings, imported and rendered by `
 - **Sparse, Mid and High:** waveform within −33 to −38 dB at Size 100 over 0.15 to 1 s (−29 to
   −33 dB at 3 to 4 s at Sparse and Mid, −26 to −30 at High) and level within 0.25 dB over 0.15 to
   4 s. At Size 0.222 and 500, None and Fast (Diffusion 0.1 %, Decay 60 s): −31 to −37 dB to 0.4 s
-  at Size 0.222, and about −23 dB at Size 500, where what is left is level (0.6 dB loud, as
-  Low's).
+  at Size 0.222, and −36 to −39 dB to 1 s at Size 500 under None (−29 to −34 under Fast).
+  The network's level is within 0.05 dB of Live's at every Density from Size 0.222 to 500.
 
 ### What is further off
 
@@ -400,8 +403,9 @@ Measured against Live's renders of the same settings, imported and rendered by `
   to 1 %. Their damping at Decay 1 s was not read either: at the default damping the 8 to
   16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
 - **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100, Diffusion 0.1
-  to 60 % and Decay 60 and 0.83 s; at Size 500 the waveform is within −24 dB, and the remaining
-  difference is level (0.5 dB loud). Under Smooth Fast the entry was read at Shape 0.5 only.
+  to 60 % and Decay 60 and 0.83 s; at Size 500 the waveform is within −43 dB under None, and
+  under Fast drifts to −28 dB by 3 s (every Density at 500 drifts under Fast: −21 to −26 dB by
+  3 s at Sparse, Mid and High), not read. Under Smooth Fast the entry was read at Shape 0.5 only.
 - **Stereo's delay** was read at 44.1 kHz only; whether it is 0.625 ms or 27.5625 frames at other
   rates, and how it moves while Stereo is automated, were not read.
 - **Low Cut** is extrapolated for edges between 44.2 and 132 Hz and above 841 Hz.

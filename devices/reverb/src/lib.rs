@@ -497,10 +497,18 @@ const MEASURED_GAIN: f64 = 0.2383;
 /// Every Density's reflections are this much of their reference-room level at Size 0, and grow by
 /// [`LOW_SIZE_LEVEL_PER_SIZE`] per unit of Size: a pure gain on the Size 100 response, read at
 /// Sizes 0.222 to 500 for Low (`reverb-network-small`) and 1.53 to 100 for Sparse, Mid and High
-/// (`reverb-network-density-filters`). The measured network's input takes it twice.
+/// (`reverb-network-density-filters`). The measured network's input takes it, and
+/// [`NETWORK_SIZE_LEVEL`] too.
 const LOW_SIZE_LEVEL: f64 = 0.92594;
 /// How much louder the reflections are per unit of Size.
 const LOW_SIZE_LEVEL_PER_SIZE: f64 = 0.000_740_59;
+/// The measured network's input grows with Size a second time, `a + b × Size + c × Size²`, which
+/// keeps close to the reflections' own law to Size 100 and falls behind it above (0.45 dB by Size
+/// 500): read against the reflections at Low at Size 0.222 to 500 (`reverb-network-small`,
+/// `reverb-network-scale`, `reverb-network-size-level`, Size 250 to 500 in steps of 50), to 0.012
+/// dB, and the same at Mid and High at 300 and 400. A saturating `S / (1 + S / 1415)` or
+/// `ln(1 + S / 585)` fits as closely.
+const NETWORK_SIZE_LEVEL: (f64, f64, f64) = (0.935_054, 0.000_751_857, -0.000_000_350_508);
 
 /// Level of the late reverb against the input.
 const TAIL_GAIN: f64 = 1.236;
@@ -1353,7 +1361,8 @@ impl Reverb {
         let taps = self.taps;
         // Smooth Slow renders as Fast (`reverb-network-fast`).
         let fast = self.value(param::SMOOTH) as usize != 0;
-        let size_level = LOW_SIZE_LEVEL + LOW_SIZE_LEVEL_PER_SIZE * REFERENCE_SIZE * room.powi(3);
+        let size = REFERENCE_SIZE * room.powi(3);
+        let size_level = LOW_SIZE_LEVEL + LOW_SIZE_LEVEL_PER_SIZE * size;
         // The network is fed by the direct reflections, each at its own level and fade.
         let norm = taps.iter().filter(|tap| !tap.filtered).map(|tap| tap.gain * tap.gain).sum::<f64>().sqrt().max(1e-9);
         let t = &mut self.to;
@@ -1403,11 +1412,12 @@ impl Reverb {
         }
         let tail_gain = TAIL_GAIN * predelay_gain;
         // The measured network's lines scale with the room's own size factor, small rooms too, and
-        // its input with the reflections' level, twice. Every path through it fades with its
+        // its input with the reflections' level and its own ([`NETWORK_SIZE_LEVEL`]). Every path through it fades with its
         // whole time, so it needs no cut for short decays, and its first passes are as loud at
         // every Shape as Live's (`reverb-network-exact`, `reverb-network-density`), with no trim
         // for the Density.
-        t.measured_feed = tail_gain * MEASURED_GAIN * size_level * size_level;
+        let (a, b, c) = NETWORK_SIZE_LEVEL;
+        t.measured_feed = tail_gain * MEASURED_GAIN * size_level * (a + b * size + c * size * size);
         let corner = reflection_corner(setting, density_index, room).clamp(20.0, 0.45 * sr);
         let reflection = Coefficients::lowpass(sr, corner, REFLECTION_Q);
         for filter in &mut self.reflection_filters {
