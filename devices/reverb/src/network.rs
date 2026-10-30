@@ -14,9 +14,11 @@
 //! ```
 //!
 //! At Low a line's family is its input. A family's copy is its filtered reflections, an entry
-//! later (the reverb's family lines hold both). Times are frames at 44.1 kHz. A line is a delay and an
-//! allpass (two in series at Mid and High), each a whole number of 8-frame blocks and one frame
-//! with Smooth None, whole frames under Fast ([`length`]). The input reaches the lines [`entry`]
+//! later (the reverb's family lines hold both). The tables' times are frames at 44.1 kHz; at
+//! another rate each is converted first and rounded after, in the session's samples (read at 44.1,
+//! 48 and 96 kHz, `reverb-rate-48k`, `reverb-rate-96k`). A line is a delay and an allpass (two in
+//! series at Mid and High), each a whole number of 8-sample blocks and one sample with Smooth None,
+//! whole samples under Fast ([`length`]). The input reaches the lines [`entry`]
 //! after each direct reflection, whatever the Size. Every value was read from Live's impulse
 //! responses at Diffusion 0.1 % and Decay 60 s (`reverb-network-exact`, `reverb-network-density`
 //! and the runs named below), where each arrival is one sample once the input's fixed filters are
@@ -44,15 +46,16 @@ pub(crate) const FAMILY_SIDES: [usize; FAMILY_COUNT] = [1, 0, 1, 0, 0, 1, 0, 1, 
 /// The frame rate the lengths below are at.
 const RATE: f64 = 44_100.0;
 
-/// Under Smooth None Live builds every delay of the reverb from blocks of 8 frames (at 44.1 kHz).
+/// Under Smooth None Live builds every delay of the reverb from blocks of 8 samples, at the
+/// session's rate (the same 8 at 44.1, 48 and 96 kHz).
 const BLOCK: f64 = 8.0;
 /// ... rounding a length up to its next block unless it is less than this much of a block past
 /// one ([`rounded`]): with 0.88 to 0.9 every length read fits, lines, allpasses, families, the
 /// Shape entry and Stereo's delay.
 const BLOCK_EDGE: f64 = 0.9;
 
-/// A delay of `x` frames (at 44.1 kHz) as Live rounds it: under Smooth Fast (and Slow) down to a
-/// whole frame, under None to whole blocks, up but for the last tenth of a block. While things
+/// A delay of `x` samples (at the session's rate) as Live rounds it: under Smooth Fast (and Slow)
+/// down to a whole sample, under None to whole blocks, up but for the last tenth of a block. While things
 /// move, the straight line through the middle of the steps, so a glide does not jump a step at a
 /// time.
 pub(crate) fn rounded(x: f64, fast: bool, settled: bool) -> f64 {
@@ -108,17 +111,19 @@ const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
 const FAMILY_LENGTHS: [f64; FAMILY_COUNT] =
     [49.3955, 398.8085, 204.9654, 166.9645, 372.7764, 292.0502, 120.0675, 258.9858, 299.0174, 311.7368];
 
-/// With Smooth None, the lines of families A and B run this much of a frame past their whole
+/// With Smooth None, the lines of families A and B run this much of a sample past their whole
 /// length, read by linear interpolation: a slight loss of the highs on every pass (0.18 dB at the
 /// top), and the network's only loss besides the decay. Under Fast their delays keep their whole
 /// fraction instead ([`length`]). Without it the tails at Size 0.222 keep up to 5 dB too much above
-/// 12 kHz by 3 s, and no other hundredth fits as well (`reverb-network-density-size`).
+/// 12 kHz by 3 s, and no other hundredth fits as well (`reverb-network-density-size`). It is a
+/// hundredth of a sample at 48 and 96 kHz too (`reverb-rate-48k`, `reverb-rate-96k`).
 const NONE_FRACTION: f64 = 0.01;
 
-/// A line's delay and allpasses (frames at 44.1 kHz) from `table`: the delay of row `delay` and the
-/// allpasses of row `family` (the second only when `second`), for size factor `room` and Scale
-/// `percent`. Each part is its blocks times `room` (an allpass's also times Scale), [`rounded`],
-/// but under Smooth Fast the delay of a line of family A or B keeps its fraction; and a frame.
+/// A line's delay and allpasses (samples, `per_frame` to a frame at 44.1 kHz) from `table`: the
+/// delay of row `delay` and the allpasses of row `family` (the second only when `second`), for size
+/// factor `room` and Scale `percent`. Each part is its blocks times `room` (an allpass's also times
+/// Scale), converted to samples, [`rounded`], but under Smooth Fast the delay of a line of family A
+/// or B keeps its fraction; and a sample.
 #[allow(clippy::too_many_arguments)]
 fn length(
     table: &[[f64; 3]],
@@ -129,11 +134,12 @@ fn length(
     percent: f64,
     settled: bool,
     fast: bool,
+    per_frame: f64,
 ) -> (f64, f64, f64) {
     let [blocks_delay, _, _] = table[delay];
     let [_, shorter, longer] = table[family];
-    let part = |blocks: f64| rounded(BLOCK * blocks, fast, settled);
-    let line = if fast && family < 2 { BLOCK * blocks_delay * room } else { part(blocks_delay * room) };
+    let part = |blocks: f64| rounded(BLOCK * blocks * per_frame, fast, settled);
+    let line = if fast && family < 2 { BLOCK * blocks_delay * room * per_frame } else { part(blocks_delay * room) };
     let first = part(shorter * percent * room) + 1.0;
     let second = if second { part(longer * percent * room) + 1.0 } else { 0.0 };
     (line + 1.0, first, second)
@@ -142,12 +148,13 @@ fn length(
 /// Where family `k`'s filtered reflections peak after their direct ones (frames at 44.1 kHz) for
 /// size factor `room`, under Smooth Fast (or Slow) when `fast`: [`front`] and a frame.
 pub(crate) fn peak(k: usize, room: f64, settled: bool, fast: bool) -> f64 {
-    front(k, room, settled, fast) + 1.0
+    front(k, room, settled, fast, 1.0) + 1.0
 }
 
-/// Where family `k`'s copy starts (frames at 44.1 kHz) for size factor `room`, at every Density.
-pub(crate) fn front(k: usize, room: f64, settled: bool, fast: bool) -> f64 {
-    rounded(BLOCK * FAMILY_LENGTHS[k] * room, fast, settled)
+/// Where family `k`'s copy starts (samples, `per_frame` to a frame at 44.1 kHz) for size factor
+/// `room`, at every Density.
+pub(crate) fn front(k: usize, room: f64, settled: bool, fast: bool, per_frame: f64) -> f64 {
+    rounded(BLOCK * FAMILY_LENGTHS[k] * room * per_frame, fast, settled)
 }
 
 /// Which group each direct reflection of Density Low belongs to, in table order.
@@ -180,13 +187,16 @@ const MIX: [[f64; LOOP]; LOOP] = [
 /// whatever the Size and the Density ([`entry`]).
 const SHAPE_ENTRY: f64 = 1543.5;
 
-/// The input's delay to the lines after each direct reflection (frames at 44.1 kHz) at `shape`:
-/// [`SHAPE_ENTRY`] times Shape, [`rounded`], less a frame. With None −1, 391, 775, 1159 and 1543 frames at Shape 0, 0.25, 0.5, 0.75
+/// The input's delay to the lines after each direct reflection (samples, `per_frame` to a frame at
+/// 44.1 kHz) at `shape`: [`SHAPE_ENTRY`] times Shape in samples, [`rounded`], less a sample (at
+/// 48 kHz 424, 840 and 1680 samples later at Shape 0.25, 0.5 and 1 than at 0 under None, 420, 840
+/// and 1680 under Fast; at 96 kHz 840, 1680 and 3360 under both: `reverb-rate-48k`,
+/// `reverb-rate-96k`). With None −1, 391, 775, 1159 and 1543 frames at Shape 0, 0.25, 0.5, 0.75
 /// and 1 (`reverb-network-exact`, `reverb-network-id`, `reverb-size` shape-*-tail), under Fast −1,
 /// 384, 770, 1156 and 1542 (`reverb-structure` shape-*). Read at Size 100 and inferred at the
 /// others: Shape 0.5's entry is 775 frames at every Size (`reverb-network-small`).
-pub(crate) fn entry(shape: f64, settled: bool, fast: bool) -> f64 {
-    rounded(SHAPE_ENTRY * shape, fast, settled) - 1.0
+pub(crate) fn entry(shape: f64, settled: bool, fast: bool, per_frame: f64) -> f64 {
+    rounded(SHAPE_ENTRY * shape * per_frame, fast, settled) - 1.0
 }
 /// Longest delay a line needs (seconds, with room for Size 500): High's longest line.
 const LINE_SECONDS: f64 = 0.65;
@@ -538,15 +548,14 @@ impl Lengths {
         gain: impl Fn(f64) -> f64,
         trip_seconds: f64,
     ) {
-        let frames = sample_rate / RATE;
+        let per_frame = sample_rate / RATE;
         let whole = |x: f64| if settled { x.round() } else { x }.max(2.0);
         let percent = scale * 100.0;
         for k in 0..design.lines {
             let family = design.families[k];
             let delay = design.delays.map_or(family, |d| d[k]);
             let (line, allpass, second) =
-                length(design.lengths, delay, family, design.second, room, percent, settled, fast);
-            let (line, allpass, second) = (line * frames, allpass * frames, second * frames);
+                length(design.lengths, delay, family, design.second, room, percent, settled, fast, per_frame);
             self.seconds[k] = if second > 0.0 { whole(second) } else { 0.0 };
             self.second_losses[k] = gain(second / sample_rate);
             if fast && family < 2 {
@@ -571,9 +580,9 @@ impl Lengths {
         let line = |k: usize| {
             let family = design.families[k];
             let delay = design.delays.map_or(family, |d| d[k]);
-            length(design.lengths, delay, family, design.second, room, 100.0, false, false).0
+            length(design.lengths, delay, family, design.second, room, 100.0, false, false, sample_rate / RATE).0
         };
-        (0..design.lines).map(line).fold(0.0, f64::max) * sample_rate / RATE
+        (0..design.lines).map(line).fold(0.0, f64::max)
     }
 }
 
@@ -705,13 +714,13 @@ mod tests {
 
     /// Low's line `k`: its delay and allpass ([`length`]).
     fn low(k: usize, room: f64, percent: f64, settled: bool, fast: bool) -> (f64, f64) {
-        let (line, allpass, _) = length(&LOW_LINES, k, k, false, room, percent, settled, fast);
+        let (line, allpass, _) = length(&LOW_LINES, k, k, false, room, percent, settled, fast, 1.0);
         (line, allpass)
     }
 
     /// A Sparse, Mid or High line's lengths ([`length`]).
     fn shared(delay: usize, family: usize, second: bool, room: f64, percent: f64, fast: bool) -> (f64, f64, f64) {
-        length(&SHARED_LINES, delay, family, second, room, percent, true, fast)
+        length(&SHARED_LINES, delay, family, second, room, percent, true, fast, 1.0)
     }
 
     #[test]
@@ -731,7 +740,49 @@ mod tests {
             [(false, [-1.0, 391.0, 775.0, 1159.0, 1543.0]), (true, [-1.0, 384.0, 770.0, 1156.0, 1542.0])]
         {
             for (shape, want) in [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().zip(frames) {
-                assert_eq!(entry(shape, true, fast), want, "Shape {shape}, fast {fast}");
+                assert_eq!(entry(shape, true, fast, 1.0), want, "Shape {shape}, fast {fast}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_entry_is_rounded_at_the_sessions_rate() {
+        // Live's entries at Shape 0.25, 0.5 and 1 against Shape 0's (samples), Smooth None then Fast
+        // (`reverb-rate-48k`, `reverb-rate-96k`).
+        for (rate, none, fast) in [
+            (48_000.0, [424.0, 840.0, 1680.0], [420.0, 840.0, 1680.0]),
+            (96_000.0, [840.0, 1680.0, 3360.0], [840.0, 1680.0, 3360.0]),
+        ] {
+            let per_frame = rate / RATE;
+            for (fast, wants) in [(false, none), (true, fast)] {
+                for (shape, want) in [0.25, 0.5, 1.0].into_iter().zip(wants) {
+                    let later = entry(shape, true, fast, per_frame) - entry(0.0, true, fast, per_frame);
+                    assert_eq!(later, want, "{rate} Hz, Shape {shape}, fast {fast}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_lines_first_pass_is_rounded_at_the_sessions_rate() {
+        // Live's first passes through Low's A line at Scale 40 % and Shape 0.5 after the first
+        // reflection (samples), at Size 1.53, 10.54 and 100 (`reverb-rate-48k`, `reverb-rate-96k`).
+        // Rounded in 44.1 kHz frames and converted after, None at 96 kHz came out up to 26 samples
+        // long.
+        let reads = [
+            (48_000.0, false, [1521.010, 2129.010, 3569.010]),
+            (96_000.0, false, [3041.006, 4265.006, 7129.006]),
+            (48_000.0, true, [1515.615, 2125.879, 3561.916]),
+            (96_000.0, true, [3031.230, 4250.758, 7122.832]),
+        ];
+        for (rate, fast, wants) in reads {
+            let per_frame = rate / RATE;
+            for (size, want) in [1.53, 10.54, 100.0].into_iter().zip(wants) {
+                let room = (size / 100.0f64).cbrt();
+                let (line, allpass, _) = length(&LOW_LINES, 0, 0, false, room, 40.0, true, fast, per_frame);
+                let fraction = if fast { 0.0 } else { NONE_FRACTION };
+                let pass = line + fraction + allpass + entry(0.5, true, fast, per_frame);
+                assert!((pass - want).abs() < 0.01, "{rate} Hz, Size {size}, fast {fast}: {pass} against {want}");
             }
         }
     }

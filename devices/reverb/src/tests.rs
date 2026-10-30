@@ -212,6 +212,17 @@ fn stereo_delays_the_reflections_as_measured() {
         assert_eq!(stereo_delay(stereo, true, 44_100.0), fast, "Fast at Stereo {stereo}");
         assert_eq!(stereo_delay(stereo, false, 44_100.0), none, "None at Stereo {stereo}");
     }
+    // At 48 and 96 kHz, Stereo 0 and 60, Fast then None (`reverb-rate-48k`, `reverb-rate-96k`):
+    // 0.625 ms in the session's frames, a frame less under Fast where that is whole.
+    for (rate, stereo, fast, none) in [
+        (48_000.0, 0.0, 29.0, 32.0),
+        (48_000.0, 60.0, 14.0, 16.0),
+        (96_000.0, 0.0, 59.0, 64.0),
+        (96_000.0, 60.0, 29.0, 32.0),
+    ] {
+        assert_eq!(stereo_delay(stereo, true, rate), fast, "Fast at Stereo {stereo}, {rate} Hz");
+        assert_eq!(stereo_delay(stereo, false, rate), none, "None at Stereo {stereo}, {rate} Hz");
+    }
 }
 
 #[test]
@@ -285,7 +296,7 @@ fn two_direct_reflections_land_on_lives_frames_at_every_size() {
         let tap = TAPS_LOW.iter().find(|t| (t.ms - near).abs() < 0.01).expect("a direct reflection there");
         for &(size, want) in frames {
             let room = (size / REFERENCE_SIZE).cbrt();
-            let at = 0.0025 * 44_100.0 + tap.ms * room * 44.1 + TAP_OFFSET_SECONDS * 44_100.0;
+            let at = 0.0025 * 44_100.0 + tap.ms * room * 44.1 + TAP_OFFSET_FRAMES;
             assert_eq!(at.round(), want, "{} ms at Size {size}", tap.ms);
         }
     }
@@ -298,8 +309,8 @@ fn the_first_reflection_arrives_after_the_predelay() {
         let mut r = reverb(sr, &[(param::PREDELAY, predelay), (param::DIFFUSE, MIN_LEVEL_DB)]);
         let ir = impulse_response(&mut r, sr, 0.3);
         let first = ir.iter().skip(1).position(|[l, r]| l.abs().max(r.abs()) > 1e-4).map(|n| n + 1);
-        // A frame (at 44.1 kHz) before the predelay, and Stereo 100's delay later, as measured.
-        let expected = ((predelay + TAP_OFFSET_SECONDS + stereo_delay(100.0, true, sr) / sr) * sr).round() as usize;
+        // A frame before the predelay, and Stereo 100's delay later, as measured.
+        let expected = ((predelay + TAP_OFFSET_FRAMES / sr + stereo_delay(100.0, true, sr) / sr) * sr).round() as usize;
         assert!(first.is_some_and(|n| n.abs_diff(expected) <= 2), "{predelay}: {first:?} against {expected}");
     }
 }
@@ -422,7 +433,7 @@ fn spin_swings_each_reflection_by_its_whole_delay() {
     for (predelay, side, tap, live) in
         [(0.0005, 0, 11.429, 2.08), (0.1, 0, 11.429, 0.40), (0.0005, 1, 0.0, 0.09), (0.1, 1, 0.0, 0.36)]
     {
-        let at = predelay + TAP_OFFSET_SECONDS + tap / 1_000.0;
+        let at = predelay + TAP_OFFSET_FRAMES / sr + tap / 1_000.0;
         let ours = swing_ms(&arrivals(sr, predelay, 17.5, side, at + stereo_delay(100.0, true, sr) / sr, 0.003));
         let expected = 17.5 * SPIN_FRACTION * spin_reach(predelay * 1_000.0) * at * 1_000.0;
         assert!(
@@ -439,7 +450,7 @@ fn filtered_reflections_swing_with_the_direct_one_they_follow() {
     // hardly moves at 0.5 ms of predelay, where one swinging by its own delay would move 1.5 ms
     // either way at Amount 5.
     let sr = 44_100.0;
-    let at = 0.0005 + TAP_OFFSET_SECONDS + stereo_delay(100.0, true, sr) / sr + 0.030_272;
+    let at = 0.0005 + TAP_OFFSET_FRAMES / sr + stereo_delay(100.0, true, sr) / sr + 0.030_272;
     let ours = swing_ms(&arrivals(sr, 0.0005, 5.0, 0, at, 0.0003));
     assert!(ours < 0.05, "{ours:.3} ms");
 }
@@ -527,8 +538,8 @@ fn the_reflections_fade_with_shape_and_decay_as_measured() {
         let mut r = reverb(sr, &settings);
         let ir = impulse_response(&mut r, sr, 0.06);
         let tap = |ms: f64| {
-            let at = ((0.0025 + TAP_OFFSET_SECONDS + stereo_delay(100.0, true, sr) / sr + ms / 1_000.0) * sr).round()
-                as usize;
+            let at = ((0.0025 + TAP_OFFSET_FRAMES / sr + stereo_delay(100.0, true, sr) / sr + ms / 1_000.0) * sr)
+                .round() as usize;
             ir.get(at - 2..at + 3).unwrap_or_default().iter().map(|[l, _]| l.abs()).fold(0.0f32, f32::max)
         };
         let fall = 20.0 * f64::from(tap(41.134) / tap(11.429)).log10();
