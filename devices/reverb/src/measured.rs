@@ -251,16 +251,18 @@ const FRONT_SECONDS: f64 = 0.2;
 /// a Mid or High line runs two allpasses in series, each with the Diffusion as its gain, so each
 /// line's first pass comes as g² at its delay, −g(1 − g²) one allpass later and again the other
 /// allpass later, and (1 − g²)² where Diffusion 0.1 % has it (0.41 of that level; one allpass would
-/// give 0.64), and matches Live's render to −39 dB over 0.07 to 0.3 s and −36 dB to 1 s.
+/// give 0.64), and matches Live's render to −39 dB over 0.07 to 0.3 s and −36 dB to 1 s. D's and
+/// the 2073 family's split between their two allpasses was read again at Size 10.54, Scale 40 and
+/// 100 %, Diffusion 30 and 60 % (`reverb-network-density-split`), where a block moved between them.
 const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
     [1184.4905, 0.6886, 12.7517],
     [442.6705, 1.1045, 3.7123],
     [436.2265, 1.3804, 5.9511],
-    [1026.769, 1.7387, 3.4422],
+    [1026.769, 1.7356, 3.4461],
     [356.0745, 2.4623, 5.7064],
     [560.7845, 0.7399, 8.3358],
     [621.4635, 2.9624, 3.7537],
-    [1983.288, 0.7649, 2.6864],
+    [1983.288, 0.7584, 2.6925],
     [379.8665, 0.8037, 5.6726],
     [501.207, 1.183, 3.8067],
 ];
@@ -1056,6 +1058,22 @@ mod tests {
         // Mid's are High's but the second and the last.
         let mid: Vec<_> = HIGH.families[..HIGH.lines].iter().filter(|f| ![8, 7].contains(*f)).copied().collect();
         assert_eq!(mid, MID.families[..MID.lines]);
+    }
+
+    #[test]
+    fn d_and_the_2073_familys_allpasses_split_as_measured_at_size_10_54() {
+        // Each allpass (frames) where Mid's and High's tails match Live's at Diffusion 30 and
+        // 60 % (`reverb-network-density-split`). With the allpasses split as first read, D's
+        // second came a block short at Scale 40 %, and at 100 % D's first and the 2073 family's
+        // came a block long and the 2073 family's second a block short; at Diffusion 0.1 % only
+        // their sums show, which hold at every Size and Scale read.
+        let room = (10.54f64 / 100.0).cbrt();
+        for (family, percent, want) in
+            [(3, 40.0, (265.0, 529.0)), (3, 100.0, (657.0, 1305.0)), (7, 100.0, (289.0, 1025.0))]
+        {
+            let (_, first, second) = shared_length_at(family, family, true, room, percent, true, false);
+            assert_eq!((first, second), want, "family {family} at Scale {percent} %");
+        }
     }
 
     #[test]

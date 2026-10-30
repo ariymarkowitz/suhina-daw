@@ -190,13 +190,15 @@ orthogonal between the lines as they are heard, and each line has its own mix of
   is f's delay and both of f's allpasses; High has all ten families, Mid all but 7 and 8. A Sparse
   line has one allpass, its family's shorter: F, B and R are their families', and the C line has A's
   delay with C's allpass. y, c₁ and c₂ are A 1184.4905, 0.6886, 12.7517; B 442.6705, 1.1045, 3.7123;
-  C 436.2265, 1.3804, 5.9511; D 1026.769, 1.7387, 3.4422; F 356.0745, 2.4623, 5.7064; R 560.7845,
-  0.7399, 8.3358; and 6 to 9 621.4635, 2.9624, 3.7537; 1983.288, 0.7649, 2.6864; 379.8665, 0.8037,
+  C 436.2265, 1.3804, 5.9511; D 1026.769, 1.7356, 3.4461; F 356.0745, 2.4623, 5.7064; R 560.7845,
+  0.7399, 8.3358; and 6 to 9 621.4635, 2.9624, 3.7537; 1983.288, 0.7584, 2.6925; 379.8665, 0.8037,
   5.6726; 501.207, 1.183, 3.8067: each fits every line's first pass at Size 0.222, 100 and 500 with
   Smooth None and Fast and at Scale 0 to 100 % at Size 100 (but Sparse's F line at Scale 0, read a
-  block long). Which allpass is the shorter shows only above Diffusion 0.1 % (Diffusion 60 %,
-  where each first pass arrives as g² at the delay, −g(1 − g²) after each allpass and (1 − g²)²
-  after both). These lines' lengths are not Low's. While
+  block long). Which allpass is the shorter, and how a line's length splits between its two,
+  shows only above Diffusion 0.1 % (Diffusion 30 and 60 %, where each first pass arrives as g² at
+  the delay, −g(1 − g²) after each allpass and (1 − g²)² after both): D's and the 2073 family's
+  split was read again at Size 10.54, Scale 40 and 100 %, where a block moves between their two
+  allpasses that the sums at Diffusion 0.1 % do not show. These lines' lengths are not Low's. While
   Size or Scale move, each length follows the straight line through the middle of its steps.
 - **Reading.** A and B are a hundredth of a frame longer, read by linear interpolation, which is
   all the highs the network loses on a pass; the other lines are whole frames and are not
@@ -400,7 +402,9 @@ Measured against Live's renders of the same settings, imported and rendered by `
   4.8 s is within 0.5 dB in 941 of 1,084 cases (median 0.10 dB), and the decay time within 10 % in
   every band to 8 kHz.
 - **Sparse, Mid and High:** waveform within −37 to −41 dB of Live's at Size 100 from 0.08 to 3.5 s
-  at Scale 5, 40 and 100 %, and at Size 1.53 from 0.08 to 3 s, flat with time. At Size 0.222 and
+  at Scale 5, 40 and 100 %, and at Size 1.53 and 10.54 from 0.08 to 3 s, flat with time (Mid and
+  High at 10.54 at Diffusion 0.1, 30 and 60 %, Scale 40 and 100 %, −37 to −40 dB; with damping
+  or a filter −31 to −36 dB). At Size 0.222 and
   500 under None (Diffusion 0.1 %, Decay 60 s) −36 to −40 dB to 8 s (the line levels add 0.2 to
   0.5 dB of that at Sparse and Mid, 1 to 1.3 at High); at Diffusion 60 % and Decay 0.83 s to 60 s
   −34 to −39 dB to 3 s. The network's level is within 0.05 dB of Live's at every Density from
@@ -410,8 +414,7 @@ Measured against Live's renders of the same settings, imported and rendered by `
 
 - **Sparse, Mid and High under Smooth Fast.** Their tails drift slowly from Live's under Fast,
   where under None they do not: −29 dB by 3 s at Sparse at Size 0.222 (Mid −34, High −37), and
-  −23 to −29 dB at every Density at Size 500. At Size 10.54 with the default damping Mid's and
-  High's tails are uncorrelated with Live's after 80 ms. Their damping at Decay 1 s was not read either: at the default damping the 8 to
+  −23 to −29 dB at every Density at Size 500. Their damping at Decay 1 s was not read either: at the default damping the 8 to
   16 kHz bands of Mid and High decay 1.4 to 1.6 dB/s too slowly.
 - **Low beyond the settings read.** Lengths and levels were read at Size 0.222 to 100, Diffusion 0.1
   to 60 % and Decay 60 and 0.83 s; at Size 500 the waveform is within −43 dB under None, and
