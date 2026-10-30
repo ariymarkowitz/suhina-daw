@@ -12,9 +12,10 @@
 //! A, C and R are heard on the right, B, D and F on the left, all at one level
 //! ```
 //!
-//! Times are frames at 44.1 kHz in the reference room (Size 100). A line is a delay of the first
-//! length and an allpass of the second times Scale (%), both scaled with the room's size factor;
-//! the input reaches the lines [`ENTRY_MS`] after each direct reflection, whatever the Size.
+//! Times are frames at 44.1 kHz. A line is a delay and an allpass, each a whole number of 8-frame
+//! blocks and one frame: the delay's blocks grow with the room's size factor, the allpass's with
+//! the size factor times Scale (%), each rounding down at its own edge ([`length_at`]). The input
+//! reaches the lines [`ENTRY_MS`] after each direct reflection, whatever the Size.
 //! Every value was read from `reverb-network-exact` (Hi Cut off, Diffusion 0.1 %, Decay 60 s,
 //! Stereo 120, Scale 5 to 100 %): with the input's fixed filter divided out each arrival is one
 //! sample, and a simulation of this structure with these values matches Live's renders to −41 dB
@@ -31,48 +32,53 @@ pub(crate) const GROUPS: usize = 6;
 /// The frame rate the lengths below are at.
 const RATE: f64 = 44_100.0;
 
-/// The Scales (%) each length was measured at.
-const SCALES: [f64; 6] = [5.0, 20.0, 40.0, 60.0, 80.0, 100.0];
-/// The whole length, delay and allpass, of A, B, C, D, F and G at each of [`SCALES`] in the
-/// reference room: Live's allpasses grow in steps of 8 frames, so a length is up to 4 frames off a
-/// straight line in Scale, and between the measured Scales it is read off the straight line between
-/// them. G is not a line of its own: R is A's and G's lengths and [`R_EXTRA`] together.
-const LENGTHS: [[f64; 6]; 6] = [
-    [2330.0, 2402.0, 2506.0, 2602.0, 2706.0, 2810.0],
-    [2778.0, 2922.0, 3114.0, 3314.0, 3506.0, 3706.0],
-    [3433.0, 3537.0, 3673.0, 3817.0, 3953.0, 4089.0],
-    [3842.0, 4322.0, 4962.0, 5594.0, 6234.0, 6866.0],
-    [6866.0, 7130.0, 7482.0, 7826.0, 8178.0, 8530.0],
-    [7470.0, 7494.0, 7526.0, 7558.0, 7582.0, 7606.0],
-];
-/// How much of each length of [`LENGTHS`] is its allpass: frames per % of Scale.
-const ALLPASS_RATES: [f64; 6] = [5.050, 9.768, 6.921, 31.832, 17.493, 1.444];
-/// C runs this plain delay before its own length: its family reaches it unfiltered this long
-/// after the entry, and nothing else hears the plain part.
-const C_PLAIN: f64 = 1641.0;
-/// R is this many frames longer than A and G together.
-const R_EXTRA: f64 = 2.0;
+/// Live builds every length of the network from blocks of 8 frames (at 44.1 kHz).
+const BLOCK: f64 = 8.0;
+/// Each line's delay before its allpass in the reference room (blocks) for A, B, C, D and F, and
+/// G, the delay R runs after A's: a delay is `BLOCK * floor(blocks * room + DELAY_EDGE) + 1`
+/// frames, G's `BLOCK * floor(blocks * room + G_EDGE)` with no frame more.
+const DELAYS: [f64; LOOP] = [286.875, 339.649, 423.336, 459.936, 846.683, 934.943];
+/// Where a delay rounds up to its next block (blocks).
+const DELAY_EDGE: f64 = 0.85;
+/// Where G rounds up to its next block (blocks).
+const G_EDGE: f64 = -0.411;
+/// Each line's allpass, A, B, C, D, F and R, in blocks per % of Scale in the reference room: it
+/// is `BLOCK * floor(blocks * Scale * room + ALLPASS_EDGE) + 1` frames.
+const ALLPASSES: [f64; LOOP] = [0.63406, 1.22440, 0.87055, 3.97925, 2.18381, 0.80374];
+/// Where an allpass rounds up to its next block (blocks).
+const ALLPASS_EDGE: f64 = 0.9;
 
-/// Line `k`'s whole length and its allpass's share of it at Scale `percent`, reference room.
-fn length_at(k: usize, percent: f64) -> (f64, f64) {
-    let table = |row: usize| {
-        let lengths = LENGTHS[row];
-        let i = SCALES.iter().rposition(|&s| s <= percent).unwrap_or(0).min(SCALES.len() - 2);
-        let t = (percent - SCALES[i]) / (SCALES[i + 1] - SCALES[i]);
-        (lengths[i] + (lengths[i + 1] - lengths[i]) * t, ALLPASS_RATES[row] * percent)
+/// `BLOCK` times `x` rounded down past `edge`, or, while things move, the straight line through
+/// the middle of the steps, so a glide does not jump a block at a time.
+fn blocks(x: f64, edge: f64, settled: bool) -> f64 {
+    BLOCK * if settled { (x + edge).floor() } else { x + edge - 0.5 }
+}
+
+/// Line `k`'s delay and allpass (frames at 44.1 kHz) for size factor `room` and Scale `percent`,
+/// in whole blocks when `settled`. C first runs its family's offset as a plain delay, and R is
+/// A's delay, then G's, then its own allpass (`reverb-network-small`, `reverb-network-sections`).
+fn length_at(k: usize, room: f64, percent: f64, settled: bool) -> (f64, f64) {
+    let delay = |row: usize| blocks(DELAYS[row] * room, DELAY_EDGE, settled) + 1.0;
+    let allpass = blocks(ALLPASSES[k] * percent * room, ALLPASS_EDGE, settled) + 1.0;
+    let line = match k {
+        2 => front(2, room, settled) + delay(2),
+        5 => delay(0) + blocks(DELAYS[5] * room, G_EDGE, settled),
+        _ => delay(k),
     };
-    match k {
-        2 => {
-            let (c, allpass) = table(2);
-            (C_PLAIN + c, allpass)
-        }
-        5 => {
-            let ((a, a_allpass), (g, g_allpass)) = (table(0), table(5));
-            (a + g + R_EXTRA, a_allpass + g_allpass)
-        }
-        // A, B, D and F are rows 0, 1, 3 and 4 of the table.
-        _ => table(k),
-    }
+    (line, allpass)
+}
+
+/// Where family `k`'s filtered reflections peak after their direct ones (frames at 44.1 kHz) for
+/// size factor `room`, in whole blocks and a frame when `settled`.
+pub(crate) fn peak(k: usize, room: f64, settled: bool) -> f64 {
+    front(k, room, settled) + 1.0
+}
+
+/// Where family `k`'s copy starts (frames at 44.1 kHz) for size factor `room`: whole blocks when
+/// `settled`; it peaks one frame later.
+fn front(k: usize, room: f64, settled: bool) -> f64 {
+    let x = FAMILY_OFFSETS[k] * room;
+    BLOCK * if settled { x.round() } else { x }
 }
 
 /// Which group each direct reflection of Density Low belongs to, in table order.
@@ -87,9 +93,10 @@ const FAMILIES: [[f64; GROUPS]; LOOP] = [
     [-0.692, 0.419, -0.684, -0.506, -0.590, -0.546],
     [0.241, 0.5005, 0.198, 1.050, -0.555, -0.533],
 ];
-/// Where each family's filtered reflection peaks after the direct one (frames, reference room):
-/// its copy into the mix is heard there too, through the same low-pass.
-const FAMILY_OFFSETS: [f64; LOOP] = [401.0, 3193.0, 1641.0, 1337.0, 2985.0, 2337.0];
+/// Where each family's filtered reflection starts after the direct one (blocks, reference room):
+/// 401, 3193, 1641, 1337, 2985 and 2337 frames to its peak at Size 100. Its copy into the mix is
+/// heard there too, through the same low-pass.
+const FAMILY_OFFSETS: [f64; LOOP] = [50.4258, 399.2770, 205.1187, 167.3337, 373.2037, 292.2697];
 /// How much of its family each line takes, times its output level: the first pass of each line
 /// against one direct reflection.
 const FAMILY_GAINS: [f64; LOOP] = [1.7860, 1.7959, 1.8109, 1.8022, 1.8092, 1.8012];
@@ -204,35 +211,34 @@ impl Lengths {
         gain: impl Fn(f64) -> f64,
         trip_seconds: f64,
     ) {
-        let frames = room * sample_rate / RATE;
-        let whole = |x: f64, least: f64| if settled { x.round() } else { x }.max(least);
+        let frames = sample_rate / RATE;
+        let whole = |x: f64| if settled { x.round() } else { x }.max(2.0);
         let percent = scale * 100.0;
-        for (k, &offset) in FAMILY_OFFSETS.iter().enumerate() {
-            let (length, allpass) = length_at(k, percent);
-            let (line, allpass) = ((length - allpass) * frames, allpass * frames);
-            self.lines[k] = whole(line, 2.0);
-            self.allpasses[k] = whole(allpass, 2.0);
+        for k in 0..LOOP {
+            let (line, allpass) = length_at(k, room, percent, settled);
+            let (line, allpass) = (line * frames, allpass * frames);
+            self.lines[k] = whole(line);
+            self.allpasses[k] = whole(allpass);
             // The allpass loses its own time on each pass, so the echoes it holds back decay
             // as fast as the rest (as Live's tail does at every Diffusion).
             self.gains[k] = gain(line / sample_rate);
             self.losses[k] = gain(allpass / sample_rate);
             self.trips[k] = (line + allpass) / sample_rate / trip_seconds;
-            // The copy's low-pass peaks one frame after it starts.
-            self.fronts[k] = whole((offset - 1.0) * frames, 2.0);
+            self.fronts[k] = whole(front(k, room, settled) * frames);
         }
     }
 
     /// Each copy's level for size factor `room`, as the reflections fade by `fade` (dB per ms of
     /// their delay) over its family's offset.
     pub fn fade(&mut self, room: f64, fade: f64) {
-        for (gain, offset) in self.copy_gains.iter_mut().zip(FAMILY_OFFSETS) {
-            *gain = 10f64.powf(-fade * offset * room * 1_000.0 / RATE / 20.0);
+        for (k, gain) in self.copy_gains.iter_mut().enumerate() {
+            *gain = 10f64.powf(-fade * peak(k, room, false) * 1_000.0 / RATE / 20.0);
         }
     }
 
     /// The longest delay of the network (frames).
     pub fn longest(room: f64, sample_rate: f64) -> f64 {
-        (0..LOOP).map(|k| length_at(k, 100.0).0).fold(0.0, f64::max) * room * sample_rate / RATE
+        (0..LOOP).map(|k| length_at(k, room, 100.0, false).0).fold(0.0, f64::max) * sample_rate / RATE
     }
 }
 
@@ -360,17 +366,59 @@ mod tests {
         }
     }
 
+    /// Live's whole lengths, delay and allpass (frames, C's after its family's offset), read at
+    /// each (Size, Scale %) Live's renders were read for.
+    const MEASURED: [(f64, f64, [f64; LOOP]); 10] = [
+        (100.0, 5.0, [2330.0, 2778.0, 5074.0, 3842.0, 6866.0, 9802.0]),
+        (100.0, 20.0, [2402.0, 2922.0, 5178.0, 4322.0, 7130.0, 9898.0]),
+        (100.0, 40.0, [2506.0, 3114.0, 5314.0, 4962.0, 7482.0, 10034.0]),
+        (100.0, 100.0, [2810.0, 3706.0, 5730.0, 6866.0, 8530.0, 10418.0]),
+        (50.0, 40.0, [1994.0, 2474.0, 4218.0, 3938.0, 5938.0, 7962.0]),
+        (10.54, 5.0, [1106.0, 1314.0, 2394.0, 1826.0, 3250.0, 4634.0]),
+        (10.54, 100.0, [1330.0, 1754.0, 2714.0, 3250.0, 4034.0, 4922.0]),
+        (1.53, 5.0, [586.0, 698.0, 1258.0, 962.0, 1714.0, 2434.0]),
+        (1.53, 40.0, [634.0, 786.0, 1322.0, 1242.0, 1866.0, 2490.0]),
+        (1.53, 100.0, [706.0, 930.0, 1426.0, 1714.0, 2130.0, 2586.0]),
+    ];
+
     #[test]
-    fn a_line_is_its_measured_length_at_the_measured_scales() {
-        for (k, lengths) in LENGTHS.iter().enumerate().take(5) {
-            let line = [0, 1, 2, 3, 4][k];
-            for (&s, &length) in SCALES.iter().zip(lengths) {
-                let want = if line == 2 { C_PLAIN + length } else { length };
-                assert!((length_at(line, s).0 - want).abs() < 1e-9, "line {line} at {s} %");
+    fn a_line_is_its_measured_length() {
+        for (size, percent, lengths) in MEASURED {
+            let room = (size / 100.0f64).cbrt();
+            for (k, want) in lengths.into_iter().enumerate() {
+                let (line, allpass) = length_at(k, room, percent, true);
+                assert_eq!(line + allpass, want, "line {k} at Size {size}, Scale {percent} %");
             }
         }
-        // R is A's and G's lengths and two frames: 10,034 frames at Scale 40 %.
-        assert!((length_at(5, 40.0).0 - 10_034.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn each_copy_peaks_where_measured() {
+        let measured = [
+            (100.0, [401.0, 3193.0, 1641.0, 1337.0, 2985.0, 2337.0]),
+            (10.54, [193.0, 1513.0, 777.0, 633.0, 1409.0, 1105.0]),
+            (0.22, [57.0, 417.0, 217.0, 177.0, 393.0, 305.0]),
+        ];
+        for (size, peaks) in measured {
+            let room = (size / 100.0f64).cbrt();
+            for (k, want) in peaks.into_iter().enumerate() {
+                assert_eq!(peak(k, room, true), want, "family {k} at Size {size}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_glide_runs_through_the_middle_of_the_steps() {
+        // Moving, a delay or an allpass is within half a block of where it settles.
+        for size in [0.5, 3.0, 27.0, 100.0, 333.0] {
+            let room = (size / 100.0f64).cbrt();
+            for k in 0..LOOP {
+                let (a, b) = (length_at(k, room, 40.0, true), length_at(k, room, 40.0, false));
+                let most = if k == 2 || k == 5 { BLOCK } else { BLOCK / 2.0 };
+                assert!((a.0 - b.0).abs() <= most, "line {k} at Size {size}");
+                assert!((a.1 - b.1).abs() <= BLOCK / 2.0, "allpass {k} at Size {size}");
+            }
+        }
     }
 
     #[test]

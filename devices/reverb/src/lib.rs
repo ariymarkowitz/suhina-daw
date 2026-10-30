@@ -584,6 +584,29 @@ const FILTERED_OFFSETS: [(usize, usize); 20] = [
 /// one low-passed one, put them 0 to 5 frames early. The families Density Low lacks keep theirs.
 const FILTERED_LATE: [f64; 20] =
     [5.0, 5.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 2.0];
+/// The measured network's family whose peak each pair of [`FILTERED_OFFSETS`] lies about.
+const FILTERED_FAMILIES: [Option<usize>; 20] = [
+    Some(0),
+    Some(0),
+    None,
+    None,
+    Some(3),
+    Some(3),
+    Some(2),
+    Some(2),
+    None,
+    None,
+    Some(5),
+    Some(5),
+    None,
+    None,
+    None,
+    None,
+    Some(4),
+    Some(4),
+    Some(1),
+    Some(1),
+];
 /// Longest delay a filtered offset reaches, at the largest Size (seconds).
 const OFFSET_LINE_SECONDS: f64 = 0.13;
 /// Longest delay from a direct reflection to the measured network, [`measured::ENTRY_MS`] at Shape
@@ -637,8 +660,9 @@ const FIRST_TAP_LINES: usize = 3;
 /// Level of the tail for each Density against Low (dB), so the four sound equally loud, as
 /// measured (docs/spec/reverb.md).
 const DENSITY_TRIM_DB: [f64; 4] = [-0.3, 0.0, 0.0, 1.0];
-/// Rooms larger than the reference one keep their tail's level: the network's input rises with
-/// the size factor to this power (a larger network spreads the same energy over longer lines).
+/// Rooms larger than the reference one keep their tail's level: the Householder network's input
+/// rises with the size factor to this power (a larger network spreads the same energy over longer
+/// lines). Density Low's follows [`LOW_SIZE_LEVEL`] instead.
 const LARGE_ROOM_POWER: f64 = 0.75;
 /// Signs of the input into each line.
 const INPUT_SIGNS: [f64; 16] = [1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
@@ -649,6 +673,12 @@ const LOW: usize = 1;
 /// it, each line's first pass is [`measured`]'s gain times the direct reflection it comes from,
 /// as Live's is (`reverb-network-exact`).
 const MEASURED_GAIN: f64 = 0.2383;
+/// Density Low's reflections are this much of their reference-room level at Size 0, and grow by
+/// [`LOW_SIZE_LEVEL_PER_SIZE`] per unit of Size: a pure gain on the Size 100 response, read at
+/// Sizes 0.22 to 500 (`reverb-network-small`). The measured network's input takes it twice.
+const LOW_SIZE_LEVEL: f64 = 0.92594;
+/// How much louder Density Low's reflections are per unit of Size.
+const LOW_SIZE_LEVEL_PER_SIZE: f64 = 0.000_740_59;
 /// Sign of each line in the output.
 const OUTPUT_SIGNS: [f64; 16] =
     [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0];
@@ -1599,6 +1629,9 @@ impl Reverb {
         let lines = LINES.map(|line| line * stretch);
         let predelay_gain = db_to_gain(-PREDELAY_FADE * predelay_ms / setting);
         let taps = self.taps;
+        let low = density_index == LOW;
+        let size_level =
+            if low { LOW_SIZE_LEVEL + LOW_SIZE_LEVEL_PER_SIZE * REFERENCE_SIZE * room.powi(3) } else { 1.0 };
         // The network is fed by the direct reflections, each at its own level and fade.
         let norm = taps.iter().filter(|tap| !tap.filtered).map(|tap| tap.gain * tap.gain).sum::<f64>().sqrt().max(1e-9);
         let t = &mut self.to;
@@ -1610,13 +1643,22 @@ impl Reverb {
             let time = tap.ms * room;
             *delay = time * ms + TAP_OFFSET_SECONDS * sr;
             let level = tap.gain * db_to_gain(-fade * time);
-            *gain = TAP_GAIN * predelay_gain * level;
+            *gain = TAP_GAIN * predelay_gain * level * size_level;
             if !tap.filtered {
                 *feed = level / norm;
             }
         }
-        for ((offset, (frames, _)), late) in t.offsets.iter_mut().zip(FILTERED_OFFSETS).zip(FILTERED_LATE) {
-            let frames = (frames as f64 + late) * room * sr / REFERENCE_RATE;
+        for (((offset, (frames, _)), late), family) in
+            t.offsets.iter_mut().zip(FILTERED_OFFSETS).zip(FILTERED_LATE).zip(FILTERED_FAMILIES)
+        {
+            let frames = frames as f64 + late;
+            // A family's pair keeps its place about the family's peak, which moves in Live's
+            // 8-frame blocks (`reverb-network-small`); the others scale with the room.
+            let frames = match family {
+                Some(k) => frames - measured::peak(k, 1.0, true) + measured::peak(k, room, settled),
+                None => frames * room,
+            } * sr
+                / REFERENCE_RATE;
             *offset = if settled { frames.round() } else { frames }.max(2.0);
         }
         let (a, b, c) = SHAPE_DELAY_MS;
@@ -1649,11 +1691,13 @@ impl Reverb {
         let per_shape = if shape < 0.5 { below } else { above };
         t.entry = (entry + per_shape * (shape - 0.5) * room) * ms;
         let short = 60.0 * TAIL_FADE_SECONDS / setting + TAIL_SHORT_DB / (setting * setting) + fade * TAIL_LAG_MS;
-        t.feed = TAIL_GAIN * predelay_gain * db_to_gain(density) * room.max(1.0).powf(LARGE_ROOM_POWER);
-        // The measured network's lines scale with the room's own size factor, small rooms too.
-        // Every path through it fades with its whole time, so it needs no cut for short decays,
-        // and its first passes are as loud at every Shape as Live's (`reverb-network-exact`).
-        t.measured_feed = t.feed * MEASURED_GAIN;
+        t.feed = TAIL_GAIN * predelay_gain * db_to_gain(density);
+        // The measured network's lines scale with the room's own size factor, small rooms too, and
+        // its input with the reflections' level, twice. Every path through it fades with its
+        // whole time, so it needs no cut for short decays, and its first passes are as loud at
+        // every Shape as Live's (`reverb-network-exact`).
+        t.measured_feed = t.feed * MEASURED_GAIN * size_level * size_level;
+        t.feed *= room.max(1.0).powf(LARGE_ROOM_POWER);
         t.feed *= db_to_gain(-short);
         t.feed *= (line_room / room).sqrt().min(SMALL_ROOM_GAIN_LIMIT);
         let corner = (REFLECTION_TOP - REFLECTION_SPAN * setting.powf(-REFLECTION_POWER)).clamp(20.0, 0.45 * sr);
@@ -1942,8 +1986,9 @@ impl Device for Reverb {
                 if !tap.filtered && measured {
                     // Read where the reflection is, and delayed by the entry below, so the network
                     // hears the shift Spin gave the reflection, not the one it has an entry later.
-                    // At whole frames the two reads still add to the entry and delay rounded once.
-                    let from = at + t.entry - if whole { group_whole } else { group_delay };
+                    // At whole frames each is rounded on its own, the reflection where it is heard and
+                    // the entry, as Live's are (`reverb-network-small`).
+                    let from = at + if whole { t.entry.round() - group_whole } else { t.entry - group_delay };
                     let u = read_from(&self.feed_line, from) * share * feed * t.measured_feed;
                     if let Some(group) = measured::TAP_GROUPS.get(direct_index).and_then(|&g| groups.get_mut(g)) {
                         *group += u;
