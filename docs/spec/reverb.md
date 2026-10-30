@@ -133,7 +133,8 @@ changes by more than half a frame a frame: faster, a line is read backwards and 
   `0.00995 × amount × reach(predelay) × T × sin(2π × m × rate × t + φ)`, where `reach` is 1 up to 5 ms
   of predelay and `2 / (predelay − 3.02)` above it (predelay in ms), so a long predelay swings every
   tap by about the same 2 ms × 0.00995 × amount. Each of the ten direct taps has its own LFO, rate
-  `m` times Spin Rate (0.978 to 1.042) and a phase that restarts with the transport. A filtered tap
+  `m` times Spin Rate times 1.0053 (`m` 0.978 to 1.042) and a phase that restarts with the
+  transport, 8 ms of its cycle ahead of `φ`. A filtered tap
   swings as its direct tap did when it was read, one offset earlier. The tail's input swings with
   the reflections it comes from. Moving reflections are read by linear interpolation, as Live's
   (its reflections lose 0.4 dB at 6 kHz to 1.6 dB at 15 kHz as soon as Spin moves them); static
@@ -424,8 +425,13 @@ Measured against Live's renders of the same settings, imported and rendered by `
 - **Spin.** Tap by tap the swing is within 0.02 ms of Live's. Live's moving reflections carry a flat
   floor of noise from 16 to 22 kHz that follows Spin's speed (−50 dB at the default to −29 dB at the
   extreme, against 1 kHz), which this device's reads do not make, so above 12 kHz Live's highs vary
-  less at Spin's rate (0.4 to 1.3 dB against 2.3 to 4.7 at Amount 55 and 1.3 Hz). At Spin Rate 1.3
-  Hz Live's LFOs run 0.6 % faster than at 0.3.
+  less at Spin's rate (0.4 to 1.3 dB against 2.3 to 4.7 at Amount 55 and 1.3 Hz). Live's LFOs run
+  0.53 % faster than Spin Rate says, and start 8 ms into their cycle, at 0.3 and 1.3 Hz alike:
+  without that the reflections drifted up to ±10 frames from Live's within 6 s at 2.5 ms of
+  predelay, where Spin swings furthest. With it a 1 kHz tone through the reflections differs from
+  Live's by −19 dB at 2.5 ms of predelay (−6 without) and −33 dB at 50 ms (−27); at 0.07 Hz it
+  still does not follow Live's (+1.7 dB), for a reason not found. Chorus's LFO was not checked for
+  the same error: Live's tail does not follow it closely enough to measure.
 - **Echo texture.** The tail's echoes thicken differently from Live's: kurtosis 26 from 100 to 150 ms
   and 5.8 from 150 to 200 against Live's 15 and 10.5, and about four fifths of Live's strong
   clicks from 50 to 250 ms.
