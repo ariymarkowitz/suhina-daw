@@ -117,9 +117,11 @@ changes by more than half a frame a frame: faster, a line is read backwards and 
   smallest Size, 1.296 at 500), and fades by `(0.0328 + 0.0668 × Shape) / decay` dB per ms of its
   delay.
 - **Filtered taps** pass a cookbook low-pass of Q 0.5 per side. Its double pole is that of
-  11.98 kHz plus `1.115 × (1 − exp(−t / decay))`, with `t` 0.0512 s at Low, 0.2092 at Sparse,
-  0.3200 at Mid and 0.2657 at High: the corner falls with a shorter Decay faster the denser the
-  reflections (Low 8.5 kHz at 0.2 s, 11.3 at 1.2 s; Mid 1.4 and 8.4 kHz). Every filtered tap is a
+  11.98 kHz plus `1.115 × (1 − exp(−t × size factor / decay))`, with `t` 0.0512 s at Low, 0.2092 at
+  Sparse, 0.3200 at Mid and 0.2657 at High: the corner falls with a shorter Decay faster the denser
+  the reflections (at Size 100, Low 8.5 kHz at 0.2 s, 11.3 at 1.2 s; Mid 1.4 and 8.4 kHz), and a
+  smaller room's reflections are brighter (Low at 0.2 s: 10.2 kHz at Size 10.54, 11.0 at 1.53).
+  The Decays were read at Size 100, the Sizes at Low (`reverb-size`, `reverb-smooth-slow`). Every filtered tap is a
   direct tap a whole number of frames later (20 offsets in pairs two frames apart, 395 to 3192
   frames, 9 to 72 ms), always on one side per pair. So they are played as one mix of the direct
   taps per offset, delayed by the offset. The ten pairs are ten *families*, the same at every
@@ -373,7 +375,8 @@ Measured against Live's renders of the same settings, imported and rendered by `
 
 - **Early reflections:** every tap within 0.5 ms and 0.5 dB at every Density, the first 140 ms of
   the reflections alone within −35 to −42 dB of Live's energy at Size 100 and −29 to −43 dB at
-  Size 0.222 and 500 (Low; every Density's first 200 ms at 500), and the level within 0.1
+  Size 0.222 and 500 (Low; every Density's first 200 ms at 500), −38 to −39 dB over the first
+  80 ms at Size 1.53 and 10.54 (Low, at Decay 0.2 and 1.2 s and every Diffusion and Scale), and the level within 0.1
   dB in every octave at every Decay.
 - **The network (Low):** waveform within −39 to −41 dB of Live's over the first 0.5 s and −35 dB
   from 1 to 2 s at every Scale at Size 100, −33 to −38 dB at Sizes 1.53 to 50. Energy in windows to

@@ -466,18 +466,21 @@ const CHORUS_SECONDS: f64 = 0.000_38;
 const REFLECTION_Q: f64 = 0.5;
 /// ... whose corner rises towards this frequency (Hz) as Decay grows ...
 const REFLECTION_TOP: f64 = 11_980.0;
-/// ... its pole (at 44.1 kHz) above the top's by this much times `1 - exp(-t / Decay)` ...
+/// ... its pole (at 44.1 kHz) above the top's by this much times `1 - exp(-t × room / Decay)` ...
 const REFLECTION_REACH: f64 = 1.115;
-/// ... with `t` (seconds) by Density, in Density order (`reverb-er-decay`).
+/// ... with `t` (seconds) by Density, in Density order, read at Size 100 (`reverb-er-decay`), and
+/// `room` the size factor: a smaller room's reflections are brighter at the same Decay (a Low
+/// fit at Size 1.53, 10.54 and 100 gives `t / room` 0.053 to 0.066 s).
 const REFLECTION_SECONDS: [f64; 4] = [0.2092, 0.0512, 0.3200, 0.2657];
 
-/// The reflections' low-pass corner (Hz) for a Decay of `decay` seconds at Density `density`.
-fn reflection_corner(decay: f64, density: usize) -> f64 {
+/// The reflections' low-pass corner (Hz) for a Decay of `decay` seconds at Density `density` and
+/// size factor `room`.
+fn reflection_corner(decay: f64, density: usize, room: f64) -> f64 {
     // A cookbook low-pass of Q 0.5 at angle w has its double pole at tan(pi/4 - w/2).
     let angle = |hz: f64| std::f64::consts::TAU * hz / REFERENCE_RATE;
     let top = (std::f64::consts::FRAC_PI_4 - angle(REFLECTION_TOP) / 2.0).tan();
     let seconds = REFLECTION_SECONDS.get(density).copied().unwrap_or(REFLECTION_SECONDS[LOW]);
-    let pole = top + REFLECTION_REACH * (1.0 - (-seconds / decay.max(1e-3)).exp());
+    let pole = top + REFLECTION_REACH * (1.0 - (-seconds * room / decay.max(1e-3)).exp());
     (std::f64::consts::FRAC_PI_2 - 2.0 * pole.atan()) * REFERENCE_RATE / std::f64::consts::TAU
 }
 /// The input band's high cut never goes above this frequency, and the input passes a low-pass
@@ -1405,7 +1408,7 @@ impl Reverb {
         // every Shape as Live's (`reverb-network-exact`, `reverb-network-density`), with no trim
         // for the Density.
         t.measured_feed = tail_gain * MEASURED_GAIN * size_level * size_level;
-        let corner = reflection_corner(setting, density_index).clamp(20.0, 0.45 * sr);
+        let corner = reflection_corner(setting, density_index, room).clamp(20.0, 0.45 * sr);
         let reflection = Coefficients::lowpass(sr, corner, REFLECTION_Q);
         for filter in &mut self.reflection_filters {
             filter.set(reflection);

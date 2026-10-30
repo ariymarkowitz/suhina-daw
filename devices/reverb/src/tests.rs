@@ -334,6 +334,21 @@ fn spin_reaches_less_far_as_the_predelay_grows() {
 }
 
 #[test]
+fn a_smaller_rooms_reflections_are_brighter_at_the_same_decay() {
+    // Live's filtered reflections at Low (`reverb-size` size-1.53-er and size-10.54-er,
+    // `reverb-smooth-slow` none-10.54) fit `t / room` 0.053 to 0.066 s: the corner at size factor
+    // `room` and Decay `d` is the reference room's at Decay `d / room`.
+    for room in [0.248, 0.472, 1.0, 1.71] {
+        for decay in [0.2, 1.2, 14.4] {
+            let ours = reflection_corner(decay, LOW, room);
+            let reference = reflection_corner(decay / room, LOW, 1.0);
+            assert!((ours - reference).abs() < 1e-6, "room {room}, {decay} s: {ours:.1} Hz against {reference:.1}");
+        }
+    }
+    assert!(reflection_corner(0.2, LOW, 0.248) > reflection_corner(0.2, LOW, 1.0) + 1_000.0);
+}
+
+#[test]
 fn spin_swings_each_reflection_by_its_whole_delay() {
     // Live's left reflection at 11.43 ms (Amount 17.5) swings 2.08 ms either way at 0.5 ms of
     // predelay and 0.40 ms at 100 ms; the first, right at the predelay, 0.09 and 0.36 ms.
