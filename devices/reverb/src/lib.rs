@@ -575,6 +575,9 @@ const FILTERED_OFFSETS: [(usize, usize); 20] = [
 ];
 /// Longest delay a filtered offset reaches, at the largest Size (seconds).
 const OFFSET_LINE_SECONDS: f64 = 0.13;
+/// Longest delay from a direct reflection to the measured network, [`measured::ENTRY_MS`] at Shape
+/// 1 and the largest Size (seconds).
+const ENTRY_LINE_SECONDS: f64 = 0.06;
 /// Peak swing of a line's delay per unit of Chorus Amount.
 const CHORUS_SECONDS: f64 = 0.001_8;
 /// The reflections' low-pass: a cookbook low-pass with this Q ...
@@ -1201,6 +1204,9 @@ pub struct Reverb {
     /// The predelayed input after the loop's damping, once for [`INPUT_TRIPS`] of a trip, which
     /// the network's taps read.
     feed_line: DelayLine,
+    /// The measured network's input groups, each the sum of its direct reflections as they were
+    /// read (Spin's shift included), delayed by the Shape entry before the network takes them.
+    group_lines: [DelayLine; measured::GROUPS],
     /// The damping in front of [`feed_line`](Self::feed_line).
     input_damper: Damper,
     /// The low-pass after [`input_damper`](Self::input_damper), at [`FEED_CUT`].
@@ -1359,6 +1365,7 @@ impl Reverb {
             offsets_used: [false; FILTERED_OFFSETS.len()],
             input: DelayLine::default(),
             feed_line: DelayLine::default(),
+            group_lines: std::array::from_fn(|_| DelayLine::default()),
             input_damper: Damper::default(),
             feed_cut: FirstOrder::default(),
             lines: Default::default(),
@@ -1389,6 +1396,7 @@ impl Reverb {
         let sr = self.sample_rate;
         self.input = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
         self.feed_line = DelayLine::for_seconds(PREDELAY_LINE_SECONDS, sr);
+        self.group_lines = std::array::from_fn(|_| DelayLine::for_seconds(ENTRY_LINE_SECONDS, sr));
         self.offset_lines = std::array::from_fn(|_| DelayLine::for_seconds(OFFSET_LINE_SECONDS, sr));
         self.lines = std::array::from_fn(|_| Line {
             delay: DelayLine::for_seconds(LINE_SECONDS, sr),
@@ -1475,6 +1483,9 @@ impl Reverb {
         }
         self.input.clear();
         self.feed_line.clear();
+        for line in &mut self.group_lines {
+            line.clear();
+        }
         for line in &mut self.offset_lines {
             line.clear();
         }
@@ -1874,6 +1885,7 @@ impl Device for Reverb {
                 }
             }
             let whole = spin_swing == 0.0 && !self.moving && self.ramps.predelay.is_settled();
+            let entry_whole = t.entry.round();
             let read_from = |line: &DelayLine, at: f64| {
                 f64::from(if whole { line.read(at.round() as usize) } else { line.read_hermite(at) })
             };
@@ -1903,7 +1915,11 @@ impl Device for Reverb {
                     *side += *read * gain;
                 }
                 if !tap.filtered && measured {
-                    let u = read_from(&self.feed_line, at + t.entry) * share * feed * t.measured_feed;
+                    // Read where the reflection is, and delayed by the entry below, so the network
+                    // hears the shift Spin gave the reflection, not the one it has an entry later.
+                    // At whole frames the two reads still add to the entry and delay rounded once.
+                    let from = if whole { at + t.entry - entry_whole } else { at };
+                    let u = read_from(&self.feed_line, from) * share * feed * t.measured_feed;
                     if let Some(group) = measured::TAP_GROUPS.get(direct_index).and_then(|&g| groups.get_mut(g)) {
                         *group += u;
                     }
@@ -1919,6 +1935,11 @@ impl Device for Reverb {
                     next_line = (next_line + 1) % active;
                     spread = 1;
                 }
+            }
+            for (group, line) in groups.iter_mut().zip(&mut self.group_lines) {
+                let late = if whole { line.read(entry_whole as usize) } else { line.read_hermite(t.entry) };
+                line.push(*group as f32);
+                *group = f64::from(late);
             }
             let mut mixes = [0.0f64; FILTERED_OFFSETS.len()];
             for (route, &gain) in self.routes.iter().zip(&t.tap_gains).take(self.taps.len()) {

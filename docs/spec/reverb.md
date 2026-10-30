@@ -509,11 +509,28 @@ Each entry: what was chosen, what it costs, why.
     comparison set the right side's late windows are closer (1 to 2 s −0.08 dB median against
     −0.54, 2 to 4 s 0.00 against −0.27), but 0.15 to 1 s are now 0.5 to 0.9 dB quiet (−0.13 and
     −0.73 before), so 787 of 1,084 energy windows are within 1 dB (824 before): Live's right side
-    has energy there that this network does not explain. Separating the six groups' own responses
-    with Spin (`reverb-network-spin`, each reflection swung by its own LFO, 10 impulses) was well
-    conditioned but did not predict an impulse left out above 1 kHz, so whether the reflections of
-    one group share one response is not known. Cost: one line and one allpass, about 0.3 % of a
-    core.
+    has energy there that this network does not explain (Decision 22 found it is not in the
+    network's input). Cost: one line and one allpass, about 0.3 % of a core.
+22. **The measured network hears each direct reflection as it was read, Spin's shift included,**
+    delayed by the Shape entry (`ENTRY_MS`), in one short line per input group. It read the feed
+    line an entry later at the shift Spin had then, which is the same with Spin still but not while
+    it moves. Found in `reverb-network-spin` and `reverb-network-spin2` (an impulse every 2 s at
+    Spin Rate 0.3 and 0.37 Hz, Amount 30, Stereo 120, Diffusion 0.1 %, Decay 0.2 s, Hi Cut off):
+    with each reflection's position at each impulse known, the tail of each impulse is the sum of
+    the reflections' own responses, each moved by its reflection's shift, which twenty impulses
+    solve per frequency. Live's tail fits that to −37 dB (right) and −29 dB (left) below 4 kHz with
+    the shift each reflection had when it was read, and to −6 to −11 dB with it taken 383 or 767
+    frames later; Suhina's fitted only at 767 frames (−24 dB) and now fits at none, to −48 and −42
+    dB. The same solve confirms the input groups (`TAP_GROUPS`) and their signs and fades: one
+    response per group predicts an impulse left out to −38 dB (right) and −31 dB (left) below 1
+    kHz, as well as one per reflection, and the two reflections of a group have responses of
+    coherence 0.97 to 1.00 at the same level. The six groups' responses carry Live's energy to
+    within about 1 dB from 50 to 300 ms and correlate with Live's at 0.79 to 0.99 (Known
+    differences for their timing), so the right side's later shortfall (Decision 21) is in the
+    loop, not the input. Positions were read by fitting each reflection's law to the
+    reflections-only render at all frequencies with its LFO taken when the reflection is read
+    (reading it at the impulse made every phase look 0.06 to 0.18 rad late, growing with the delay).
+    Cost: six lines read once a frame.
 
 ## Known differences
 
@@ -567,6 +584,15 @@ What is further off, and why it is left:
   over the `reverb-impulse` set, and at Size 1.53 and 10.54 the late right side is 0.8 to 1.4 dB
   above Live's from 1 s, most at Diffusion 0.1 %. The return line was identified at Size 100
   only, and its feed from the loop lines is fitted, not read.
+- **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
+  the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
+  reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's
+  cubic reads do not reproduce.
+- **Timing of the reflections and the network at Hi Cut off:** solved per input group (Decision
+  22), Live's reflections come about 4 frames before this device's and its network's responses 3
+  to 4 frames after them, in every group. The Spin and network runs before had Hi Cut on, whose
+  delay (1.45 frames below 1 kHz in Live) may be part of what the fitted constants absorbed; a
+  static render with Hi Cut off would tell.
 - **The tail's echoes thicken differently from Live's:** its kurtosis is 26 from 100 to 150 ms,
   5.8 from 150 to 200 and 3.0 (noise) from 200 to 400 ms, Live's 15, 10.5 and 4; from 50 to 250
   ms it has about four fifths of Live's strong clicks per second, and from 150 to 900 ms a third
@@ -611,8 +637,9 @@ What is further off, and why it is left:
   falling. Its law is not understood (Decisions 9).
 - **Spin (Decision 10).** Tracked tap by tap the reflections match: the swing of each of the
   clearest taps is within 0.02 ms of Live's at every predelay from 0.5 to 250 ms and at Amount
-  17.5 and 55, its phase within about 0.1 rad (in `reverb-network-spin`, Live's ten phases are all 0.06 to
-  0.18 rad later than `SPIN_VOICES`, which may be a fixed lag still to correct). A 330 Hz tone's pitch swing, reflections only (semitones peak to peak,
+  17.5 and 55, its phase within about 0.1 rad (within 0.06 rad in `reverb-network-spin`, with each LFO taken
+  when its reflection is read, where Live's rates at Spin Rate 0.3 and 0.37 Hz were 0.5 to 0.7 %
+  above `SPIN_VOICES`'s for nine of the ten taps and 0.1 % for the one at 7.37 ms). A 330 Hz tone's pitch swing, reflections only (semitones peak to peak,
   Predelay 0.5, 2.5, 10, 25, 50, 100, 250 ms): 0.37, 0.41, 0.27, 0.06, 0.04, 0.03, 0.02 against
   Live's 0.44, 0.47, 0.29, 0.06, 0.04, 0.03, 0.02 at Amount 17.5, and 1.61, 1.77, 0.74, 0.38,
   0.21, 0.15, 0.11 against 1.81, 1.75, 0.61, 0.40, 0.26, 0.26, 0.15 at 55 (1.24 and 3.03 at every
