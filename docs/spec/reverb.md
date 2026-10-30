@@ -133,14 +133,17 @@ Scale move, a length follows the straight line through the middle of its steps.
   input, come `27.5625 × (1 − stereo / 120)` frames later, rounded (4 and 8 frames at the default
   100 under Fast and None).
 - **Spin** swings each direct tap's whole delay `T` (predelay included) by
-  `0.00995 × amount × reach(predelay) × T × sin(2π × m × rate × t + φ)`, where `reach` is 1 up to 5 ms
-  of predelay and `2 / (predelay − 3.02)` above it (predelay in ms), so a long predelay swings every
-  tap by about the same 2 ms × 0.00995 × amount. Each direct tap has its own LFO, rate `m` times Spin
-  Rate times 1.0053 (`m` 0.978 to 1.042) and a phase that restarts with the transport, 8 ms of its
-  cycle ahead of `φ`. A family's reflection swings as its direct tap did when it was read, and the
-  tail's input with the reflections it comes from. Moving reflections are read by linear
-  interpolation, as Live's (they lose 0.4 dB at 6 kHz to 1.6 dB at 15 kHz as soon as Spin moves
-  them); static ones are read at whole frames.
+  `0.01 × amount × reach(predelay) × T × sin(2π × m × rate × t + φ)`, where `reach` is 1 up to 5 ms
+  of predelay and `2 / (predelay − 3)` above it (predelay in ms), so a long predelay swings every
+  tap by about the same 2 ms × 0.01 × amount. Each direct tap has its own LFO, rate `m` times Spin
+  Rate (`m` 0.9897, 1.0430, 0.9981, 0.9825, 1.0230, 1.0071, 1.0300, 1.0150, 1.0150 and 0.9917 from
+  the first tap to the tenth) but never slower than 0.074 Hz, and a phase `φ` that restarts with the
+  transport at 40, 100, 70, 90, 30, 50, 60, 10, 80 and 20°. The LFOs are read 0.15 ms ahead of the
+  frame they move. Once the room and the predelay have settled, each tap swings around its own delay
+  rounded to a whole frame; while they move, around the exact delay. A family's reflection swings as
+  its direct tap did when it was read, and the tail's input with the reflections it comes from.
+  Moving reflections are read by linear interpolation, as Live's (they lose 0.4 dB at 6 kHz to
+  1.6 dB at 15 kHz as soon as Spin moves them); static ones are read at whole frames.
 
 ### Late reverb
 
@@ -314,11 +317,15 @@ Why the device is built as it is. Where each constant was read is in its doc com
   renders with both cuts off.
 - **Spin swings each direct tap's whole delay, by a share that falls with predelay.** Tracked in
   Live's renders of clicks at Predelay 0.5 to 250 ms, Amount 17.5 and 55, three Rates and three
-  Sizes, every tap follows a sine of peak `0.00995 × amount × reach × T`. Swinging only the delay
+  Sizes, every tap follows a sine of peak `0.01 × amount × reach × T`. Swinging only the delay
   after the predelay left the first tap still and over-swung the late ones at long predelays;
   swinging each tap by its own delay overstated the tone's FM 2.6 times at the default. The
   network's input moves with its reflections, because Live's tail with Spin is uncorrelated with its
-  tail without.
+  tail without. The LFOs' rates and phases were fitted against the Spin Rate the sets store (0.2977
+  Hz at the default, not 0.30); fitted against 0.30 they needed a 1.0053 scale and an 8 ms lead,
+  which made up for only part of the error. At 0.07 Hz every tap swings at 0.074 Hz and at 0.15 Hz at the Rate
+  itself, so the law is a floor. A tap swung around its fractional delay lands up to half a frame
+  from Live's.
 - **Linear interpolation for Spin, cubic for the lines.** Live reads Spin's reflections linearly, so
   this device does too. The lines move with Chorus, where linear interpolation would dull and
   modulate the highs for a saving of about 0.8 % of a core.
@@ -368,13 +375,25 @@ network's level within 0.05 dB from Size 0.222 to 500.
   from Shape 0.5's being the same at every Size.
 - **Stereo's delay** was read at 44.1 kHz only, and not while Stereo is automated.
 - **Low Cut** is extrapolated for edges between 44.2 and 132 Hz and above 841 Hz.
-- **Spin.** Tap by tap the swing is within 0.02 ms of Live's. Live's moving reflections carry a flat
-  floor of noise from 16 to 22 kHz that follows Spin's speed (−50 dB at the default to −29 dB at the
-  extreme, against 1 kHz), which this device's reads do not make. A 1 kHz tone through the
-  reflections differs from Live's by −19 dB at 2.5 ms of predelay and −33 dB at 50 ms; at 0.07 Hz it
-  still does not follow Live's (+1.7 dB), for a reason not found. Without Spin, a 1 kHz tone through
-  Low is −43 dB from Live's; a stronger R family from the sixth direct tap would bring it to −44 dB
-  but takes impulses up to 4.5 dB further from Live's.
+- **Spin.** Clicks through the moving reflections are about −41 dB from Live's at Amount 17.5 and
+  Predelay 100 ms, at 0.07 Hz too, and white noise −21 to −27 dB at the default. Still off:
+  - At Amount 55 and a short predelay the reflections stay about −12 dB from Live's (−13.5 dB at
+    0.5 ms), though the taps' arrivals are within 0.33 frame rms of Live's with no lag left that
+    follows their speed. The interpolation of fast-moving reads or the families may be the cause.
+  - Where a tap's delay is exactly half a frame (Predelay 25 ms, 1102.5 frames), Live rounds taps 0
+    and 9 down and tap 1 up, though their fractions match; this device rounds all three up. The
+    first window at Predelay 25 ms is −12 and −9 dB from Live's, and Spin off at 5 ms of predelay
+    differs the same way. It may come from float precision in Live's tap times.
+  - The tail with Spin (`reverb-network-spin`) stays −10 to −13 dB from Live's in every window,
+    the first 0.08 s included.
+  - The 0.074 Hz floor rests on 0.07 and 0.15 Hz only, and the 0.15 ms lead may belong to the input
+    filters' delay instead (High Cut was off where it was read).
+  - Live's moving reflections carry a flat floor of noise from 16 to 22 kHz that follows Spin's
+    speed (−50 dB at the default to −29 dB at the extreme, against 1 kHz), which this device's reads
+    do not make.
+
+  Without Spin, a 1 kHz tone through Low is −43 dB from Live's; a stronger R family from the sixth
+  direct tap would bring it to −44 dB but takes impulses up to 4.5 dB further from Live's.
 - **Echo texture.** The tail's echoes thicken differently from Live's: kurtosis 26 from 100 to 150 ms
   and 5.8 from 150 to 200 against Live's 15 and 10.5.
 - **Smooth None against Fast at Decay 3.46 s** (Sparse, Mid, High): Live's two settings differ by up
