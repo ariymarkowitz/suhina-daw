@@ -139,7 +139,7 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   with Shape twice as much as the reflections' first part does, as Live's does); in rooms
   larger than the reference it rises with the size factor to the power 0.75, in smaller ones with
   the square root of how much longer the lines are than the room's (at most 1.6 times, +4 dB),
-  and Density Sparse and High are trimmed by −0.3 and +1 dB. Freeze with Cut on fades it out (20 ms).
+  and Density Sparse and High are trimmed by −0.3 and +1 dB. Freeze with Cut on fades it out (20 ms), and the early reflections with it.
 - **Network, Density Low.** Live's own network, read sample by sample from its renders (Decision
   24; `devices/reverb/src/measured.rs` has the numbers). The ten direct taps are summed in six
   groups, read from the network-input copy of the predelay line as above but without its 15 kHz

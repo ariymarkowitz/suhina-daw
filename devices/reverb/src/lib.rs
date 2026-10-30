@@ -1824,6 +1824,9 @@ impl Device for Reverb {
             self.input.push(x as f32);
 
             // Output: the two parts, Stereo's rotation, then the mix.
+            // Cut keeps the input out of the reflections as well as the network (Live's render is
+            // silent when it is frozen from the first sample: `reverb-freeze-static`).
+            let reflect = reflect * feed;
             let wet = [reflect * early[0] + diffuse * tail[0], reflect * early[1] + diffuse * tail[1]];
             if (angle, mix) != output_key {
                 output_key = (angle, mix);

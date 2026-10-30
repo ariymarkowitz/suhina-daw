@@ -535,3 +535,17 @@ fn cost_of_a_minute_at_48_khz() {
     let seconds = start.elapsed().as_secs_f64();
     println!("60 s at 48 kHz in {seconds:.3} s: {:.2} % of a core", seconds / 60.0 * 100.0);
 }
+
+#[test]
+fn freeze_with_cut_from_the_start_is_silent() {
+    // Live's render is zero throughout (`reverb-freeze-static`): Cut keeps the input out of the
+    // early reflections as well as the network, at the default Reflect.
+    let mut r = reverb(44_100.0, &[(param::FREEZE, 1.0), (param::MIX, 1.0)]);
+    let mut signal = vec![0.0f32; 44_100 * 2 * 2];
+    signal[..2].fill(1.0);
+    for block in signal.chunks_mut(512) {
+        r.process(&ProcessContext::default(), block);
+    }
+    let peak = signal.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+    assert!(peak < 1e-6, "peak {peak}");
+}
