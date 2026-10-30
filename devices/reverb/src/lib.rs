@@ -1594,7 +1594,7 @@ impl Device for Reverb {
             ] {
                 s.next_value();
             }
-            let diffusion = r.diffusion.next_value() * design.diffusion;
+            let diffusion = r.diffusion.next_value();
             let damping = Damping {
                 high: f64::from(r.high.next_value()),
                 low_pass: f64::from(r.low_pass.next_value()),

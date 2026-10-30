@@ -275,13 +275,15 @@ const SPARSE_COPIES: [[f64; 4]; 4] = [
 /// Where each of Sparse's families' copy starts: it peaks 2985, 3193, 2337 and 1641 frames after
 /// its direct reflections, in Low's blocks.
 const SPARSE_FAMILIES: [usize; 4] = [4, 1, 5, 2];
-/// Sparse's mixing, as [`MID_MIX`].
+/// Sparse's mixing, as [`MID_MIX`], run with [`SPARSE_LEVELS`].
 const SPARSE_MIX: [[f64; 4]; 4] = [
-    [-0.1673, -0.3341, 0.6631, -0.6486],
-    [0.8718, -0.0777, 0.4175, 0.2440],
-    [-0.3485, -0.6331, 0.2299, 0.6518],
-    [-0.3002, 0.6939, 0.5770, 0.3090],
+    [-0.1668, -0.3344, 0.6634, -0.6483],
+    [0.8718, -0.0773, 0.4181, 0.2434],
+    [-0.3485, -0.6330, 0.2302, 0.6518],
+    [-0.3012, 0.6939, 0.5763, 0.3093],
 ];
+/// Each of Sparse's lines' output level against the others', as [`MID_LEVELS`].
+const SPARSE_LEVELS: [f64; 4] = [1.0032, 0.9986, 1.0023, 0.9960];
 /// Sparse's sides: X and Y on the left, Z and W on the right.
 const SPARSE_SIDES: [usize; 4] = [0, 0, 1, 1];
 
@@ -331,18 +333,28 @@ const MID_COPIES: [[f64; 8]; 8] = [
 /// Mid's lines' families ([`FAMILY_LENGTHS`]): they peak 3193, 2985, 961, 1337, 2497, 1641, 2337
 /// and 401 frames after their direct reflections at Size 100.
 const MID_FAMILIES: [usize; 8] = [1, 4, 6, 3, 9, 2, 5, 0];
-/// Mid's mixing, as [`MIX`]: made orthogonal from the fit, whose rows were orthogonal to 1 %.
-#[allow(clippy::approx_constant, reason = "a fitted value that is near Euler's constant by chance")]
+/// Mid's mixing, as [`MIX`], run with [`MID_LEVELS`]. First read from each line's first passes,
+/// whose rows were orthogonal to 1 %, then fitted with the levels to every trip of Live's tails at
+/// Size 0.222, Smooth None and Fast (`reverb-network-density-size`): orthogonal to 0.0001, and
+/// within 0.004 of the first reading (High's within 0.007, Sparse's 0.001).
 const MID_MIX: [[f64; 8]; 8] = [
-    [0.3683, 0.1089, -0.5817, -0.5682, 0.0864, 0.0322, 0.3445, -0.2530],
-    [0.2738, -0.0658, 0.0484, -0.4655, 0.0708, 0.1216, -0.5105, 0.6491],
-    [0.3658, 0.3945, 0.4225, -0.0576, -0.4669, 0.5088, 0.0048, -0.2277],
-    [0.3560, -0.8371, -0.0694, 0.1303, -0.3314, 0.0861, -0.0680, -0.1699],
-    [0.3949, -0.1376, 0.5762, -0.0673, 0.3871, -0.2537, 0.5069, 0.1322],
-    [0.3996, 0.1362, -0.3218, 0.6134, 0.3823, 0.3886, 0.0205, 0.2107],
-    [0.2975, 0.2551, -0.1855, 0.2348, -0.5423, -0.5772, 0.1158, 0.3410],
-    [0.3532, 0.1574, 0.0777, 0.0653, 0.2640, -0.4116, -0.5876, -0.5058],
+    [0.3681, 0.1088, -0.5813, -0.5688, 0.0863, 0.0315, 0.3437, -0.2541],
+    [0.2716, -0.0642, 0.0481, -0.4664, 0.0701, 0.1227, -0.5093, 0.6503],
+    [0.3656, 0.3943, 0.4225, -0.0575, -0.4666, 0.5090, 0.0047, -0.2284],
+    [0.3571, -0.8373, -0.0692, 0.1298, -0.3304, 0.0863, -0.0692, -0.1685],
+    [0.3950, -0.1373, 0.5760, -0.0677, 0.3873, -0.2530, 0.5069, 0.1333],
+    [0.3987, 0.1366, -0.3229, 0.6121, 0.3818, 0.3900, 0.0221, 0.2124],
+    [0.2970, 0.2548, -0.1856, 0.2344, -0.5433, -0.5756, 0.1176, 0.3422],
+    [0.3554, 0.1585, 0.0773, 0.0672, 0.2643, -0.4122, -0.5885, -0.5020],
 ];
+/// Each of Mid's lines' output level against the others'. Live's lines are not all heard at one
+/// level, and [`MID_INPUTS`] and [`MID_COPIES`] were read with these in them, so the loop runs the
+/// mixing as `level_i · mix_ij / level_j` ([`loop_mix`]). The longest lines are the quietest
+/// (A's, and High's 2073 family's), but not in order of length. With the mixing as first read and
+/// the lines at one level, every Density's tail drifted from Live's by about 0.1 % a trip, flat
+/// from 20 Hz to 20 kHz and at the right level: to −20 dB by 1 to 3 s at Size 0.222, and −22 to
+/// −33 dB at Size 100. Fitted at Size 0.222 only, they hold at Size 100 (Scale 5 to 100 %) and 500.
+const MID_LEVELS: [f64; 8] = [0.9992, 1.0013, 1.0026, 0.9997, 1.0009, 1.0017, 1.0028, 0.9919];
 /// Mid's sides: four lines heard on the left, four on the right.
 const MID_SIDES: [usize; 8] = [0, 0, 0, 0, 1, 1, 1, 1];
 
@@ -377,19 +389,21 @@ const HIGH_COPIES: [[f64; 10]; 10] = [
 /// High's lines' families, as [`MID_FAMILIES`]: they peak 3193, 2393, 2985, 961, 1337, 2497, 1641,
 /// 2337, 401 and 2073 frames after their direct reflections.
 const HIGH_FAMILIES: [usize; 10] = [1, 8, 4, 6, 3, 9, 2, 5, 0, 7];
-/// High's mixing, as [`MID_MIX`].
+/// High's mixing, as [`MID_MIX`], run with [`HIGH_LEVELS`].
 const HIGH_MIX: [[f64; 10]; 10] = [
-    [-0.3505, 0.4295, -0.1924, -0.0537, 0.0075, -0.3268, 0.1435, 0.1060, 0.5352, 0.4771],
-    [0.0860, -0.3274, -0.2498, 0.4474, -0.5296, 0.0010, -0.2102, 0.2026, 0.4694, -0.1917],
-    [0.0058, -0.1742, 0.1377, -0.4571, -0.2860, 0.1088, 0.5422, -0.3906, 0.3727, -0.2503],
-    [-0.3179, -0.0114, -0.4861, -0.1392, -0.1307, 0.5316, -0.3165, -0.4312, -0.0892, 0.2223],
-    [-0.1294, -0.5533, -0.4348, -0.1269, 0.4352, -0.4947, -0.0239, -0.1498, 0.0246, -0.1194],
-    [-0.5303, 0.2847, 0.0787, 0.1914, -0.2975, -0.3769, -0.0621, -0.2746, -0.2756, -0.4573],
-    [-0.4159, -0.2044, 0.3309, -0.5132, -0.0401, 0.0648, -0.4358, 0.4347, 0.1265, -0.1082],
-    [0.3864, 0.3906, -0.5008, -0.4627, -0.1853, -0.1402, -0.1052, 0.2412, -0.1112, -0.3123],
-    [-0.1085, -0.3080, -0.0982, -0.1086, -0.4948, -0.1701, 0.3284, 0.2563, -0.4894, 0.4303],
-    [0.3696, -0.0376, 0.2832, -0.1628, -0.2488, -0.3990, -0.4773, -0.4456, 0.0437, 0.3254],
+    [-0.3481, 0.4313, -0.1905, -0.0549, 0.0032, -0.3287, 0.1426, 0.1026, 0.5348, 0.4782],
+    [0.0857, -0.3271, -0.2502, 0.4471, -0.5252, 0.0001, -0.2122, 0.2011, 0.4727, -0.1960],
+    [0.0057, -0.1738, 0.1374, -0.4575, -0.2807, 0.1096, 0.5394, -0.3920, 0.3751, -0.2558],
+    [-0.3191, -0.0119, -0.4856, -0.1385, -0.1336, 0.5314, -0.3155, -0.4304, -0.0909, 0.2232],
+    [-0.1297, -0.5529, -0.4349, -0.1277, 0.4377, -0.4943, -0.0241, -0.1488, 0.0233, -0.1133],
+    [-0.5313, 0.2834, 0.0773, 0.1917, -0.2929, -0.3766, -0.0612, -0.2729, -0.2759, -0.4612],
+    [-0.4169, -0.2032, 0.3309, -0.5122, -0.0375, 0.0655, -0.4358, 0.4354, 0.1273, -0.1077],
+    [0.3857, 0.3903, -0.5015, -0.4629, -0.1821, -0.1388, -0.1063, 0.2414, -0.1108, -0.3145],
+    [-0.1075, -0.3091, -0.0970, -0.1100, -0.5020, -0.1703, 0.3314, 0.2577, -0.4847, 0.4234],
+    [0.3693, -0.0386, 0.2843, -0.1640, -0.2523, -0.3986, -0.4783, -0.4464, 0.0396, 0.3199],
 ];
+/// Each of High's lines' output level against the others', as [`MID_LEVELS`].
+const HIGH_LEVELS: [f64; 10] = [0.9988, 1.0030, 1.0019, 1.0025, 1.0007, 1.0022, 1.0044, 1.0013, 0.9930, 0.9922];
 /// High's sides: five lines on each.
 const HIGH_SIDES: [usize; 10] = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
 
@@ -420,14 +434,14 @@ pub(crate) struct Design {
     families: [usize; MAX_LINES],
     /// The mixing as read; [`orthonormal`] makes it exactly orthogonal.
     mix: [[f64; MAX_LINES]; MAX_LINES],
+    /// Each line's output level against the others' ([`loop_mix`]).
+    levels: [f64; MAX_LINES],
     /// The side each line is heard on.
     pub sides: [usize; MAX_LINES],
     /// How much of a frame past its length each line is read with Smooth None.
     fractions: [f64; MAX_LINES],
     /// How the lines get their lengths.
     laws: Laws,
-    /// How much of the Diffusion setting the allpasses take.
-    pub diffusion: f32,
     /// How many times as much of the damping shelves' loss a line takes per second as Low's law
     /// gives ([`Lengths::trips`]).
     trip_scale: f64,
@@ -485,6 +499,17 @@ const fn family_fractions<const N: usize>(families: [usize; N]) -> [f64; MAX_LIN
     out
 }
 
+/// `levels` padded with ones to [`MAX_LINES`].
+const fn pad_levels<const N: usize>(levels: [f64; N]) -> [f64; MAX_LINES] {
+    let mut out = [1.0; MAX_LINES];
+    let mut i = 0;
+    while i < N {
+        out[i] = levels[i];
+        i += 1;
+    }
+    out
+}
+
 const fn pad_sides<const N: usize>(sides: [usize; N]) -> [usize; MAX_LINES] {
     let mut out = [2; MAX_LINES];
     let mut i = 0;
@@ -504,10 +529,10 @@ static LOW: Design = Design {
     copies: None,
     families: pad_families([0, 1, 2, 3, 4, 5]),
     mix: pad_rows(MIX),
+    levels: [1.0; MAX_LINES],
     sides: pad_sides(SIDES),
     fractions: pad(FRACTION),
     laws: Laws::Low,
-    diffusion: 1.0,
     trip_scale: 1.0,
 };
 /// Sparse's network.
@@ -519,11 +544,10 @@ static SPARSE: Design = Design {
     copies: Some(pad_rows(SPARSE_COPIES)),
     families: pad_families(SPARSE_FAMILIES),
     mix: pad_rows(SPARSE_MIX),
+    levels: pad_levels(SPARSE_LEVELS),
     sides: pad_sides(SPARSE_SIDES),
     fractions: family_fractions(SPARSE_FAMILIES),
     laws: Laws::Shared(false, Some(&SPARSE_DELAYS)),
-    // A fifth of the Diffusion setting, not read from Live's network.
-    diffusion: 0.2,
     // Fitted to the High and Low Shelves at 4 kHz, 1 kHz and 500 Hz and the default damping at
     // Size 1.53, 10.54 and 100 (`reverb-network-density-filters`); the exponent of the length came
     // out at 0.99.
@@ -538,10 +562,10 @@ static MID: Design = Design {
     copies: Some(pad_rows(MID_COPIES)),
     families: pad_families(MID_FAMILIES),
     mix: pad_rows(MID_MIX),
+    levels: pad_levels(MID_LEVELS),
     sides: pad_sides(MID_SIDES),
     fractions: family_fractions(MID_FAMILIES),
     laws: Laws::Shared(true, None),
-    diffusion: 1.0,
     trip_scale: 1.0,
 };
 /// High's network.
@@ -553,10 +577,10 @@ static HIGH: Design = Design {
     copies: Some(pad_rows(HIGH_COPIES)),
     families: pad_families(HIGH_FAMILIES),
     mix: pad_rows(HIGH_MIX),
+    levels: pad_levels(HIGH_LEVELS),
     sides: pad_sides(HIGH_SIDES),
     fractions: family_fractions(HIGH_FAMILIES),
     laws: Laws::Shared(true, None),
-    diffusion: 1.0,
     trip_scale: 1.0,
 };
 
@@ -606,6 +630,19 @@ fn orthonormal(design: &Design) -> [[f64; MAX_LINES]; MAX_LINES] {
         }
     }
     rows
+}
+
+/// The mixing the loop runs: [`orthonormal`]'s, between the lines as heard, each at its level.
+/// The loop keeps its energy measured with each line taken at its level.
+fn loop_mix(design: &Design) -> [[f64; MAX_LINES]; MAX_LINES] {
+    let mut mix = orthonormal(design);
+    let levels = &design.levels[..design.lines];
+    for (row, level) in mix.iter_mut().zip(levels) {
+        for (m, from) in row.iter_mut().zip(levels) {
+            *m *= level / from;
+        }
+    }
+    mix
 }
 
 /// The lengths and gains the measured network runs with, worked out at the control rate.
@@ -758,7 +795,7 @@ pub(crate) struct Network {
     copy_filters: [Biquad; MAX_LINES],
     /// The network running.
     design: &'static Design,
-    /// Its mixing, exactly orthogonal.
+    /// Its mixing ([`loop_mix`]).
     mix: [[f64; MAX_LINES]; MAX_LINES],
     /// Cosine and sine of each line's Chorus phase.
     chorus_phases: [(f64, f64); MAX_LINES],
@@ -771,7 +808,7 @@ impl Default for Network {
             fronts: Default::default(),
             copy_filters: Default::default(),
             design: &LOW,
-            mix: orthonormal(&LOW),
+            mix: loop_mix(&LOW),
             chorus_phases: chorus_phases(&LOW),
         }
     }
@@ -796,7 +833,7 @@ impl Network {
     pub fn set_design(&mut self, design: &'static Design) {
         if !std::ptr::eq(self.design, design) {
             self.design = design;
-            self.mix = orthonormal(design);
+            self.mix = loop_mix(design);
             self.chorus_phases = chorus_phases(design);
             self.clear();
         }
@@ -919,6 +956,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_loop_keeps_its_energy_with_each_line_at_its_level() {
+        for design in [&SPARSE, &LOW, &MID, &HIGH] {
+            let (mix, levels, n) = (loop_mix(design), &design.levels, design.lines);
+            // Taken at their levels, the lines mix orthogonally.
+            let heard = |k: usize, i: usize| mix[k][i] * levels[i] / levels[k];
+            for i in 0..n {
+                for j in 0..n {
+                    let dot: f64 = (0..n).map(|k| heard(k, i) * heard(k, j)).sum();
+                    let want = if i == j { 1.0 } else { 0.0 };
+                    assert!((dot - want).abs() < 1e-12, "{n} lines, columns {i} and {j}: {dot}");
+                }
+            }
+            // Within 1 % of each other, about one.
+            let mean = (levels[..n].iter().map(|l| l.ln()).sum::<f64>() / n as f64).exp();
+            assert!((mean - 1.0).abs() < 1e-4, "{n} lines: {mean}");
+            assert!(levels[..n].iter().all(|l| (l - 1.0).abs() < 0.01), "{n} lines: {levels:?}");
+        }
+        assert_eq!(loop_mix(&LOW), orthonormal(&LOW));
     }
 
     #[test]
