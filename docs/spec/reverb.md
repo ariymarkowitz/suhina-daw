@@ -89,9 +89,10 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   brings the lowest band (32 Hz) within 0.2 dB.
 - **Input band.** Low Cut is a first-order shelf 14 dB deep, half way at
   `frequency / 2^(width/2)`; High Cut a 12 dB/octave Butterworth low-pass at
-  `frequency × 2^(width/2)`, never above 18 kHz. With High Cut off the input still passes the same
-  low-pass at 18 kHz, as Live's does (left out at sample rates where 18 kHz is above 0.45 of the
-  rate). Both always run and their switches crossfade.
+  `frequency × 2^(width/2)`, never above 18 kHz, and 8 frames of 44.1 kHz of delay (Decision 24).
+  With High Cut off the input still passes the same low-pass at 18 kHz, without the delay, as
+  Live's does (left out at sample rates where 18 kHz is above 0.45 of the rate). Both always run
+  and their switches crossfade.
 - **Size.** Every delay of the reverb (taps, Shape delay, diffusers, lines) is its length in the
   reference room times `(size / 100)^(1/3)`, as for a room's volume, except that below Size 100
   the lines shrink only with that factor to the power 0.35. Smooth glides the factor with a time
@@ -101,7 +102,7 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
 - **Early reflections.** Live's own tap pattern for each Density (10 direct taps and 61 filtered
   ones over 129 ms at Low; 4, 10 and 10 direct taps at Sparse, Mid and High, every table to about
   130 ms), each time a whole number of frames of 44.1 kHz plus its tap's fraction of a frame in
-  the reference room, each on one side with its sign and level. The first tap is 3 frames (at 44.1 kHz) after the predelay, with a gain of 0.0942. The
+  the reference room, each on one side with its sign and level. The first tap is 1 frame (at 44.1 kHz) before the predelay, with a gain of 0.0942 (Decision 24). The
   filtered taps pass, per side, a cookbook low-pass of Q 0.508 at `12 kHz − 818 Hz × decay^−0.886`
   (8.5 kHz at 0.2 s, 11.3 kHz at 1.2 s). Every tap fades by `(0.0328 + 0.0668 × shape) / decay`
   dB per ms of its delay (decay in seconds), and the whole wet signal, tail included, is
@@ -116,7 +117,9 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   filtered tap is a direct one a whole number of frames later (twenty offsets in pairs two frames
   apart, 395 and 397 frames of 44.1 kHz to 3190 and 3192 frames, 8.96 to 72.38 ms, in the
   reference room; each pair always heard on one side) and swings as that one did when it was
-  read. So each direct tap is read once, the filtered taps at each offset are played as one mix
+  read. The table's offsets are where its pairs were read; each is played 0 to 5 frames later,
+  where Live's filtered reflections peak (401, 1337, 1641, 2337, 2985 and 3193 frames at Density
+  Low, Decision 24). So each direct tap is read once, the filtered taps at each offset are played as one mix
   of the direct taps (each at its filtered tap's level), delayed by the offset, and the network's
   input taps swing with their reflections.
 - **Network input.** The direct taps again, read after the Shape delay of `32 + (18.5 + 34.83 ×
@@ -132,26 +135,28 @@ in -> mono sum -> 127 + 19 Hz roll-off -> Low Cut -> High Cut -> predelay line -
   larger than the reference it rises with the size factor to the power 0.75, in smaller ones with
   the square root of how much longer the lines are than the room's (at most 1.6 times, +4 dB),
   and Density Sparse and High are trimmed by −0.3 and +1 dB. Freeze with Cut on fades it out (20 ms).
-- **Network, Density Low.** Live's own network, as measured (Decisions 19; `devices/reverb/src/measured.rs`
-  has the numbers). The ten direct taps are summed in six groups and the groups into four
-  patterns (unit vectors over the groups), read `17.39 + 34.83 × (shape − 0.5) × size factor` ms
-  after the first direct tap from the same damped copy of the predelay line, at the same levels
-  and fades as above, times 0.486, with Shape's share of the fade over 20 ms more (about Shape
-  0.5) and none of the cuts for short decays of Decision 5 (Decision 20). Seven loop lines, mixed after every trip by one 7 × 7
-  orthogonal matrix: six are a delay and a Schroeder allpass (Diffusion as its gain), 52 to 194 ms
-  long at Scale 40 % in the reference room, of which the allpass is 0.03 to 2.9 ms per 10 % of
-  Scale; the seventh is a plain 1641-frame (37.2 ms) delay that feeds the third line. Each line's
-  length at Scale 5, 20, 40, 60, 80 and 100 % is Live's, and in between it is read off the straight
-  line between them. The patterns enter the lines directly and through four plain delays (9.1,
-  30.3, 72.4 and 48.3 ms) that feed the lines without taking anything back. Five lines are heard,
-  two on the right and three on the left, each at its own level. A return line (Decision 21)
-  takes the groups again, runs the first and sixth lines' delays and 2 frames more (227.5 ms at
-  Scale 40 %) through one allpass as long as both of theirs, takes 0.757 of its own output and a share of every loop line's, and
-  is heard on the right only; it feeds nothing back. Three families of filtered reflections enter
-  as well, one offset after their mix of the groups (Decision 23). Every length scales with the size
-  factor, small rooms too; damping and chorus are as below. Every path fades with its whole time
-  from the input: each line's gain covers its delay, its allpass loses its own delay's gain on
-  every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`), and each plain delay its own.
+- **Network, Density Low.** Live's own network, read sample by sample from its renders (Decision
+  24; `devices/reverb/src/measured.rs` has the numbers). The ten direct taps are summed in six
+  groups, read from the network-input copy of the predelay line as above but without its 15 kHz
+  low-pass and, with Smooth None, without its loss of the highs, at the reflections' levels and
+  fades, times 0.2383, and none of the cuts for short decays of Decision 5 (Decision 20). Six
+  mixes of the groups (families) reach the lines `17.574 + s × (shape − 0.5) × size factor` ms
+  after each direct tap, with s 35.19 below Shape 0.5 and 34.83 above (−1, 775 and 1543 frames
+  at Shape 0, 0.5 and 1, Size 100). Each of the six lines (A, B, C, D, F, R) takes one family
+  and no other, at 1.79 to 1.81 times its level; each family is also heard again, through the
+  filtered reflections' low-pass, 401 to 3193 frames later (its filtered reflections' own
+  offset), faded as a reflection of that delay, and that copy enters the mix as part of its own
+  line's output. One 6 × 6 orthogonal mix takes the six outputs (each with its copy) after every
+  trip, each kept 0.993 to 0.996 (all of it while frozen). The lines are a delay and a Schroeder
+  allpass (Diffusion as its gain): A, B, D and F 57, 71, 113 and 170 ms at Scale 40 % in the
+  reference room; C a plain 1641 frames and then C's own 83 ms; R as long as A and Live's G
+  together and 2 frames (228 ms), with an allpass as long as both of theirs. Each line's length
+  at Scale 5, 20, 40, 60, 80 and 100 % is Live's, and in between it is read off the straight line
+  between them. A and B hear their input 1.05 and 1.09 % again a frame later on every pass. A, C
+  and R are heard on the right and B, D and F on the left, all at one level. Every length scales
+  with the size factor, small rooms too; damping and chorus are as below. Every path fades with
+  its whole time from the input: each line's gain covers its delay, and its allpass loses its own
+  delay's gain on every pass (`y = a·w[n−L] − g·w`, `w = x + g·a·w[n−L]`).
 - **Network, Density Sparse, Mid and High.** 8, 12 or 16 lines (Density Sparse, Mid, High), 18 to 77 ms long in the
   reference room, 1.3 times that at Sparse. Each line's output passes a Schroeder allpass with the
   Diffusion as its gain (0.2 of it at Sparse) and a delay of its own,
@@ -568,6 +573,40 @@ Each entry: what was chosen, what it costs, why.
     s, where the paths that end through the 1641-frame line and then C are weak (Known
     differences). Over the `reverb-impulse` set 889 of 1,084 energy windows are within 1 dB (788
     before) and 648 within 0.5 dB (447), the median error 0.38 dB (0.61). Cost: three filters and three short lines.
+24. **Density Low's network is read sample by sample, and replaces the fitted one of Decisions
+    19, 21 and 23.** `reverb-network-exact` renders the bare network with Hi Cut off (Stereo 120,
+    Diffusion 0.1 %, Decay 60 s, Scale 5, 20, 40, 60, 80 and 100 %, the reflections alone, and
+    Shape 0, 0.5 and 1 at Decay 0.83 s). With Hi Cut off every reflection and every arrival of the
+    tail has the same short shape, the input's fixed filters; dividing it out (taken from the first
+    reflection) leaves each direct reflection and each first or second pass through the network
+    as one sample, to 1.6e-4 of the impulse. Read that way:
+    - the filtered reflections come in six families, each one mix of the six groups (the same
+      for both reflections of a group, to 1 %) one offset later through the reflections'
+      low-pass, which peaks 401, 1337, 1641, 2337, 2985 and 3193 frames after the direct one;
+    - each line's first pass is its own family alone, at the entry and the line's length (775
+      frames and 2506 for A at Scale 40 %); C's comes 1641 frames later, unfiltered, and R is A's
+      and G's lengths and 2 frames, with no line G heard or passed on its own;
+    - the paths through two lines give the mix; the copies' paths give, line by line, the mix's
+      column for the family's own line times that line's gain (36 weights, all to ±2 % of that).
+
+    A simulation of that structure, with every length known, was fitted to all six Scales at
+    once, over the first second: the gains, the 6 × 6 mix, the copies' low-pass and a next-frame
+    tap per line. It matches Live's renders, the input filters put back, to −41 dB over the first
+    0.5 s at every Scale, −39 dB from 0.5 to 1 s and −35 dB from 1 to 2 s, which it was not
+    fitted on (−36 to −40 dB from 100 Hz to 16 kHz). Its mix came out orthogonal to 0.3 % without
+    being made so, the lines' output levels equal to 0.3 %, and its low-pass the reflections' own
+    (to 0.003 a sample). Suhina runs those values, with the mix made exactly orthogonal and the
+    loss it had (0.4 to 0.7 % a pass) kept apart, so a frozen tail does not drain by it. Against
+    the same renders Suhina's network now matches Live's to −39 dB over 0.5 s and −30 dB from 1 to
+    2 s at every Scale, energy within 0.15 dB, and at Decay 0.83 s to −42 dB (Shape 0.5) and −32
+    dB (Shape 0 and 1). Two more things came out of the reflections alone: Live's are one frame
+    before the predelay, not three after, and Live's High Cut delays everything 8.0 frames more
+    than its low-pass does (Hi Cut on against off, the same from 500 Hz to 12 kHz); the 3 frames
+    had been fitted with Hi Cut on. And at Decay 0.83 s the copies fade as reflections of their
+    offset (a family 72 ms out is 5.8 dB down), and the first passes do not depend on Shape. Over
+    the `reverb-impulse` set 901 of 1,084 energy windows are within 1 dB (889 before) and 720
+    within 0.5 dB (648), the median error 0.25 dB (0.38). Cost: about the same (six lines, six
+    short ones and six filters, against seven lines, four delays and a return line).
 
 ## Known differences
 
@@ -603,12 +642,9 @@ single-frequency gain follows the network's modes. They fail until the network i
 
 What is further off, and why it is left:
 
-- **Live's network** was identified only in part: at Density Low, Diffusion 0.1 % and Size 100,
-  the six pairs of direct taps (buses) feed six paths through an orthogonal 6×6 matrix, and each
-  path is heard again in fixed later copies (about 9, 57 and 71 ms after its first, on alternate
-  sides). Its feedback, its diffusers at other Diffusion settings and the other Densities were not
-  worked out, so this device keeps its own network, tuned to Live's level, onset, decay and
-  texture (Decisions 2 and 3).
+- **Live's network** is read only for Density Low (Decision 24); for Sparse, Mid and High this
+  device keeps its own network, tuned to Live's level, onset, decay and texture (Decisions 2 and
+  3).
   Its tail's strongest repeat, at Diffusion 0.1 % (where an allpass is a plain delay) and
   across Scale, is one loop of `(62.9 + 22.1 × scale) ms × size factor`: 17.8 ms at Size 1.53,
   33.6 at 10.54, 70.6 at 100 (Scale 40 %), with the allpass's own 22.1 × Scale ms showing too
@@ -617,29 +653,16 @@ What is further off, and why it is left:
   repeat correlates 0.25 to 0.45, this device's strongest about 0.1 to 0.2. That loop sets the
   pitch of the ringing at Size 1.53 (about 56 Hz apart; this device's strongest repeat there is
   36.8 ms).
-- **Live's right side from 0.15 to 1 s** (Decisions 21 and 23): 0.1 to 0.4 dB louder than
-  Suhina's over the `reverb-impulse` set (0.5 to 0.9 dB before Decision 23), and 0.6 to 0.8 dB in
-  the sparse `reverb-network-taps` renders. The paths there that end through the 1641-frame line
-  and then C are weak: the 1335 family's through A (77 % of Live's), the 3190 mix's through B (63
-  %) and the 2982 mix's through F (69 %), while the 1639 mix's straight through the 1641-frame
-  line is right (within 12 %). So that line takes too little of A, B and F in the fitted mix,
-  which, kept orthogonal, cannot take more without taking less elsewhere (D, at 0.64, is the
-  candidate); not changed yet. The return
-  line's feed from the loop lines (`RETURN_LOOP`) is still fitted, now at 0.85 of its first fit.
-  At Size 1.53 and 10.54 the tail is louder than Live's, most at Diffusion 0.1 % (0.4 to 1.6 dB
-  from 0.15 s, 0.3 to 0.6 dB more since Decision 23): the families were read at Size 100 only.
-- **Timing of the filtered reflections' copies:** Live's paths through them come 4 to 6 frames
-  after Suhina's (the 2982 family's through B and C 6 frames, the 1639 family's through A 4),
-  as with the network's other responses (below).
+- **Density Low's network beyond what was read** (Decision 24): the six Scales were read at
+  Size 100, Diffusion 0.1 %, Decay 60 and 0.83 s, Smooth None and network filters off. At Size
+  1.53 and 10.54 the tail is 0.3 to 1.6 dB louder than Live's, most at Diffusion 0.1 %; the
+  network Lowpass at 1 kHz is 1 to 1.7 dB quiet to 0.5 s; whether the network's input passes the
+  damping once (Decision 13) was not read for this network and is kept. Below 100 Hz the
+  simulation matches Live to only −24 dB. The other Densities run the Householder network.
 - **The reflections are brighter while Spin moves them:** at Hi Cut off (`reverb-network-spin2`)
   the first 93 ms are 1.4 dB above Live's from 8 to 12 kHz and 2.2 dB above 12 kHz. Live's moving
   reflections arrive as smooth, nearly symmetric bumps about 5 frames wide, which this device's
   cubic reads do not reproduce.
-- **Timing of the reflections and the network at Hi Cut off:** solved per input group (Decision
-  22), Live's reflections come about 4 frames before this device's and its network's responses 3
-  to 4 frames after them, in every group. The Spin and network runs before had Hi Cut on, whose
-  delay (1.45 frames below 1 kHz in Live) may be part of what the fitted constants absorbed; a
-  static render with Hi Cut off would tell.
 - **The tail's echoes thicken differently from Live's:** its kurtosis is 26 from 100 to 150 ms,
   5.8 from 150 to 200 and 3.0 (noise) from 200 to 400 ms, Live's 15, 10.5 and 4; from 50 to 250
   ms it has about four fifths of Live's strong clicks per second, and from 150 to 900 ms a third
