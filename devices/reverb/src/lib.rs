@@ -1745,8 +1745,13 @@ impl Reverb {
         for (line, &trips) in self.measured.lines.iter_mut().zip(&self.to.measured.trips) {
             tune(&mut line.damper, trips, trips, measured_air_db);
         }
+        // Density Low's input passes no shelf: in Live's bare network each line has its own
+        // shelves, as long as the line, and the input none (`reverb-network-small hi-shelf-4k`),
+        // and with the shelves on Live's first arrivals are as with them off (`reverb-filters
+        // net-*`). It keeps the Low-Pass's pass.
+        let input_trips = if self.value(param::DENSITY) as usize == LOW { 0.0 } else { INPUT_TRIPS };
         let input_air_db = if self.value(param::DENSITY) as usize == LOW { measured_air_db } else { air_db };
-        tune(&mut self.input_damper, INPUT_TRIPS, INPUT_PASS_TRIPS, input_air_db);
+        tune(&mut self.input_damper, input_trips, INPUT_PASS_TRIPS, input_air_db);
     }
 
     /// The longest delay Size moves, a line or a direct reflection, in a room of size factor

@@ -436,6 +436,17 @@ Each entry: what was chosen, what it costs, why.
    instead: at 0.21 the tail's first 0.2 s at Low-Pass 1 kHz had 8 kHz 1 dB above 1 kHz against
    Live's 7 dB below, and 0.8 brings 2 to 16 kHz within 1 dB of Live's there (4 kHz within 1 dB
    too).
+   Density Low's input passes no shelf, only the Low-Pass's share: in Live's bare network
+   (`reverb-network-small hi-shelf-4k`, each line's filter a pass solved as a short FIR) every
+   line has its own High Shelf, its loss at the top 1.06 to 1.1 thousandths of a dB per frame of
+   the line at both Sizes read (this device's trip law), and the input none; and with the shelves
+   on, Live's first arrivals are as with them off (`reverb-filters net-*`), where the input pass
+   had this device's 0.21 of a trip too dark from the start (2.9 dB at gain 0.2). Without it the
+   High and Low Shelf cases are within 0.25 dB of Live's in every band while white noise plays.
+   Live's Low-Pass is different: every line's first pass, A's as F's, carries exactly one one-pole
+   at the set frequency (250 Hz, 1 kHz and 4 kHz), so it is on the input, whole; its loop loses
+   far less than this device's (Known differences), and until that is read the input keeps its
+   0.8 of a trip.
 14. **Smooth's glide times (45 ms Slow, 15 ms Fast)** are what one point of Live's glide gives for
    an exponential glide (`reverb-smooth-glide`: 50 ms after a jump Fast has finished, Slow has 30
    to 40 % left); the curve itself was not measured.
@@ -762,6 +773,12 @@ What is further off, and why it is left:
   cases are 1 dB quiet to 0.15 s. The network Lowpass at 1 kHz is 1 to 1.7 dB quiet to 0.5 s; whether the network's input passes the
   damping once (Decision 13) was not read for this network and is kept. Below 100 Hz the
   simulation matches Live to only −24 dB. The other Densities run the Householder network.
+- **Density Low's Low-Pass** (Decision 13): Live's network input passes one whole one-pole at
+  the set frequency, and its loop then loses much less per second than this device's per-trip
+  one-pole (at 1 kHz, 16 kHz falls about 80 dB/s against this device's 110 to 130), unevenly
+  between the sides, so it sits in some lines and not others. With white noise the Low-Pass 1 kHz
+  case is 1.4 to 7.7 dB dark from 2.8 to 16 kHz. Neither a whole input pass with this device's
+  loop nor a fitted weaker loop matched; reading it needs bare-network Low-Pass renders.
 - **Smooth Fast beyond what was read** (Density Low, Decision 27). Fast's lengths were read at
   Size 1.53, 10.54 and 100, Scale 40 % (and 5 and 100 % at Size 1.53), so its constants are
   sure only there; its entry was read at Shape 0.5 only. With Hi Cut on Live's Fast moves the
