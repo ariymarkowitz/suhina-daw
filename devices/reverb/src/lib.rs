@@ -399,6 +399,13 @@ const SPIN_FRACTION: f64 = 0.009_95;
 const SPIN_REACH_MS: f64 = 2.0;
 /// See [`SPIN_REACH_MS`].
 const SPIN_REACH_OFFSET_MS: f64 = 3.02;
+/// Live's Spin LFOs run this much faster than Spin Rate says: on a 1 kHz tone through the
+/// reflections at 0.3 and 1.3 Hz they gain about 235 frames a second on LFOs at the Rate itself, so
+/// at 2.5 ms of predelay the reflections drift ±10 frames from Live's within 6 s (`reverb-spin-grid`).
+const SPIN_RATE_SCALE: f64 = 1.0053;
+/// When the transport starts, Live's Spin LFOs are already this far (seconds at their own rate)
+/// past the phases in [`SPIN_VOICES`] (`reverb-spin-grid`, 0.3 and 1.3 Hz).
+const SPIN_LEAD_SECONDS: f64 = 0.008;
 /// Spin's LFOs, one per direct reflection (the same ten times in every Density): the
 /// reflection's time in the reference room (ms), its rate against Spin Rate and its phase at the
 /// start (radians, of a sine that lengthens the delay), as tracked in Live's renders.
@@ -1542,7 +1549,10 @@ impl Device for Reverb {
         let tap_groups = &design.tap_groups;
         // A network that takes over from another starts silent.
         self.measured.set_design(design);
-        let (spin_step, chorus_step) = (self.value(param::SPIN_RATE) / sr, self.value(param::CHORUS_RATE) / sr);
+        let (spin_step, chorus_step) =
+            (self.value(param::SPIN_RATE) * SPIN_RATE_SCALE / sr, self.value(param::CHORUS_RATE) / sr);
+        // How far ahead of their phases Spin's LFOs are read, in cycles at Spin Rate.
+        let spin_lead = SPIN_LEAD_SECONDS * sr * spin_step;
         let frozen = self.frozen();
         // Stereo's rotation and the mix's gains, worked out again only when their inputs move
         // (NaN never equals an input, so the first frame works them out).
@@ -1629,8 +1639,8 @@ impl Device for Reverb {
             let mut spin = [0.0f64; SPIN_VOICES.len()];
             if spin_swing > 0.0 {
                 let reach = spin_swing * spin_reach(predelay * 1_000.0 / sr);
-                for (s, phase) in spin.iter_mut().zip(&self.spin_phases) {
-                    *s = reach * (std::f64::consts::TAU * phase).sin();
+                for ((s, phase), (_, rate, _)) in spin.iter_mut().zip(&self.spin_phases).zip(SPIN_VOICES) {
+                    *s = reach * (std::f64::consts::TAU * (phase + spin_lead * rate)).sin();
                 }
             }
             let whole = spin_swing == 0.0 && !self.moving && self.ramps.predelay.is_settled();

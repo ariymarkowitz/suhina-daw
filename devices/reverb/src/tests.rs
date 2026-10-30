@@ -458,7 +458,7 @@ fn spin_starts_again_when_playback_starts() {
     }
     assert_ne!(r.spin_phases, spin_start());
     r.process(&playing, &mut block);
-    let step = 0.3 * 512.0 / 44_100.0;
+    let step = 0.3 * SPIN_RATE_SCALE * 512.0 / 44_100.0;
     for ((ours, start), (_, rate, _)) in r.spin_phases.iter().zip(spin_start()).zip(SPIN_VOICES) {
         assert!((ours - (start + step * rate)).abs() < 1e-9, "{ours} against {start}");
     }
