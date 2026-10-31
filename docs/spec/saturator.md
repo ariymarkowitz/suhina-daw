@@ -18,7 +18,7 @@ curve, Color filters that choose which band is driven hardest, a post clip, an o
 a dry/wet mix. It is designed so that Live's Saturator imports into it parameter for parameter
 ([`device-import.md`](device-import.md)).
 
-- **Observed with:** Live 12.4.6 and 12.4.7, 44.1 kHz. The parameters (ranges, defaults, steps,
+- **Observed with:** Live 12.4.6 and 12.4.7, 44.1 kHz, and again at 48 kHz for the fold-back lines (below). The parameters (ranges, defaults, steps,
   stored elements) come from the parameter dump and a saved set; the sound from 13 behaviour
   runs (87 cases, among them the curve ramps, Color, the post clip and the Waveshaper), rendered
   in Live and analysed by the measurement harness of the Suhina device notes
@@ -176,7 +176,10 @@ Each entry: what was chosen, what it costs, why.
    original's Hi-Quality, on when the device is added, is 4x: the lines a 10 and a 15 kHz sine
    fold back to through Digital Clip at Drive +24 dB (`saturator-hiquality-types`) match an
    ideal 4x model to 0.1 dB, and Suhina's to 0.4 dB (Analog Clip, Digital Clip; the strongest
-   lines of the Waveshaper and Sinoid Fold too). At 2x, the earlier design, the 10 kHz sine
+   lines of the Waveshaper and Sinoid Fold too). Recorded again at 48 kHz (`saturator-hiquality-types-48k`),
+   the strongest lines still match to 0.5 dB (10 kHz: 22, 2 and 18 kHz at −33, −37 and −42 dB; 15 kHz:
+   3 kHz at −27 dB); the weaker ones, 14 kHz at −50 dB (Suhina 2 dB louder) and 9 and 21 kHz at
+   −49 and −53 dB (4 and 7 dB louder), are not matched. At 2x, the earlier design, the 10 kHz sine
    had lines 15 dB louder (18.2 kHz at −18 dB, 1.8 kHz at −21 dB), heard as chirps falling
    against the top of a sweep. The phase matches the measured one: 0.14, 0.65, 2.0 and 7.5
    frames more delay at 5, 10, 15 and 20 kHz against the measured 0.1, 0.6, 2.0 and 7.9 (2x:

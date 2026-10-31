@@ -93,7 +93,7 @@ const SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "sinoid-fold",
-        sample_rate: 44_100.0,
+        sample_rate: 48_000.0,
         seconds: 0.3,
         keep: 9,
         input: tone,
@@ -130,7 +130,7 @@ const SCENARIOS: &[Scenario] = &[
     // Color on noise into a hard clip: the low shelf cut, the bell boosted at 2 kHz.
     Scenario {
         name: "color",
-        sample_rate: 44_100.0,
+        sample_rate: 48_000.0,
         seconds: 0.3,
         keep: 9,
         input: noise_bed,

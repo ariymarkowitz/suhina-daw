@@ -136,26 +136,23 @@ fn analog_clip_bends_from_minus_3_db_to_full_scale() {
 #[test]
 fn folds_back_as_little_as_the_original_with_hi_quality() {
     // The original's Hi-Quality, on by default, runs the curves at four times the rate. Its
-    // Digital Clip at Drive +24 dB, a sine at -6 dBFS and 44.1 kHz, folds the harmonics back to
-    // these lines (dB under the fundamental); at twice the rate the 10 kHz sine had a line at
-    // 18.2 kHz, -18 dB, and one at 1.8 kHz, -21 dB.
-    let measured: [(f64, &[(f64, f64)]); 2] = [
-        (10_000.0, &[(6_400.0, -32.7), (13_600.0, -36.5), (2_800.0, -44.2), (17_200.0, -44.8)]),
-        (15_000.0, &[(11_400.0, -23.8), (18_600.0, -26.6), (4_200.0, -44.2), (7_800.0, -48.8)]),
-    ];
-    let rate = 44_100.0;
+    // Digital Clip at Drive +24 dB, a sine at -6 dBFS and 48 kHz, folds the harmonics back to
+    // these lines (dB under the fundamental).
+    let measured: [(f64, &[(f64, f64)]); 2] =
+        [(10_000.0, &[(22_000.0, -33.2), (2_000.0, -37.1), (18_000.0, -41.6)]), (15_000.0, &[(3_000.0, -26.8)])];
+    let rate = 48_000.0;
     for (hz, lines) in measured {
         let mut s = saturator(&[(param::TYPE, 6.0), (param::DRIVE, 24.0)]);
         let _ = s.prepare(rate);
         // One second after the first 4800 frames: whole cycles of every multiple of 100 Hz.
-        let mut signal = sine(hz, 0.501, 48_900, rate);
+        let mut signal = sine(hz, 0.501, 52_800, rate);
         s.process(&ProcessContext::default(), &mut signal);
         let fundamental = level_at(&signal, hz, rate);
         let under = |line| db(level_at(&signal, line, rate) / fundamental);
         for &(line, expected) in lines {
             assert!((under(line) - expected).abs() < 0.5, "{hz} Hz: {line} Hz at {} dB", under(line));
         }
-        let loudest = (1..220).map(|k| f64::from(k) * 100.0).filter(|&f| f != hz).map(under).fold(f64::MIN, f64::max);
+        let loudest = (1..240).map(|k| f64::from(k) * 100.0).filter(|&f| f != hz).map(under).fold(f64::MIN, f64::max);
         assert!((loudest - lines[0].1).abs() < 0.5, "{hz} Hz: {loudest} dB");
     }
 }
