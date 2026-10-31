@@ -44,13 +44,16 @@ pub struct Emphasis {
 
 impl Emphasis {
     pub fn new(coefficients: Coefficients) -> Self {
-        Self { c: coefficients, ..Self::default() }
+        let mut emphasis = Self::default();
+        emphasis.set(coefficients);
+        emphasis
     }
 
-    /// Changes the coefficients of both filters and keeps their histories. Coefficients whose
-    /// `b0` is zero or not finite have no inverse and are ignored.
+    /// Changes the coefficients of both filters and keeps their histories. Coefficients with a
+    /// field that is not finite, or whose `b0` is zero (no inverse), are ignored.
     pub fn set(&mut self, coefficients: Coefficients) {
-        if coefficients.b0.is_finite() && coefficients.b0 != 0.0 {
+        let Coefficients { b0, b1, b2, a1, a2 } = coefficients;
+        if [b0, b1, b2, a1, a2].iter().all(|c| c.is_finite()) && b0 != 0.0 {
             self.c = coefficients;
         }
     }
@@ -97,6 +100,21 @@ mod tests {
     use crate::Biquad;
 
     const SR: f64 = 48_000.0;
+
+    #[test]
+    fn coefficients_without_an_inverse_or_not_finite_are_ignored() {
+        let good = Coefficients { b0: 1.0, b1: 0.5, b2: 0.0, a1: -0.2, a2: 0.0 };
+        for bad in [
+            Coefficients { b0: 0.0, ..good },
+            Coefficients { a2: f64::NAN, ..good },
+            Coefficients { b1: f64::INFINITY, ..good },
+        ] {
+            assert_eq!(Emphasis::new(bad), Emphasis::default());
+            let mut e = Emphasis::new(good);
+            e.set(bad);
+            assert_eq!(e, Emphasis::new(good));
+        }
+    }
 
     /// A repeatable signal with every frequency in it.
     fn noise(n: usize) -> f64 {

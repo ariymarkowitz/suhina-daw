@@ -2,7 +2,7 @@
 description: The built-in saturator - its parameters, its eight curves as formulas, the Color filters and their inverse, the post clip, the low-latency oversampling, how Live's Saturator imports into it, and how close it comes to Live's renders
 read_when: saturator, saturation, waveshaper, distortion curves, analog clip, soft sine, bass shaper, sinoid fold, digital clip, post clip, color filters, drive, importing Live's Saturator, Saturator elements, IIR oversampler, half-band
 type: spec
-status: current
+status: planned
 last_verified: 2026-10-28
 covers:
   - devices/saturator/**

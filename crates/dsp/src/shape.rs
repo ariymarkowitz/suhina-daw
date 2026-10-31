@@ -165,6 +165,8 @@ impl Waveshaper {
         if !v.is_finite() {
             return 0.0;
         }
+        // Keeps `v⁴` finite: no curve changes this far out, where every audio signal is long gone.
+        let v = v.clamp(-1e30, 1e30);
         let unit = |x: f64| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
         let (damp, depth) = (unit(self.damp), unit(self.depth));
         let x = if damp > 0.0 {
@@ -201,6 +203,14 @@ mod tests {
             im += y * (k as f64 * t).sin();
         }
         2.0 * re.hypot(im) / n as f64
+    }
+
+    #[test]
+    fn a_huge_finite_input_stays_finite() {
+        let w = Waveshaper { damp: 1.0, drive: 0.0, ..Waveshaper::default() };
+        for v in [1e80, -1e80, f64::MAX] {
+            assert!(w.apply(v).is_finite(), "{v}");
+        }
     }
 
     #[test]
