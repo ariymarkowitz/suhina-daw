@@ -460,11 +460,11 @@ static HIGH: Design = Design {
 /// highs above 16 kHz rose and fell 1.1 to 1.2 dB at the Chorus rate against Live's 0.6; with
 /// these 0.3 to 0.5 dB, `reverb-modulation-density`).
 fn chorus_phases(design: &Design) -> [(f64, f64); MAX_LINES] {
-    let sides: Vec<usize> = (0..design.lines).map(|k| design.side(k)).collect();
+    let sides: [Option<usize>; MAX_LINES] = std::array::from_fn(|k| (k < design.lines).then(|| design.side(k)));
     std::array::from_fn(|k| {
-        let Some(&side) = sides.get(k) else { return (0.0, 0.0) };
-        let count = sides.iter().filter(|&&s| s == side).count();
-        let place = sides[..k].iter().filter(|&&s| s == side).count();
+        let Some(side) = sides[k] else { return (0.0, 0.0) };
+        let count = sides.iter().flatten().filter(|&&s| s == side).count();
+        let place = sides[..k].iter().flatten().filter(|&&s| s == side).count();
         let p = std::f64::consts::TAU * (place as f64 + 0.5 * side as f64) / count as f64;
         (p.cos(), p.sin())
     })

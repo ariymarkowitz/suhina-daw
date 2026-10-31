@@ -3,7 +3,7 @@ description: The built-in algorithmic reverb - its parameters, signal flow (inpu
 read_when: reverb, algorithmic reverb, room, decay, early reflections, predelay, feedback delay network, FDN, damping, freeze, diffusion, importing Live's Reverb, Reverb elements
 type: spec
 status: current
-last_verified: 2026-10-30
+last_verified: 2026-10-19
 covers:
   - devices/reverb/**
   - crates/dsp/src/first_order.rs
@@ -99,7 +99,8 @@ rounded after, so the blocks, the added frame and the hundredth below are the se
 
 ### Size, Smooth and rounding
 
-Every delay of the reverb is its reference-room length times the size factor. **Smooth** glides the
+Every delay after the predelay, except the Shape entry and Stereo's delay, is its reference-room
+length times the size factor. **Smooth** glides the
 factor with a time constant of 45 ms (Slow) or 15 ms (Fast), or not at all (None), where Size
 changes glitch as in Live. However fast the glide, no line or reflection changes by more than half a
 frame a frame: faster, a line is read backwards and buzzes.
@@ -232,7 +233,7 @@ The loop's gain is set so the tail does not fall at all with Flat on, and 0.03 d
 frame and the high bands). With Flat on the damping is left out while frozen; with Flat off it
 stays in. Cut decides whether new input still enters the network (it fades out over 20 ms, the
 reflections with it); if it does, levels above 2 are compressed toward 4, so the tail cannot grow
-without end. The early reflections go on.
+without end. Otherwise the early reflections go on.
 
 ### Output
 
