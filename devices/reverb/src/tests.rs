@@ -466,9 +466,9 @@ fn each_density_has_its_families_of_filtered_reflections() {
     assert_eq!(families(&FILTERED_MID), [0, 1, 2, 3, 4, 5, 6, 9]);
     assert_eq!(families(&FILTERED_HIGH), (0..FAMILY_COUNT).collect::<Vec<_>>());
     // As Live's renders with Spin show: the faint right taps at 63.95 ms (Mid) and 56.58 ms
-    // (High) follow the ones at 7.37 and 0 ms (the 2497 family), and of the two taps at 64.44 ms
-    // the left follows the right one at 34.17 ms (the 1337 family) and the right the left one at
-    // 11.43 ms (the 2337 family).
+    // (High) follow the ones at 7.37 and 0 ms (family J), and of the two taps at 64.44 ms
+    // the left follows the right one at 34.17 ms (family D) and the right the left one at
+    // 11.43 ms (family R).
     for (table, family, direct) in
         [(&FILTERED_MID, 9, 1), (&FILTERED_HIGH, 9, 0), (&FILTERED_HIGH, 3, 6), (&FILTERED_HIGH, 5, 2)]
     {

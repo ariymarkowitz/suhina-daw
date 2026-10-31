@@ -123,10 +123,17 @@ follows the straight line through the middle of its steps.
   smallest Size, 1.296 at 500), and fades by `(0.0328 + 0.0668 × Shape) / decay` dB per ms of its
   delay.
 - **Families.** Every other reflection is a direct tap heard again, through a low-pass, after one of
-  ten *family* delays: 401, 3193, 1641, 1337, 2985, 2337, 961, 2073, 2393 and 2497 frames to its
-  peak in the reference room (rounded; under Fast 0 to 6 frames sooner). A family is heard on one
-  side, and each Density has a table of how loud each family repeats each direct tap: Low has the
-  first six families, Sparse four of them, Mid all but the 2073 and 2393 families, High all ten.
+  ten *family* delays, frames to its peak in the reference room (rounded; under Fast 0 to 6 frames
+  sooner):
+
+  | Family | A | B | C | D | F | R | E | G | H | J |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | Peak (frames) | 401 | 3193 | 1641 | 1337 | 2985 | 2337 | 961 | 2073 | 2393 | 2497 |
+
+  Low's six take the names of its lines; the four only Mid and High have fill the alphabet after
+  them, leaving out I. A family is heard on one side, and each Density has a table of how loud each
+  family repeats each direct tap: Low has A, B, C, D, F and R, Sparse F, B, R and C, Mid all but G
+  and H, High all ten.
   So the reflections are played as one mix of the direct taps per family, delayed, and fading over
   the family's delay as the taps do. The network hears the same family lines, an entry later (Late
   reverb).
@@ -296,9 +303,9 @@ Why the device is built as it is. Where each constant was read is in its doc com
   at 48 kHz against Live's 3569, and up to 26 frames long at 96 kHz; converted first, all 30 reads of
   A's and B's first passes at 44.1, 48 and 96 kHz are within 0.01 frame. The 48 and 96 kHz reads
   also narrow constants the 44.1 kHz reads left loose: an allpass's blocks per % moves its length
-  2.2 times as many samples at 96 kHz, so Mid's and High's lines there pinned seven constants
-  (A's, B's, C's and the 2073 family's longer allpass, D's delay and shorter allpass, the 2393
-  family's shorter allpass) and F's family offset, each to the middle of what every read allows.
+  2.2 times as many frames at 96 kHz, so Mid's and High's lines there pinned seven constants (A's,
+  B's, C's and G's longer allpass, D's delay and shorter allpass, H's shorter allpass) and F's
+  family delay, each to the middle of what every read allows.
 - **Families are one signal.** A family's reflections and the copy the network hears are a direct
   tap delayed again by the family's delay, through the same low-pass, at a fixed ratio of 1.70. So
   each Density keeps one table of family levels and derives the copies from it. Sparse's, Mid's and
@@ -396,7 +403,7 @@ network's level within 0.05 dB from Size 0.222 to 500.
   at Scale 40 % and Diffusion 0.1 %: they follow the same law once seven of their constants are
   narrowed within what the 44.1 kHz reads allow (Design notes › One rounding for every delay), and
   are then −47 to −48 dB from Live's under None. Still off at these rates:
-  - The 961 family's line under Fast is 1 sample shorter than this device's at 48 kHz and 2 at
+  - E's line under Fast is 1 frame shorter than this device's at 48 kHz and 2 at
     96 kHz, which no length the 44.1 kHz reads allow gives; Mid and High under Fast stay −18 to
     −21 dB from Live's from 80 ms on, −47 dB with that line shortened.
   - At Diffusion 60 % and Scale 100 %, Mid's and High's tails are −1 to −8 dB from Live's from

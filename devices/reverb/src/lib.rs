@@ -23,7 +23,7 @@ use suhina_dsp::{Allpass, Biquad, Coefficients, DelayLine, FirstOrder, FirstOrde
 
 mod network;
 
-use network::{DIRECT_TAPS, FAMILY_COUNT, FAMILY_SIDES};
+use network::{DIRECT_TAPS, FAMILY_COUNT, FAMILY_SIDES, REFERENCE_RATE};
 
 /// Ramp for levels, mix, stereo and most other changes.
 pub const RAMP_SECONDS: f64 = 0.02;
@@ -224,8 +224,6 @@ const SPIN_RATE_FLOOR: f64 = 0.074;
 /// (`reverb-spin-rate` r1.3-p0.5 and r1.3-a55-p100, tap by tap); 0.12 to 0.18 ms all bring
 /// `reverb-white-noise-modulation` spin-amt55-1.3Hz 4 to 5 dB nearer Live's, 0.15 the most.
 const SPIN_LEAD_SECONDS: f64 = 0.000_15;
-/// The rate the tap tables' frames count at.
-const REFERENCE_RATE: f64 = 44_100.0;
 /// Longest delay from a direct reflection to its family's copy in the network: its filtered
 /// reflection at the largest Size (0.13 s) and the Shape entry after it (seconds).
 const FAMILY_LINE_SECONDS: f64 = 0.2;
@@ -1133,7 +1131,7 @@ impl Reverb {
         // A family's filtered reflections peak where the network hears its copy, in Live's 8-frame
         // blocks or under Smooth Fast in whole frames, and fade over that delay as the reflections do.
         for (family, (delay, gain)) in t.family_delays.iter_mut().zip(&mut t.family_gains).enumerate() {
-            let frames = network::front(family, room, settled, fast, sr / REFERENCE_RATE);
+            let frames = network::front(family, room, settled, fast, sr);
             *delay = if settled { frames.round() } else { frames }.max(2.0);
             *gain = db_to_gain(-fade * network::peak(family, room, false, false) * 1_000.0 / REFERENCE_RATE);
         }
@@ -1146,7 +1144,7 @@ impl Reverb {
         };
         let design = network::design(density);
         t.network.tune(design, room, scale, sr, settled, fast, gain, LOSS_TRIP_SECONDS);
-        t.entry = network::entry(shape, settled, fast, sr / REFERENCE_RATE);
+        t.entry = network::entry(shape, settled, fast, sr);
         // The network's lines scale with the room's own size factor, small rooms too, and its input
         // with the reflections' level and its own ([`NETWORK_SIZE_LEVEL`]). Every path through it
         // fades with its whole time, so it needs no cut for short decays.

@@ -15,10 +15,10 @@
 //!
 //! At Low a line's family is its input. A family's copy is its filtered reflections, an entry
 //! later (the reverb's family lines hold both). The tables' times are frames at 44.1 kHz; at
-//! another rate each is converted first and rounded after, in the session's samples (read at 44.1,
+//! another rate each is converted first and rounded after, in the session's frames (read at 44.1,
 //! 48 and 96 kHz, `reverb-rate-48k`, `reverb-rate-96k`). A line is a delay and an allpass (two in
-//! series at Mid and High), each a whole number of 8-sample blocks and one sample with Smooth None,
-//! whole samples under Fast ([`length`]). The input reaches the lines [`entry`]
+//! series at Mid and High), each a whole number of 8-frame blocks and one frame with Smooth None,
+//! whole frames under Fast ([`length`]). The input reaches the lines [`entry`]
 //! after each direct reflection, whatever the Size. Every value was read from Live's impulse
 //! responses at Diffusion 0.1 % and Decay 60 s (`reverb-network-exact`, `reverb-network-density`
 //! and the runs named below), where each arrival is one sample once the input's fixed filters are
@@ -39,14 +39,31 @@ pub(crate) const MAX_GROUPS: usize = 10;
 /// The most direct reflections a Density has (Low, Mid and High; Sparse has four).
 pub(crate) const DIRECT_TAPS: usize = 10;
 /// The families of filtered reflections every Density draws on: Low's six (A, B, C, D, F and R's)
-/// and the four only Mid and High have.
+/// and the four only Mid and High have (E, G, H and J), in table order ([`families`]).
 pub(crate) const FAMILY_COUNT: usize = 10;
+/// Each family's index in the tables, by name. Low's six take the names of its lines; the other
+/// four fill the alphabet after them, leaving out I. At Size 100 under Smooth None their filtered
+/// reflections peak 401 (A), 3193 (B), 1641 (C), 1337 (D), 2985 (F), 2337 (R), 961 (E), 2073 (G),
+/// 2393 (H) and 2497 (J) frames after their direct ones ([`peak`]).
+pub(crate) mod families {
+    pub(crate) const A: usize = 0;
+    pub(crate) const B: usize = 1;
+    pub(crate) const C: usize = 2;
+    pub(crate) const D: usize = 3;
+    pub(crate) const F: usize = 4;
+    pub(crate) const R: usize = 5;
+    pub(crate) const E: usize = 6;
+    pub(crate) const G: usize = 7;
+    pub(crate) const H: usize = 8;
+    pub(crate) const J: usize = 9;
+}
+use families::{A, B, C, D, E, F, G, H, J, R};
 /// The side each family's reflections and line are heard on (0 left, 1 right), at every Density.
 pub(crate) const FAMILY_SIDES: [usize; FAMILY_COUNT] = [1, 0, 1, 0, 0, 1, 0, 1, 0, 1];
-/// The frame rate the lengths below are at.
-const RATE: f64 = 44_100.0;
+/// The frame rate the tables' lengths are at.
+pub(crate) const REFERENCE_RATE: f64 = 44_100.0;
 
-/// Under Smooth None Live builds every delay of the reverb from blocks of 8 samples, at the
+/// Under Smooth None Live builds every delay of the reverb from blocks of 8 frames, at the
 /// session's rate (the same 8 at 44.1, 48 and 96 kHz).
 const BLOCK: f64 = 8.0;
 /// ... rounding a length up to its next block unless it is less than this much of a block past
@@ -54,9 +71,9 @@ const BLOCK: f64 = 8.0;
 /// Shape entry and Stereo's delay.
 const BLOCK_EDGE: f64 = 0.9;
 
-/// A delay of `x` samples (at the session's rate) as Live rounds it: under Smooth Fast (and Slow)
-/// down to a whole sample, under None to whole blocks, up but for the last tenth of a block. While things
-/// move, the straight line through the middle of the steps, so a glide does not jump a step at a
+/// A delay of `x` frames (at the session's rate) as Live rounds it: under Smooth Fast (and Slow)
+/// down to a whole frame, under None to whole blocks, up but for the last tenth of a block. While
+/// things move, the straight line through the middle of the steps, so a glide does not jump a step at a
 /// time.
 pub(crate) fn rounded(x: f64, fast: bool, settled: bool) -> f64 {
     match (fast, settled) {
@@ -90,10 +107,9 @@ const LOW_LINES: [[f64; 3]; LOOP] = [
 /// above Diffusion 0.1 % (`reverb-network-density-decay` at 60 %, `reverb-network-density-split`
 /// at 30 and 60 % and Size 10.54). Each line's whole first pass at 48 and 96 kHz, Smooth None and
 /// Fast, Scale 40 % (`reverb-rate-48k`, `reverb-rate-96k`, read line by line) narrowed seven of
-/// them to the middle of what those reads also allow: A's, B's, C's and the 2073 family's longer
-/// allpass, D's delay and shorter allpass, and the 2393 family's shorter one. The 961 family's line
-/// under Fast is 1 sample shorter than this at 48 kHz and 2 at 96 kHz, which no length the 44.1 kHz
-/// reads allow gives.
+/// them to the middle of what those reads also allow: A's, B's, C's and G's longer allpass, D's
+/// delay and shorter allpass, and H's shorter one. E's line under Fast is 1 frame shorter than this
+/// at 48 kHz and 2 at 96 kHz, which no length the 44.1 kHz reads allow gives.
 const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
     [1184.4905, 0.6886, 12.7522],
     [442.6705, 1.1039, 3.7120],
@@ -108,29 +124,29 @@ const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
 ];
 
 /// Where each family's filtered reflection starts after the direct one (blocks, reference room,
-/// [`rounded`]): 401, 3193, 1641, 1337, 2985, 2337, 961, 2073, 2393 and 2497 frames to its peak at
-/// Size 100 under Smooth None, 0 to 6 frames sooner under Fast. Its copy into the mix is heard there
+/// [`rounded`]): to its peak at Size 100 the frames [`families`] gives under Smooth None, 0 to 6
+/// frames sooner under Fast. Its copy into the mix is heard there
 /// too, through the same low-pass. Each is the middle of what the reads at Size 0.222 to 500 allow,
 /// None and Fast (`reverb-network-small`, `reverb-network-density`, `reverb-network-density-size`,
 /// `reverb-network-fast-train`, `reverb-network-size-level`); F's also with its filtered
-/// reflections under Fast at 48 and 96 kHz, a sample later than 372.7764 gave
+/// reflections under Fast at 48 and 96 kHz, a frame later than 372.7764 gave
 /// (`reverb-rate-48k`, `reverb-rate-96k`).
 const FAMILY_LENGTHS: [f64; FAMILY_COUNT] =
     [49.3955, 398.8085, 204.9654, 166.9645, 372.7928, 292.0502, 120.0675, 258.9858, 299.0174, 311.7368];
 
-/// With Smooth None, the lines of families A and B run this much of a sample past their whole
+/// With Smooth None, the lines of families A and B run this much of a frame past their whole
 /// length, read by linear interpolation: a slight loss of the highs on every pass (0.18 dB at the
 /// top), and the network's only loss besides the decay. Under Fast their delays keep their whole
 /// fraction instead ([`length`]). Without it the tails at Size 0.222 keep up to 5 dB too much above
 /// 12 kHz by 3 s, and no other hundredth fits as well (`reverb-network-density-size`). It is a
-/// hundredth of a sample at 48 and 96 kHz too (`reverb-rate-48k`, `reverb-rate-96k`).
+/// hundredth of a frame at 48 and 96 kHz too (`reverb-rate-48k`, `reverb-rate-96k`).
 const NONE_FRACTION: f64 = 0.01;
 
-/// A line's delay and allpasses (samples, `per_frame` to a frame at 44.1 kHz) from `table`: the
-/// delay of row `delay` and the allpasses of row `family` (the second only when `second`), for size
-/// factor `room` and Scale `percent`. Each part is its blocks times `room` (an allpass's also times
-/// Scale), converted to samples, [`rounded`], but under Smooth Fast the delay of a line of family A
-/// or B keeps its fraction; and a sample.
+/// A line's delay and allpasses (frames at `sample_rate`) from `table`: the delay of row `delay`
+/// and the allpasses of row `family` (the second only when `second`), for size factor `room` and
+/// Scale `percent`. Each part is its blocks times `room` (an allpass's also times Scale), converted
+/// to `sample_rate`, [`rounded`], but under Smooth Fast the delay of a line of family A or B keeps
+/// its fraction ([`reads_between_frames`]); and a frame.
 #[allow(clippy::too_many_arguments)]
 fn length(
     table: &[[f64; 3]],
@@ -141,27 +157,37 @@ fn length(
     percent: f64,
     settled: bool,
     fast: bool,
-    per_frame: f64,
+    sample_rate: f64,
 ) -> (f64, f64, f64) {
     let [blocks_delay, _, _] = table[delay];
     let [_, shorter, longer] = table[family];
+    let per_frame = sample_rate / REFERENCE_RATE;
     let part = |blocks: f64| rounded(BLOCK * blocks * per_frame, fast, settled);
-    let line = if fast && family < 2 { BLOCK * blocks_delay * room * per_frame } else { part(blocks_delay * room) };
+    let line = if fast && reads_between_frames(family) {
+        BLOCK * blocks_delay * room * per_frame
+    } else {
+        part(blocks_delay * room)
+    };
     let first = part(shorter * percent * room) + 1.0;
     let second = if second { part(longer * percent * room) + 1.0 } else { 0.0 };
     (line + 1.0, first, second)
 }
 
-/// Where family `k`'s filtered reflections peak after their direct ones (frames at 44.1 kHz) for
-/// size factor `room`, under Smooth Fast (or Slow) when `fast`: [`front`] and a frame.
-pub(crate) fn peak(k: usize, room: f64, settled: bool, fast: bool) -> f64 {
-    front(k, room, settled, fast, 1.0) + 1.0
+/// Whether `family`'s line runs between frames: A's and B's keep their fraction under Smooth Fast
+/// and run [`NONE_FRACTION`] past their length under None; every other line is whole frames.
+pub(crate) fn reads_between_frames(family: usize) -> bool {
+    matches!(family, A | B)
 }
 
-/// Where family `k`'s copy starts (samples, `per_frame` to a frame at 44.1 kHz) for size factor
-/// `room`, at every Density.
-pub(crate) fn front(k: usize, room: f64, settled: bool, fast: bool, per_frame: f64) -> f64 {
-    rounded(BLOCK * FAMILY_LENGTHS[k] * room * per_frame, fast, settled)
+/// Where `family`'s filtered reflections peak after their direct ones (frames at 44.1 kHz) for
+/// size factor `room`, under Smooth Fast (or Slow) when `fast`: [`front`] and a frame.
+pub(crate) fn peak(family: usize, room: f64, settled: bool, fast: bool) -> f64 {
+    front(family, room, settled, fast, REFERENCE_RATE) + 1.0
+}
+
+/// Where `family`'s copy starts (frames at `sample_rate`) for size factor `room`, at every Density.
+pub(crate) fn front(family: usize, room: f64, settled: bool, fast: bool, sample_rate: f64) -> f64 {
+    rounded(BLOCK * FAMILY_LENGTHS[family] * room * sample_rate / REFERENCE_RATE, fast, settled)
 }
 
 /// Which group each direct reflection of Density Low belongs to, in table order.
@@ -194,16 +220,16 @@ const MIX: [[f64; LOOP]; LOOP] = [
 /// whatever the Size and the Density ([`entry`]).
 const SHAPE_ENTRY: f64 = 1543.5;
 
-/// The input's delay to the lines after each direct reflection (samples, `per_frame` to a frame at
-/// 44.1 kHz) at `shape`: [`SHAPE_ENTRY`] times Shape in samples, [`rounded`], less a sample (at
-/// 48 kHz 424, 840 and 1680 samples later at Shape 0.25, 0.5 and 1 than at 0 under None, 420, 840
-/// and 1680 under Fast; at 96 kHz 840, 1680 and 3360 under both: `reverb-rate-48k`,
+/// The input's delay to the lines after each direct reflection (frames at `sample_rate`) at
+/// `shape`: [`SHAPE_ENTRY`] times Shape at `sample_rate`, [`rounded`], less a frame (at 48 kHz 424,
+/// 840 and 1680 frames later at Shape 0.25, 0.5 and 1 than at 0 under None, 420, 840 and 1680
+/// under Fast; at 96 kHz 840, 1680 and 3360 under both: `reverb-rate-48k`,
 /// `reverb-rate-96k`). With None −1, 391, 775, 1159 and 1543 frames at Shape 0, 0.25, 0.5, 0.75
 /// and 1 (`reverb-network-exact`, `reverb-network-id`, `reverb-size` shape-*-tail), under Fast −1,
 /// 384, 770, 1156 and 1542 (`reverb-structure` shape-*). Read at Size 100 and inferred at the
 /// others: Shape 0.5's entry is 775 frames at every Size (`reverb-network-small`).
-pub(crate) fn entry(shape: f64, settled: bool, fast: bool, per_frame: f64) -> f64 {
-    rounded(SHAPE_ENTRY * shape * per_frame, fast, settled) - 1.0
+pub(crate) fn entry(shape: f64, settled: bool, fast: bool, sample_rate: f64) -> f64 {
+    rounded(SHAPE_ENTRY * shape * sample_rate / REFERENCE_RATE, fast, settled) - 1.0
 }
 /// Longest delay a line needs (seconds, with room for Size 500): High's longest line.
 const LINE_SECONDS: f64 = 0.65;
@@ -211,9 +237,9 @@ const LINE_SECONDS: f64 = 0.65;
 /// line's Scale part.
 const ALLPASS_SECONDS: f64 = 0.45;
 
-/// The family each of Sparse's lines takes its delay from: its own, but the last's (family C), which
-/// has A's (`reverb-network-density-size`).
-const SPARSE_DELAYS: [usize; 4] = [4, 1, 5, 0];
+/// The family each of Sparse's lines takes its delay from: its own, but the last's (C), which has
+/// A's (`reverb-network-density-size`).
+const SPARSE_DELAYS: [usize; 4] = [F, B, R, A];
 /// Each of Sparse's lines' input, as [`MID_INPUTS`] (each weight is against a direct reflection of
 /// the first one's level, whose sign it does not take).
 const SPARSE_INPUTS: [[f64; 4]; 4] = [
@@ -224,9 +250,8 @@ const SPARSE_INPUTS: [[f64; 4]; 4] = [
 ];
 /// Sparse's inputs times this, fitted to Live's renders at Scale 5, 40 and 100 %.
 const SPARSE_INPUT_GAIN: f64 = 0.9965;
-/// Sparse's lines' families: they peak 2985, 3193, 2337 and 1641 frames after their direct
-/// reflections.
-const SPARSE_FAMILIES: [usize; 4] = [4, 1, 5, 2];
+/// Sparse's lines' families.
+const SPARSE_FAMILIES: [usize; 4] = [F, B, R, C];
 /// Sparse's mixing, as [`MID_MIX`], run with [`SPARSE_LEVELS`].
 const SPARSE_MIX: [[f64; 4]; 4] = [
     [-0.166755, -0.334405, 0.663378, -0.648302],
@@ -255,9 +280,8 @@ const MID_INPUTS: [[f64; 8]; 8] = [
     [-1.4164, 0.8425, -0.4587, 0.6245, 0.5737, 0.7272, -1.3265, 0.2895],
     [-0.9832, -1.1993, 0.1881, 0.3803, 0.1573, 0.8441, 0.6337, -1.4033],
 ];
-/// Mid's lines' families: they peak 3193, 2985, 961, 1337, 2497, 1641, 2337 and 401 frames after
-/// their direct reflections at Size 100.
-const MID_FAMILIES: [usize; 8] = [1, 4, 6, 3, 9, 2, 5, 0];
+/// Mid's lines' families.
+const MID_FAMILIES: [usize; 8] = [B, F, E, D, J, C, R, A];
 /// Mid's mixing, as [`MIX`]: first read from the two-line paths, orthogonal to 1 %, then fitted as
 /// a rotation of that (`M · exp(A)`, `A` antisymmetric, by Gauss-Newton) to Live's whole tails at
 /// Size 0.222 and 500 (`reverb-network-density-size`), moving no entry more than 0.004 (Sparse's
@@ -294,9 +318,8 @@ const HIGH_INPUTS: [[f64; 10]; 10] = [
     [0.7784, 1.0137, -0.2645, -0.7414, -0.2340, -1.1961, -1.1568, -0.2559, -0.4088, 0.6124],
     [-1.1453, 0.7659, -0.3891, -0.0994, 0.6801, -0.5935, 0.0942, 0.8846, -0.9501, -1.0664],
 ];
-/// High's lines' families, as [`MID_FAMILIES`]: they peak 3193, 2393, 2985, 961, 1337, 2497, 1641,
-/// 2337, 401 and 2073 frames after their direct reflections.
-const HIGH_FAMILIES: [usize; 10] = [1, 8, 4, 6, 3, 9, 2, 5, 0, 7];
+/// High's lines' families: Mid's, with H and G.
+const HIGH_FAMILIES: [usize; 10] = [B, H, F, E, D, J, C, R, A, G];
 /// High's mixing, as [`MID_MIX`], run with [`HIGH_LEVELS`].
 const HIGH_MIX: [[f64; 10]; 10] = [
     [-0.348113, 0.431273, -0.190544, -0.054873, 0.003126, -0.328649, 0.142605, 0.102578, 0.534750, 0.478192],
@@ -555,23 +578,22 @@ impl Lengths {
         gain: impl Fn(f64) -> f64,
         trip_seconds: f64,
     ) {
-        let per_frame = sample_rate / RATE;
         let whole = |x: f64| if settled { x.round() } else { x }.max(2.0);
         let percent = scale * 100.0;
         for k in 0..design.lines {
             let family = design.families[k];
             let delay = design.delays.map_or(family, |d| d[k]);
             let (line, allpass, second) =
-                length(design.lengths, delay, family, design.second, room, percent, settled, fast, per_frame);
+                length(design.lengths, delay, family, design.second, room, percent, settled, fast, sample_rate);
             self.seconds[k] = if second > 0.0 { whole(second) } else { 0.0 };
             self.second_losses[k] = gain(second / sample_rate);
-            if fast && family < 2 {
+            if fast && reads_between_frames(family) {
                 // Read between frames, linearly, moving or not.
                 self.lines[k] = line.floor().max(2.0);
                 self.fractions[k] = line - self.lines[k];
             } else {
                 self.lines[k] = whole(line);
-                self.fractions[k] = if family < 2 { NONE_FRACTION } else { 0.0 };
+                self.fractions[k] = if reads_between_frames(family) { NONE_FRACTION } else { 0.0 };
             }
             self.allpasses[k] = whole(allpass);
             // The allpass loses its own time on each pass, so the echoes it holds back decay
@@ -587,7 +609,7 @@ impl Lengths {
         let line = |k: usize| {
             let family = design.families[k];
             let delay = design.delays.map_or(family, |d| d[k]);
-            length(design.lengths, delay, family, design.second, room, 100.0, false, false, sample_rate / RATE).0
+            length(design.lengths, delay, family, design.second, room, 100.0, false, false, sample_rate).0
         };
         (0..design.lines).map(line).fold(0.0, f64::max)
     }

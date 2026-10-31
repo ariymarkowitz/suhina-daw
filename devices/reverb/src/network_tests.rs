@@ -3,15 +3,18 @@
 
 use super::*;
 
+/// Each family's name, in table order ([`families`]), for the assertions' messages.
+const FAMILY_NAMES: [char; FAMILY_COUNT] = ['A', 'B', 'C', 'D', 'F', 'R', 'E', 'G', 'H', 'J'];
+
 /// Low's line `k`: its delay and allpass ([`length`]).
 fn low(k: usize, room: f64, percent: f64, settled: bool, fast: bool) -> (f64, f64) {
-    let (line, allpass, _) = length(&LOW_LINES, k, k, false, room, percent, settled, fast, 1.0);
+    let (line, allpass, _) = length(&LOW_LINES, k, k, false, room, percent, settled, fast, REFERENCE_RATE);
     (line, allpass)
 }
 
 /// A Sparse, Mid or High line's lengths ([`length`]).
 fn shared(delay: usize, family: usize, second: bool, room: f64, percent: f64, fast: bool) -> (f64, f64, f64) {
-    length(&SHARED_LINES, delay, family, second, room, percent, true, fast, 1.0)
+    length(&SHARED_LINES, delay, family, second, room, percent, true, fast, REFERENCE_RATE)
 }
 
 #[test]
@@ -19,7 +22,7 @@ fn every_densitys_a_and_b_lines_are_its_families_a_and_b() {
     // They run a hundredth of a frame long under Smooth None; Sparse's C line has A's delay but
     // is whole (`reverb-network-density-size`).
     for (design, lines) in [(&LOW, &[0, 1][..]), (&SPARSE, &[1]), (&MID, &[0, 7]), (&HIGH, &[0, 8])] {
-        let ab: Vec<usize> = (0..design.lines).filter(|&k| design.families[k] < 2).collect();
+        let ab: Vec<usize> = (0..design.lines).filter(|&k| reads_between_frames(design.families[k])).collect();
         assert_eq!(ab, lines, "{} lines", design.lines);
     }
 }
@@ -30,7 +33,7 @@ fn the_entry_is_its_measured_length_at_every_shape() {
     for (fast, frames) in [(false, [-1.0, 391.0, 775.0, 1159.0, 1543.0]), (true, [-1.0, 384.0, 770.0, 1156.0, 1542.0])]
     {
         for (shape, want) in [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().zip(frames) {
-            assert_eq!(entry(shape, true, fast, 1.0), want, "Shape {shape}, fast {fast}");
+            assert_eq!(entry(shape, true, fast, REFERENCE_RATE), want, "Shape {shape}, fast {fast}");
         }
     }
 }
@@ -43,10 +46,9 @@ fn the_entry_is_rounded_at_the_sessions_rate() {
         (48_000.0, [424.0, 840.0, 1680.0], [420.0, 840.0, 1680.0]),
         (96_000.0, [840.0, 1680.0, 3360.0], [840.0, 1680.0, 3360.0]),
     ] {
-        let per_frame = rate / RATE;
         for (fast, wants) in [(false, none), (true, fast)] {
             for (shape, want) in [0.25, 0.5, 1.0].into_iter().zip(wants) {
-                let later = entry(shape, true, fast, per_frame) - entry(0.0, true, fast, per_frame);
+                let later = entry(shape, true, fast, rate) - entry(0.0, true, fast, rate);
                 assert_eq!(later, want, "{rate} Hz, Shape {shape}, fast {fast}");
             }
         }
@@ -66,12 +68,11 @@ fn a_lines_first_pass_is_rounded_at_the_sessions_rate() {
         (96_000.0, true, [3031.230, 4250.758, 7122.832]),
     ];
     for (rate, fast, wants) in reads {
-        let per_frame = rate / RATE;
         for (size, want) in [1.53, 10.54, 100.0].into_iter().zip(wants) {
             let room = (size / 100.0f64).cbrt();
-            let (line, allpass, _) = length(&LOW_LINES, 0, 0, false, room, 40.0, true, fast, per_frame);
+            let (line, allpass, _) = length(&LOW_LINES, A, A, false, room, 40.0, true, fast, rate);
             let fraction = if fast { 0.0 } else { NONE_FRACTION };
-            let pass = line + fraction + allpass + entry(0.5, true, fast, per_frame);
+            let pass = line + fraction + allpass + entry(0.5, true, fast, rate);
             assert!((pass - want).abs() < 0.01, "{rate} Hz, Size {size}, fast {fast}: {pass} against {want}");
         }
     }
@@ -79,10 +80,10 @@ fn a_lines_first_pass_is_rounded_at_the_sessions_rate() {
 
 #[test]
 fn every_familys_line_is_its_measured_length_at_48_and_96_khz() {
-    // Each line's whole first pass, delay and both allpasses (samples), at Size 100 and Scale 40 %,
-    // read line by line from Live's Mid and High at 48 kHz None and Fast, then 96 kHz None and Fast
-    // (`reverb-rate-48k`, `reverb-rate-96k`). The 961 family's under Fast is not met: Live's is 1
-    // and 2 samples shorter.
+    // Each family's line's whole first pass, delay and both allpasses (frames), at Size 100 and
+    // Scale 40 %, read line by line from Live's Mid and High at 48 kHz None and Fast, then 96 kHz
+    // None and Fast (`reverb-rate-48k`, `reverb-rate-96k`). E's under Fast is not met: Live's is 1
+    // and 2 frames shorter.
     let reads: [[f64; 4]; FAMILY_COUNT] = [
         [15011.0, 14996.931, 30003.0, 29992.862],
         [5539.0, 5533.546, 11083.0, 11065.092],
@@ -98,17 +99,18 @@ fn every_familys_line_is_its_measured_length_at_48_and_96_khz() {
     let conditions = [(48_000.0, false), (48_000.0, true), (96_000.0, false), (96_000.0, true)];
     for (family, wants) in reads.into_iter().enumerate() {
         for ((rate, fast), want) in conditions.into_iter().zip(wants) {
-            if family == 6 && fast {
+            if family == E && fast {
                 continue;
             }
-            let (line, first, second) = length(&SHARED_LINES, family, family, true, 1.0, 40.0, true, fast, rate / RATE);
+            let (line, first, second) = length(&SHARED_LINES, family, family, true, 1.0, 40.0, true, fast, rate);
             let pass = line + first + second;
-            assert!((pass - want).abs() < 1e-3, "family {family} at {rate} Hz, fast {fast}: {pass} against {want}");
+            let name = FAMILY_NAMES[family];
+            assert!((pass - want).abs() < 1e-3, "{name} at {rate} Hz, fast {fast}: {pass} against {want}");
         }
     }
-    // F's filtered reflections under Fast, a sample later than its 44.1 kHz reads alone allowed.
-    assert_eq!(front(4, 1.0, true, true, 48_000.0 / RATE), 3246.0);
-    assert_eq!(front(4, 1.0, true, true, 96_000.0 / RATE), 6492.0);
+    // F's filtered reflections under Fast, a frame later than its 44.1 kHz reads alone allowed.
+    assert_eq!(front(F, 1.0, true, true, 48_000.0), 3246.0);
+    assert_eq!(front(F, 1.0, true, true, 96_000.0), 6492.0);
 }
 
 #[test]
@@ -190,19 +192,19 @@ fn mids_and_highs_lines_are_their_measured_lengths() {
         }
     }
     // Mid's are High's but the second and the last.
-    let mid: Vec<_> = HIGH.families[..HIGH.lines].iter().filter(|f| ![8, 7].contains(*f)).copied().collect();
+    let mid: Vec<_> = HIGH.families[..HIGH.lines].iter().filter(|f| ![H, G].contains(*f)).copied().collect();
     assert_eq!(mid, MID.families[..MID.lines]);
 }
 
 #[test]
-fn d_and_the_2073_familys_allpasses_split_as_measured_at_size_10_54() {
+fn d_and_gs_allpasses_split_as_measured_at_size_10_54() {
     // Each allpass (frames) where Mid's and High's tails match Live's at Diffusion 30 and
     // 60 % (`reverb-network-density-split`). With the allpasses split as first read, D's
-    // second came a block short at Scale 40 %, and at 100 % D's first and the 2073 family's
-    // came a block long and the 2073 family's second a block short; at Diffusion 0.1 % only
+    // second came a block short at Scale 40 %, and at 100 % D's first and G's came a block long
+    // and G's second a block short; at Diffusion 0.1 % only
     // their sums show, which hold at every Size and Scale read.
     let room = (10.54f64 / 100.0).cbrt();
-    for (family, percent, want) in [(3, 40.0, (265.0, 529.0)), (3, 100.0, (657.0, 1305.0)), (7, 100.0, (289.0, 1025.0))]
+    for (family, percent, want) in [(D, 40.0, (265.0, 529.0)), (D, 100.0, (657.0, 1305.0)), (G, 100.0, (289.0, 1025.0))]
     {
         let (_, first, second) = shared(family, family, true, room, percent, false);
         assert_eq!((first, second), want, "family {family} at Scale {percent} %");
@@ -259,13 +261,14 @@ fn each_line_of_mid_and_high_has_its_own_family() {
     // As at Low, each family's copy joins one line, and none shares its offset.
     for design in [&MID, &HIGH] {
         let mut peaks: Vec<_> =
-            design.families[..design.lines].iter().map(|&k| peak(k, 1.0, true, false) as i64).collect();
+            design.families[..design.lines].iter().map(|&family| peak(family, 1.0, true, false) as i64).collect();
         peaks.sort_unstable();
         peaks.dedup();
         assert_eq!(peaks.len(), design.lines);
     }
-    assert_eq!(peak(MID.families[2], 1.0, true, false), 961.0);
-    assert_eq!(peak(HIGH.families[9], 1.0, true, false), 2073.0);
+    assert_eq!((MID.families[2], HIGH.families[9]), (E, G));
+    assert_eq!(peak(E, 1.0, true, false), 961.0);
+    assert_eq!(peak(G, 1.0, true, false), 2073.0);
 }
 
 #[test]
@@ -446,12 +449,12 @@ fn under_smooth_fast_each_copy_starts_where_measured() {
     ];
     // A's and D's filtered reflections at Size 500 (`reverb-structure size-500-er`).
     let room = 5.0f64.cbrt();
-    assert_eq!(peak(0, room, true, true), 676.0);
-    assert_eq!(peak(3, room, true, true), 2285.0);
+    assert_eq!(peak(A, room, true, true), 676.0);
+    assert_eq!(peak(D, room, true, true), 2285.0);
     for (size, peaks) in measured {
         let room = (size / 100.0f64).cbrt();
-        for (k, want) in peaks.into_iter().enumerate() {
-            assert_eq!(peak(k, room, true, true), want, "family {k} at Size {size}");
+        for (family, want) in peaks.into_iter().enumerate() {
+            assert_eq!(peak(family, room, true, true), want, "{} at Size {size}", FAMILY_NAMES[family]);
         }
     }
 }
@@ -466,7 +469,7 @@ fn each_copy_peaks_where_measured() {
         // fits Live's tail worse.
         (500.0, [681.0, 5457.0, 2809.0, 2289.0, 5105.0, 4001.0]),
         // Low's reflections alone at Size 250 to 400 (`reverb-network-size-level`), where the
-        // 401 family is a block shorter at 250 and 350 and the 3193 family a block longer at
+        // A family is a block shorter at 250 and 350 and the B family a block longer at
         // 250 and 300 than the reads up to 100 and at 500 alone put them.
         (250.0, [537.0, 4337.0, 2233.0, 1817.0, 4049.0, 3177.0]),
         (300.0, [577.0, 4609.0, 2369.0, 1929.0, 4305.0, 3377.0]),
@@ -475,8 +478,8 @@ fn each_copy_peaks_where_measured() {
     ];
     for (size, peaks) in measured {
         let room = (size / 100.0f64).cbrt();
-        for (k, want) in peaks.into_iter().enumerate() {
-            assert_eq!(peak(k, room, true, false), want, "family {k} at Size {size}");
+        for (family, want) in peaks.into_iter().enumerate() {
+            assert_eq!(peak(family, room, true, false), want, "{} at Size {size}", FAMILY_NAMES[family]);
         }
     }
 }
@@ -484,7 +487,7 @@ fn each_copy_peaks_where_measured() {
 #[test]
 fn mids_and_highs_own_families_peak_where_measured() {
     // Mid's and High's reflections alone at Size 0.222 and 500 (`reverb-network-density-size`):
-    // the 961, 2073, 2393 and 2497 families, None then Fast.
+    // families E, G, H and J, None then Fast.
     let measured = [
         (0.222, [129.0, 273.0, 313.0, 329.0], [126.0, 271.0, 313.0, 326.0]),
         (500.0, [1649.0, 3545.0, 4097.0, 4265.0], [1643.0, 3543.0, 4091.0, 4265.0]),
@@ -493,15 +496,16 @@ fn mids_and_highs_own_families_peak_where_measured() {
     // (`reverb-network-size-level`).
     for (size, none) in [(300.0, [1393.0, 2993.0, 3457.0, 3601.0]), (400.0, [1529.0, 3297.0, 3801.0, 3961.0])] {
         let room = (size / 100.0f64).cbrt();
-        for (i, want) in none.into_iter().enumerate() {
-            assert_eq!(peak(6 + i, room, true, false), want, "family {} at Size {size}", 6 + i);
+        for (family, want) in [E, G, H, J].into_iter().zip(none) {
+            assert_eq!(peak(family, room, true, false), want, "{} at Size {size}", FAMILY_NAMES[family]);
         }
     }
     for (size, none, fast) in measured {
         let room = (size / 100.0f64).cbrt();
-        for (i, (none, fast)) in none.into_iter().zip(fast).enumerate() {
-            assert_eq!(peak(6 + i, room, true, false), none, "family {} at Size {size}", 6 + i);
-            assert_eq!(peak(6 + i, room, true, true), fast, "family {} at Size {size}, Fast", 6 + i);
+        for (family, (none, fast)) in [E, G, H, J].into_iter().zip(none.into_iter().zip(fast)) {
+            let name = FAMILY_NAMES[family];
+            assert_eq!(peak(family, room, true, false), none, "{name} at Size {size}");
+            assert_eq!(peak(family, room, true, true), fast, "{name} at Size {size}, Fast");
         }
     }
 }
