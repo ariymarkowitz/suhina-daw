@@ -78,6 +78,40 @@ fn a_lines_first_pass_is_rounded_at_the_sessions_rate() {
 }
 
 #[test]
+fn every_familys_line_is_its_measured_length_at_48_and_96_khz() {
+    // Each line's whole first pass, delay and both allpasses (samples), at Size 100 and Scale 40 %,
+    // read line by line from Live's Mid and High at 48 kHz None and Fast, then 96 kHz None and Fast
+    // (`reverb-rate-48k`, `reverb-rate-96k`). The 961 family's under Fast is not met: Live's is 1
+    // and 2 samples shorter.
+    let reads: [[f64; 4]; FAMILY_COUNT] = [
+        [15011.0, 14996.931, 30003.0, 29992.862],
+        [5539.0, 5533.546, 11083.0, 11065.092],
+        [6363.0, 6353.0, 12723.0, 12705.0],
+        [10755.0, 10748.0, 21499.0, 21493.0],
+        [5963.0, 5947.0, 11907.0, 11894.0],
+        [8059.0, 8045.0, 16099.0, 16088.0],
+        [7763.0, 7751.0, 15507.0, 15501.0],
+        [18483.0, 18474.0, 36955.0, 36945.0],
+        [5571.0, 5565.0, 11131.0, 11129.0],
+        [6115.0, 6104.0, 12211.0, 12206.0],
+    ];
+    let conditions = [(48_000.0, false), (48_000.0, true), (96_000.0, false), (96_000.0, true)];
+    for (family, wants) in reads.into_iter().enumerate() {
+        for ((rate, fast), want) in conditions.into_iter().zip(wants) {
+            if family == 6 && fast {
+                continue;
+            }
+            let (line, first, second) = length(&SHARED_LINES, family, family, true, 1.0, 40.0, true, fast, rate / RATE);
+            let pass = line + first + second;
+            assert!((pass - want).abs() < 1e-3, "family {family} at {rate} Hz, fast {fast}: {pass} against {want}");
+        }
+    }
+    // F's filtered reflections under Fast, a sample later than its 44.1 kHz reads alone allowed.
+    assert_eq!(front(4, 1.0, true, true, 48_000.0 / RATE), 3246.0);
+    assert_eq!(front(4, 1.0, true, true, 96_000.0 / RATE), 6492.0);
+}
+
+#[test]
 fn the_loop_mix_is_orthogonal_and_close_to_the_measured_one() {
     for design in [&SPARSE, &LOW, &MID, &HIGH] {
         let mix = orthonormal(design);

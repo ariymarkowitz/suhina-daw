@@ -88,17 +88,22 @@ const LOW_LINES: [[f64; 3]; LOOP] = [
 /// at Size 100 (`reverb-network-density`, `reverb-network-density-size`,
 /// `reverb-network-size-level`). How a line's length splits between its two allpasses shows only
 /// above Diffusion 0.1 % (`reverb-network-density-decay` at 60 %, `reverb-network-density-split`
-/// at 30 and 60 % and Size 10.54).
+/// at 30 and 60 % and Size 10.54). Each line's whole first pass at 48 and 96 kHz, Smooth None and
+/// Fast, Scale 40 % (`reverb-rate-48k`, `reverb-rate-96k`, read line by line) narrowed seven of
+/// them to the middle of what those reads also allow: A's, B's, C's and the 2073 family's longer
+/// allpass, D's delay and shorter allpass, and the 2393 family's shorter one. The 961 family's line
+/// under Fast is 1 sample shorter than this at 48 kHz and 2 at 96 kHz, which no length the 44.1 kHz
+/// reads allow gives.
 const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
-    [1184.4905, 0.6886, 12.7517],
-    [442.6705, 1.1039, 3.7124],
-    [436.192, 1.3804, 5.9511],
-    [1026.769, 1.7356, 3.4461],
+    [1184.4905, 0.6886, 12.7522],
+    [442.6705, 1.1039, 3.7120],
+    [436.192, 1.3804, 5.95122],
+    [1026.830, 1.7352, 3.4461],
     [356.0745, 2.4623, 5.7064],
     [560.7041, 0.7406, 8.3358],
     [621.4635, 2.9617, 3.7544],
-    [1983.288, 0.7584, 2.6925],
-    [379.8665, 0.8037, 5.6726],
+    [1983.288, 0.7584, 2.6934],
+    [379.8665, 0.8040, 5.6726],
     [501.2132, 1.1817, 3.8076],
 ];
 
@@ -107,9 +112,11 @@ const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
 /// Size 100 under Smooth None, 0 to 6 frames sooner under Fast. Its copy into the mix is heard there
 /// too, through the same low-pass. Each is the middle of what the reads at Size 0.222 to 500 allow,
 /// None and Fast (`reverb-network-small`, `reverb-network-density`, `reverb-network-density-size`,
-/// `reverb-network-fast-train`, `reverb-network-size-level`).
+/// `reverb-network-fast-train`, `reverb-network-size-level`); F's also with its filtered
+/// reflections under Fast at 48 and 96 kHz, a sample later than 372.7764 gave
+/// (`reverb-rate-48k`, `reverb-rate-96k`).
 const FAMILY_LENGTHS: [f64; FAMILY_COUNT] =
-    [49.3955, 398.8085, 204.9654, 166.9645, 372.7764, 292.0502, 120.0675, 258.9858, 299.0174, 311.7368];
+    [49.3955, 398.8085, 204.9654, 166.9645, 372.7928, 292.0502, 120.0675, 258.9858, 299.0174, 311.7368];
 
 /// With Smooth None, the lines of families A and B run this much of a sample past their whole
 /// length, read by linear interpolation: a slight loss of the highs on every pass (0.18 dB at the

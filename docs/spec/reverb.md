@@ -294,7 +294,11 @@ Why the device is built as it is. Where each constant was read is in its doc com
   38 %. The rounding happens in the session's frames, after the conversion: rounded at 44.1 kHz and
   converted after, Low's A line at Size 100 under None was 3571 frames from its first reflection
   at 48 kHz against Live's 3569, and up to 26 frames long at 96 kHz; converted first, all 30 reads of
-  A's and B's first passes at 44.1, 48 and 96 kHz are within 0.01 frame.
+  A's and B's first passes at 44.1, 48 and 96 kHz are within 0.01 frame. The 48 and 96 kHz reads
+  also narrow constants the 44.1 kHz reads left loose: an allpass's blocks per % moves its length
+  2.2 times as many samples at 96 kHz, so Mid's and High's lines there pinned seven constants
+  (A's, B's, C's and the 2073 family's longer allpass, D's delay and shorter allpass, the 2393
+  family's shorter allpass) and F's family offset, each to the middle of what every read allows.
 - **Families are one signal.** A family's reflections and the copy the network hears are a direct
   tap delayed again by the family's delay, through the same low-pass, at a fixed ratio of 1.70. So
   each Density keeps one table of family levels and derives the copies from it. Sparse's, Mid's and
@@ -388,9 +392,17 @@ network's level within 0.05 dB from Size 0.222 to 500.
   is a frame short where it is whole is not known; the device floors it a millionth of a frame
   low.
 - **Other rates.** Low's lines, the reflections' times, the Shape entry and Stereo's delay were read
-  at 48 and 96 kHz and follow the laws above; Mid's and High's two allpasses a line were rendered
-  there but not read, and families and the other Densities' lines are inferred to follow the same
-  law.
+  at 48 and 96 kHz and follow the laws above. Mid's and High's lines were read line by line there
+  at Scale 40 % and Diffusion 0.1 %: they follow the same law once seven of their constants are
+  narrowed within what the 44.1 kHz reads allow (Design notes › One rounding for every delay), and
+  are then −47 to −48 dB from Live's under None. Still off at these rates:
+  - The 961 family's line under Fast is 1 sample shorter than this device's at 48 kHz and 2 at
+    96 kHz, which no length the 44.1 kHz reads allow gives; Mid and High under Fast stay −18 to
+    −21 dB from Live's from 80 ms on, −47 dB with that line shortened.
+  - At Diffusion 60 % and Scale 100 %, Mid's and High's tails are −1 to −8 dB from Live's from
+    80 ms on. No constant Scale 40 % allows makes them match: at Scale 100 % D's shorter allpass
+    would need 1.7374 blocks per % at 48 kHz, where Scale 40 % at 48 and 96 kHz allows 1.7351 to
+    1.7353. How an allpass's length depends on Scale (or Diffusion) at these rates is not known.
 - **Low Cut** is extrapolated for edges between 44.2 and 132 Hz and above 841 Hz.
 - **Spin.** Clicks through the moving reflections are about −41 dB from Live's at Amount 17.5 and
   Predelay 100 ms, at 0.07 Hz too, and white noise −21 to −27 dB at the default. Still off:
