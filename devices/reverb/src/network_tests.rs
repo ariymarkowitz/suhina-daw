@@ -4,7 +4,7 @@
 use super::*;
 
 /// Each family's name, in table order ([`families`]), for the assertions' messages.
-const FAMILY_NAMES: [char; FAMILY_COUNT] = ['A', 'B', 'C', 'D', 'F', 'R', 'E', 'G', 'H', 'J'];
+const FAMILY_NAMES: [char; FAMILY_COUNT] = ['A', 'B', 'C', 'D', 'F', 'R', 'E', 'H', 'J', 'K'];
 
 /// Low's line `k`: its delay and allpass ([`length`]).
 fn low(k: usize, room: f64, percent: f64, settled: bool, fast: bool) -> (f64, f64) {
@@ -192,7 +192,7 @@ fn mids_and_highs_lines_are_their_measured_lengths() {
         }
     }
     // Mid's are High's but the second and the last.
-    let mid: Vec<_> = HIGH.families[..HIGH.lines].iter().filter(|f| ![H, G].contains(*f)).copied().collect();
+    let mid: Vec<_> = HIGH.families[..HIGH.lines].iter().filter(|f| ![J, H].contains(*f)).copied().collect();
     assert_eq!(mid, MID.families[..MID.lines]);
 }
 
@@ -200,11 +200,11 @@ fn mids_and_highs_lines_are_their_measured_lengths() {
 fn d_and_gs_allpasses_split_as_measured_at_size_10_54() {
     // Each allpass (frames) where Mid's and High's tails match Live's at Diffusion 30 and
     // 60 % (`reverb-network-density-split`). With the allpasses split as first read, D's
-    // second came a block short at Scale 40 %, and at 100 % D's first and G's came a block long
-    // and G's second a block short; at Diffusion 0.1 % only
+    // second came a block short at Scale 40 %, and at 100 % D's first and H's came a block long
+    // and H's second a block short; at Diffusion 0.1 % only
     // their sums show, which hold at every Size and Scale read.
     let room = (10.54f64 / 100.0).cbrt();
-    for (family, percent, want) in [(D, 40.0, (265.0, 529.0)), (D, 100.0, (657.0, 1305.0)), (G, 100.0, (289.0, 1025.0))]
+    for (family, percent, want) in [(D, 40.0, (265.0, 529.0)), (D, 100.0, (657.0, 1305.0)), (H, 100.0, (289.0, 1025.0))]
     {
         let (_, first, second) = shared(family, family, true, room, percent, false);
         assert_eq!((first, second), want, "family {family} at Scale {percent} %");
@@ -266,9 +266,9 @@ fn each_line_of_mid_and_high_has_its_own_family() {
         peaks.dedup();
         assert_eq!(peaks.len(), design.lines);
     }
-    assert_eq!((MID.families[2], HIGH.families[9]), (E, G));
+    assert_eq!((MID.families[2], HIGH.families[9]), (E, H));
     assert_eq!(peak(E, 1.0, true, false), 961.0);
-    assert_eq!(peak(G, 1.0, true, false), 2073.0);
+    assert_eq!(peak(H, 1.0, true, false), 2073.0);
 }
 
 #[test]
@@ -487,7 +487,7 @@ fn each_copy_peaks_where_measured() {
 #[test]
 fn mids_and_highs_own_families_peak_where_measured() {
     // Mid's and High's reflections alone at Size 0.222 and 500 (`reverb-network-density-size`):
-    // families E, G, H and J, None then Fast.
+    // families E, H, J and K, None then Fast.
     let measured = [
         (0.222, [129.0, 273.0, 313.0, 329.0], [126.0, 271.0, 313.0, 326.0]),
         (500.0, [1649.0, 3545.0, 4097.0, 4265.0], [1643.0, 3543.0, 4091.0, 4265.0]),
@@ -496,13 +496,13 @@ fn mids_and_highs_own_families_peak_where_measured() {
     // (`reverb-network-size-level`).
     for (size, none) in [(300.0, [1393.0, 2993.0, 3457.0, 3601.0]), (400.0, [1529.0, 3297.0, 3801.0, 3961.0])] {
         let room = (size / 100.0f64).cbrt();
-        for (family, want) in [E, G, H, J].into_iter().zip(none) {
+        for (family, want) in [E, H, J, K].into_iter().zip(none) {
             assert_eq!(peak(family, room, true, false), want, "{} at Size {size}", FAMILY_NAMES[family]);
         }
     }
     for (size, none, fast) in measured {
         let room = (size / 100.0f64).cbrt();
-        for (family, (none, fast)) in [E, G, H, J].into_iter().zip(none.into_iter().zip(fast)) {
+        for (family, (none, fast)) in [E, H, J, K].into_iter().zip(none.into_iter().zip(fast)) {
             let name = FAMILY_NAMES[family];
             assert_eq!(peak(family, room, true, false), none, "{name} at Size {size}");
             assert_eq!(peak(family, room, true, true), fast, "{name} at Size {size}, Fast");

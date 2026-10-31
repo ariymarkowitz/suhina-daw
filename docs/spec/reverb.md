@@ -126,14 +126,14 @@ follows the straight line through the middle of its steps.
   ten *family* delays, frames to its peak in the reference room (rounded; under Fast 0 to 6 frames
   sooner):
 
-  | Family | A | B | C | D | F | R | E | G | H | J |
+  | Family | A | B | C | D | F | R | E | H | J | K |
   |---|---|---|---|---|---|---|---|---|---|---|
   | Peak (frames) | 401 | 3193 | 1641 | 1337 | 2985 | 2337 | 961 | 2073 | 2393 | 2497 |
 
   Low's six take the names of its lines; the four only Mid and High have fill the alphabet after
-  them, leaving out I. A family is heard on one side, and each Density has a table of how loud each
-  family repeats each direct tap: Low has A, B, C, D, F and R, Sparse F, B, R and C, Mid all but G
-  and H, High all ten.
+  them, leaving out G (a part of R's line) and I. A family is heard on one side, and each Density
+  has a table of how loud each family repeats each direct tap: Low has A, B, C, D, F and R, Sparse
+  F, B, R and C, Mid all but H and J, High all ten.
   So the reflections are played as one mix of the direct taps per family, delayed, and fading over
   the family's delay as the taps do. The network hears the same family lines, an entry later (Late
   reverb).
@@ -304,7 +304,7 @@ Why the device is built as it is. Where each constant was read is in its doc com
   A's and B's first passes at 44.1, 48 and 96 kHz are within 0.01 frame. The 48 and 96 kHz reads
   also narrow constants the 44.1 kHz reads left loose: an allpass's blocks per % moves its length
   2.2 times as many frames at 96 kHz, so Mid's and High's lines there pinned seven constants (A's,
-  B's, C's and G's longer allpass, D's delay and shorter allpass, H's shorter allpass) and F's
+  B's, C's and H's longer allpass, D's delay and shorter allpass, J's shorter allpass) and F's
   family delay, each to the middle of what every read allows.
 - **Families are one signal.** A family's reflections and the copy the network hears are a direct
   tap delayed again by the family's delay, through the same low-pass, at a fixed ratio of 1.70. So

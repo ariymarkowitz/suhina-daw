@@ -39,12 +39,13 @@ pub(crate) const MAX_GROUPS: usize = 10;
 /// The most direct reflections a Density has (Low, Mid and High; Sparse has four).
 pub(crate) const DIRECT_TAPS: usize = 10;
 /// The families of filtered reflections every Density draws on: Low's six (A, B, C, D, F and R's)
-/// and the four only Mid and High have (E, G, H and J), in table order ([`families`]).
+/// and the four only Mid and High have (E, H, J and K), in table order ([`families`]).
 pub(crate) const FAMILY_COUNT: usize = 10;
 /// Each family's index in the tables, by name. Low's six take the names of its lines; the other
-/// four fill the alphabet after them, leaving out I. At Size 100 under Smooth None their filtered
-/// reflections peak 401 (A), 3193 (B), 1641 (C), 1337 (D), 2985 (F), 2337 (R), 961 (E), 2073 (G),
-/// 2393 (H) and 2497 (J) frames after their direct ones ([`peak`]).
+/// four fill the alphabet after them, leaving out G (a part of R's line, [`LOW_LINES`]) and I. At
+/// Size 100 under Smooth None their filtered reflections peak 401 (A), 3193 (B), 1641 (C), 1337
+/// (D), 2985 (F), 2337 (R), 961 (E), 2073 (H), 2393 (J) and 2497 (K) frames after their direct
+/// ones ([`peak`]).
 pub(crate) mod families {
     pub(crate) const A: usize = 0;
     pub(crate) const B: usize = 1;
@@ -53,11 +54,11 @@ pub(crate) mod families {
     pub(crate) const F: usize = 4;
     pub(crate) const R: usize = 5;
     pub(crate) const E: usize = 6;
-    pub(crate) const G: usize = 7;
-    pub(crate) const H: usize = 8;
-    pub(crate) const J: usize = 9;
+    pub(crate) const H: usize = 7;
+    pub(crate) const J: usize = 8;
+    pub(crate) const K: usize = 9;
 }
-use families::{A, B, C, D, E, F, G, H, J, R};
+use families::{A, B, C, D, E, F, H, J, K, R};
 /// The side each family's reflections and line are heard on (0 left, 1 right), at every Density.
 pub(crate) const FAMILY_SIDES: [usize; FAMILY_COUNT] = [1, 0, 1, 0, 0, 1, 0, 1, 0, 1];
 /// The frame rate the tables' lengths are at.
@@ -107,8 +108,8 @@ const LOW_LINES: [[f64; 3]; LOOP] = [
 /// above Diffusion 0.1 % (`reverb-network-density-decay` at 60 %, `reverb-network-density-split`
 /// at 30 and 60 % and Size 10.54). Each line's whole first pass at 48 and 96 kHz, Smooth None and
 /// Fast, Scale 40 % (`reverb-rate-48k`, `reverb-rate-96k`, read line by line) narrowed seven of
-/// them to the middle of what those reads also allow: A's, B's, C's and G's longer allpass, D's
-/// delay and shorter allpass, and H's shorter one. E's line under Fast is 1 frame shorter than this
+/// them to the middle of what those reads also allow: A's, B's, C's and H's longer allpass, D's
+/// delay and shorter allpass, and J's shorter one. E's line under Fast is 1 frame shorter than this
 /// at 48 kHz and 2 at 96 kHz, which no length the 44.1 kHz reads allow gives.
 const SHARED_LINES: [[f64; 3]; FAMILY_COUNT] = [
     [1184.4905, 0.6886, 12.7522],
@@ -281,7 +282,7 @@ const MID_INPUTS: [[f64; 8]; 8] = [
     [-0.9832, -1.1993, 0.1881, 0.3803, 0.1573, 0.8441, 0.6337, -1.4033],
 ];
 /// Mid's lines' families.
-const MID_FAMILIES: [usize; 8] = [B, F, E, D, J, C, R, A];
+const MID_FAMILIES: [usize; 8] = [B, F, E, D, K, C, R, A];
 /// Mid's mixing, as [`MIX`]: first read from the two-line paths, orthogonal to 1 %, then fitted as
 /// a rotation of that (`M · exp(A)`, `A` antisymmetric, by Gauss-Newton) to Live's whole tails at
 /// Size 0.222 and 500 (`reverb-network-density-size`), moving no entry more than 0.004 (Sparse's
@@ -318,8 +319,8 @@ const HIGH_INPUTS: [[f64; 10]; 10] = [
     [0.7784, 1.0137, -0.2645, -0.7414, -0.2340, -1.1961, -1.1568, -0.2559, -0.4088, 0.6124],
     [-1.1453, 0.7659, -0.3891, -0.0994, 0.6801, -0.5935, 0.0942, 0.8846, -0.9501, -1.0664],
 ];
-/// High's lines' families: Mid's, with H and G.
-const HIGH_FAMILIES: [usize; 10] = [B, H, F, E, D, J, C, R, A, G];
+/// High's lines' families: Mid's, with J and H.
+const HIGH_FAMILIES: [usize; 10] = [B, J, F, E, D, K, C, R, A, H];
 /// High's mixing, as [`MID_MIX`], run with [`HIGH_LEVELS`].
 const HIGH_MIX: [[f64; 10]; 10] = [
     [-0.348113, 0.431273, -0.190544, -0.054873, 0.003126, -0.328649, 0.142605, 0.102578, 0.534750, 0.478192],
