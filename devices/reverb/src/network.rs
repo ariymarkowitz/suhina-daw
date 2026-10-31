@@ -19,7 +19,7 @@
 //! 48 and 96 kHz, `reverb-rate-48k`, `reverb-rate-96k`). A line is a delay and an allpass (two in
 //! series at Mid and High), each a whole number of 8-frame blocks and one frame with Smooth None,
 //! whole frames under Fast ([`length`]). The input reaches the lines [`entry`]
-//! after each direct reflection, whatever the Size. Every value was read from Live's impulse
+//! after each direct reflection, whatever the Size. Every value was read from the reference's impulse
 //! responses at Diffusion 0.1 % and Decay 60 s (`reverb-network-exact`, `reverb-network-density`
 //! and the runs named below), where each arrival is one sample once the input's fixed filters are
 //! divided out.
@@ -64,7 +64,7 @@ pub(crate) const FAMILY_SIDES: [usize; FAMILY_COUNT] = [1, 0, 1, 0, 0, 1, 0, 1, 
 /// The frame rate the tables' lengths are at.
 pub(crate) const REFERENCE_RATE: f64 = 44_100.0;
 
-/// Under Smooth None Live builds every delay of the reverb from blocks of 8 frames, at the
+/// Under Smooth None the reference builds every delay of the reverb from blocks of 8 frames, at the
 /// session's rate (the same 8 at 44.1, 48 and 96 kHz).
 const BLOCK: f64 = 8.0;
 /// ... rounding a length up to its next block unless it is less than this much of a block past
@@ -72,7 +72,7 @@ const BLOCK: f64 = 8.0;
 /// Shape entry and Stereo's delay.
 const BLOCK_EDGE: f64 = 0.9;
 
-/// A delay of `x` frames (at the session's rate) as Live rounds it: under Smooth Fast (and Slow)
+/// A delay of `x` frames (at the session's rate) as the reference rounds it: under Smooth Fast (and Slow)
 /// down to a whole frame, under None to whole blocks, up but for the last tenth of a block. While
 /// things move, the straight line through the middle of the steps, so a glide does not jump a step at a
 /// time.
@@ -249,7 +249,7 @@ const SPARSE_INPUTS: [[f64; 4]; 4] = [
     [1.6190, -0.8600, -1.5630, 0.5690],
     [0.7570, -0.7360, 1.6880, 1.3990],
 ];
-/// Sparse's inputs times this, fitted to Live's renders at Scale 5, 40 and 100 %.
+/// Sparse's inputs times this, fitted to the reference's renders at Scale 5, 40 and 100 %.
 const SPARSE_INPUT_GAIN: f64 = 0.9965;
 /// Sparse's lines' families.
 const SPARSE_FAMILIES: [usize; 4] = [F, B, R, C];
@@ -263,7 +263,7 @@ const SPARSE_MIX: [[f64; 4]; 4] = [
 /// Each of Sparse's lines' output level against the others', as [`MID_LEVELS`].
 const SPARSE_LEVELS: [f64; 4] = [1.0032, 0.9986, 1.0023, 0.9960];
 
-/// Mid's and High's inputs times this, fitted to Live's renders as Sparse's.
+/// Mid's and High's inputs times this, fitted to the reference's renders as Sparse's.
 const MID_HIGH_INPUT_GAIN: f64 = 1.057;
 
 /// Mid's direct reflections reach the lines in 8 groups: the first and the fourth reflection as
@@ -284,7 +284,7 @@ const MID_INPUTS: [[f64; 8]; 8] = [
 /// Mid's lines' families.
 const MID_FAMILIES: [usize; 8] = [B, F, E, D, K, C, R, A];
 /// Mid's mixing, as [`MIX`]: first read from the two-line paths, orthogonal to 1 %, then fitted as
-/// a rotation of that (`M · exp(A)`, `A` antisymmetric, by Gauss-Newton) to Live's whole tails at
+/// a rotation of that (`M · exp(A)`, `A` antisymmetric, by Gauss-Newton) to the reference's whole tails at
 /// Size 0.222 and 500 (`reverb-network-density-size`), moving no entry more than 0.004 (Sparse's
 /// 0.001, High's 0.007).
 #[allow(clippy::approx_constant, reason = "a fitted value that is near Euler's constant by chance")]
@@ -298,7 +298,7 @@ const MID_MIX: [[f64; 8]; 8] = [
     [0.296946, 0.254839, -0.185537, 0.234442, -0.543292, -0.575630, 0.117608, 0.342265],
     [0.355373, 0.158482, 0.077321, 0.067185, 0.264291, -0.412222, -0.588521, -0.501964],
 ];
-/// Each of Mid's lines' output level against the others'. Live's lines are not all heard at one
+/// Each of Mid's lines' output level against the others'. The reference's lines are not all heard at one
 /// level, and [`MID_INPUTS`] were read with these in them, so the loop runs the
 /// mixing as `level_i · mix_ij / level_j` ([`loop_mix`]). A free fit of each mix to every trip at
 /// Size 0.222 (`reverb-network-density-size`) comes out as this mixing between lines at these levels
@@ -457,7 +457,7 @@ static HIGH: Design = Design {
 /// Cosine and sine of each line's Chorus phase: each side's lines spread evenly round the cycle,
 /// the right's half a step after the left's. A side's lines then never swing the same way
 /// together, so their Doppler shifts cancel in what it hears (with golden-angle phases Low's
-/// highs above 16 kHz rose and fell 1.1 to 1.2 dB at the Chorus rate against Live's 0.6; with
+/// highs above 16 kHz rose and fell 1.1 to 1.2 dB at the Chorus rate against the reference's 0.6; with
 /// these 0.3 to 0.5 dB, `reverb-modulation-density`).
 fn chorus_phases(design: &Design) -> [(f64, f64); MAX_LINES] {
     let sides: [Option<usize>; MAX_LINES] = std::array::from_fn(|k| (k < design.lines).then(|| design.side(k)));
@@ -598,7 +598,7 @@ impl Lengths {
             }
             self.allpasses[k] = whole(allpass);
             // The allpass loses its own time on each pass, so the echoes it holds back decay
-            // as fast as the rest (as Live's tail does at every Diffusion).
+            // as fast as the rest (as the reference's tail does at every Diffusion).
             self.gains[k] = gain(line / sample_rate);
             self.losses[k] = gain(allpass / sample_rate);
             self.trips[k] = design.trip_scale * (line + allpass + second) / sample_rate / trip_seconds;

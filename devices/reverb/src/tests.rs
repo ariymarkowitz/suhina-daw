@@ -122,7 +122,7 @@ fn the_smallest_room_still_decays_at_the_longest_decay() {
 #[test]
 fn mids_lines_each_pass_two_allpasses() {
     // At Diffusion 60 % a line's first pass keeps (1 - g²)² = 0.41 of its level at 0.1 %, as
-    // Live's does (`reverb-network-density-decay`); one allpass would keep 0.64. The left side's
+    // The reference's does (`reverb-network-density-decay`); one allpass would keep 0.64. The left side's
     // first arrival through the second line peaks 6684 frames after the impulse at Size 100.
     let sr = 44_100.0;
     let first_pass = |diffusion: f64| {
@@ -204,7 +204,7 @@ fn reflect_and_diffuse_are_independent_gains() {
 
 #[test]
 fn stereo_delays_the_reflections_as_measured() {
-    // Live's reflections against Stereo 120's (`reverb-er-stereo`, frames at 44.1 kHz).
+    // The reference's reflections against Stereo 120's (`reverb-er-stereo`, frames at 44.1 kHz).
     let stereos = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 105.0, 110.0, 115.0, 119.0, 120.0];
     let fast = [27.0, 25.0, 22.0, 20.0, 18.0, 16.0, 13.0, 11.0, 9.0, 6.0, 4.0, 3.0, 2.0, 1.0, 0.0, 0.0];
     let none = [32.0, 32.0, 24.0, 24.0, 24.0, 16.0, 16.0, 16.0, 16.0, 8.0, 8.0, 8.0, 8.0, 8.0, 0.0, 0.0];
@@ -257,7 +257,7 @@ fn the_dry_signal_is_not_delayed_and_the_mix_is_equal_power() {
 }
 
 #[test]
-fn two_direct_reflections_land_on_lives_frames_at_every_size() {
+fn two_direct_reflections_land_on_reference_frames_at_every_size() {
     // Frames from the impulse at 44.1 kHz, Predelay 2.5 ms, Stereo 120, of Low's direct
     // reflections at 17.90 and 41.12 ms (`reverb-network-small`, `reverb-network-size-level`
     // and `reverb-impulse-sizes`, reflections alone). Placed to fit Size 500 alone, they came a
@@ -317,7 +317,7 @@ fn the_first_reflection_arrives_after_the_predelay() {
 
 #[test]
 fn predelay_lowers_the_wet_signal_in_inverse_proportion_to_the_decay() {
-    // Live's drop from 2.5 ms to 250 ms of predelay, in the first 0.4 s after the first
+    // The reference's drop from 2.5 ms to 250 ms of predelay, in the first 0.4 s after the first
     // reflection (reflections and tail together): 5.6, 2.3 and 0.8 dB at Decay 0.5, 1.2 and
     // 3.46 s.
     let sr = 44_100.0;
@@ -370,7 +370,7 @@ fn swing_ms(times: &[f64]) -> f64 {
 
 #[test]
 fn spin_reaches_less_far_as_the_predelay_grows() {
-    // Live's swing of each reflection's whole delay per unit of Amount, tracked tap by tap (in
+    // The reference's swing of each reflection's whole delay per unit of Amount, tracked tap by tap (in
     // % of the delay): the same up to 5 ms of predelay, then falling as 2 ms over the predelay
     // less 3 ms, whatever Amount, Rate and Size.
     for (predelay_ms, share) in [
@@ -391,11 +391,11 @@ fn spin_reaches_less_far_as_the_predelay_grows() {
 }
 
 #[test]
-fn the_networks_input_grows_with_size_as_lives() {
-    // Live's network level against its reflections' (the reflections' size level divided out),
+fn the_networks_input_grows_with_size_as_the_reference() {
+    // The reference's network level against its reflections' (the reflections' size level divided out),
     // at Low (`reverb-network-small`, `reverb-network-scale`, `reverb-network-size-level`).
     let (a, b, c) = NETWORK_SIZE_LEVEL;
-    for (size, live) in [
+    for (size, reference) in [
         (0.222, 0.9347),
         (10.54, 0.9424),
         (100.0, 1.0081),
@@ -405,14 +405,14 @@ fn the_networks_input_grows_with_size_as_lives() {
         (500.0, 1.2237),
     ] {
         let ours = a + b * size + c * size * size;
-        let db = 20.0 * (ours / live).log10();
-        assert!(db.abs() < 0.02, "Size {size}: {ours:.4} against {live} ({db:+.3} dB)");
+        let db = 20.0 * (ours / reference).log10();
+        assert!(db.abs() < 0.02, "Size {size}: {ours:.4} against {reference} ({db:+.3} dB)");
     }
 }
 
 #[test]
 fn a_smaller_rooms_reflections_are_brighter_at_the_same_decay() {
-    // Live's filtered reflections at Low (`reverb-size` size-1.53-er and size-10.54-er,
+    // The reference's filtered reflections at Low (`reverb-size` size-1.53-er and size-10.54-er,
     // `reverb-smooth-slow` none-10.54) fit `t / room` 0.053 to 0.066 s: the corner at size factor
     // `room` and Decay `d` is the reference room's at Decay `d / room`.
     for room in [0.248, 0.472, 1.0, 1.71] {
@@ -427,10 +427,10 @@ fn a_smaller_rooms_reflections_are_brighter_at_the_same_decay() {
 
 #[test]
 fn spin_swings_each_reflection_by_its_whole_delay() {
-    // Live's left reflection at 11.43 ms (Amount 17.5) swings 2.08 ms either way at 0.5 ms of
+    // The reference's left reflection at 11.43 ms (Amount 17.5) swings 2.08 ms either way at 0.5 ms of
     // predelay and 0.40 ms at 100 ms; the first, right at the predelay, 0.09 and 0.36 ms.
     let sr = 44_100.0;
-    for (predelay, side, tap, live) in
+    for (predelay, side, tap, reference) in
         [(0.0005, 0, 11.429, 2.08), (0.1, 0, 11.429, 0.40), (0.0005, 1, 0.0, 0.09), (0.1, 1, 0.0, 0.36)]
     {
         let at = predelay + TAP_OFFSET_FRAMES / sr + tap / 1_000.0;
@@ -440,13 +440,16 @@ fn spin_swings_each_reflection_by_its_whole_delay() {
             (ours / expected - 1.0).abs() < 0.1 || (ours - expected).abs() < 0.03,
             "{predelay} s, {tap} ms: {ours:.3} ms against {expected:.3}"
         );
-        assert!((ours - live).abs() < 0.1 + 0.05 * live, "{predelay} s, {tap} ms: {ours:.3} ms against Live's {live}");
+        assert!(
+            (ours - reference).abs() < 0.1 + 0.05 * reference,
+            "{predelay} s, {tap} ms: {ours:.3} ms against the reference's {reference}"
+        );
     }
 }
 
 #[test]
 fn filtered_reflections_swing_with_the_direct_one_they_follow() {
-    // The left filtered reflection at 30.27 ms is the first (right) one 30.27 ms later: Live's
+    // The left filtered reflection at 30.27 ms is the first (right) one 30.27 ms later: the reference's
     // hardly moves at 0.5 ms of predelay, where one swinging by its own delay would move 1.5 ms
     // either way at Amount 5.
     let sr = 44_100.0;
@@ -465,7 +468,7 @@ fn each_density_has_its_families_of_filtered_reflections() {
     assert_eq!(families(&FILTERED_LOW), [0, 1, 2, 3, 4, 5]);
     assert_eq!(families(&FILTERED_MID), [0, 1, 2, 3, 4, 5, 6, 9]);
     assert_eq!(families(&FILTERED_HIGH), (0..FAMILY_COUNT).collect::<Vec<_>>());
-    // As Live's renders with Spin show: the faint right taps at 63.95 ms (Mid) and 56.58 ms
+    // As the reference's renders with Spin show: the faint right taps at 63.95 ms (Mid) and 56.58 ms
     // (High) follow the ones at 7.37 and 0 ms (family K), and of the two taps at 64.44 ms
     // the left follows the right one at 34.17 ms (family D) and the right the left one at
     // 11.43 ms (family R).
@@ -492,7 +495,7 @@ fn sparse_and_low_play_their_own_reflections() {
 
 #[test]
 fn spin_runs_no_slower_than_its_floor() {
-    // Live's LFOs at Spin Rate 0.07 Hz run 1.057 times as fast as the Rate; at 0.15 Hz at the Rate.
+    // The reference's LFOs at Spin Rate 0.07 Hz run 1.057 times as fast as the Rate; at 0.15 Hz at the Rate.
     let mut block = vec![0.0f32; 512 * 2];
     for (rate, expected) in [(0.07, 0.074), (0.15, 0.15)] {
         let mut r = reverb(44_100.0, &[(param::SPIN, 1.0), (param::SPIN_RATE, rate)]);
@@ -506,7 +509,7 @@ fn spin_runs_no_slower_than_its_floor() {
 
 #[test]
 fn spin_starts_again_when_playback_starts() {
-    // Live's LFOs have the same phases whenever playback starts, from bar 1 or bar 2 alike.
+    // The reference's LFOs have the same phases whenever playback starts, from bar 1 or bar 2 alike.
     let mut r = reverb(44_100.0, &[(param::SPIN, 1.0)]);
     let stopped = ProcessContext::default();
     let playing = ProcessContext { playing: true, ..stopped };
@@ -567,7 +570,7 @@ fn freeze_holds_the_tail_and_cut_keeps_new_input_out() {
     // Over 0.4 s or more: a sine's frozen tail beats between the modes near it.
     let (early, late) = (level(&held[17_640..52_920]), level(&held[123_480..]));
     // Nearly lossless, but the energy spreads evenly over the lines, which moves the output a
-    // little (Live's frozen tail rises up to 2.7 dB the same way).
+    // little (the reference's frozen tail rises up to 2.7 dB the same way).
     assert!((early - late).abs() < 3.0, "{early} dB then {late} dB");
     // With Cut on, another burst while frozen adds nothing to the tail.
     let mut more = burst(sr, 1.0);
@@ -578,7 +581,7 @@ fn freeze_holds_the_tail_and_cut_keeps_new_input_out() {
 
 #[test]
 fn a_frozen_tail_keeps_its_damping_with_flat_off() {
-    // Frozen with Flat off, high damping goes on taking the highs, as Live's does (8 kHz falls
+    // Frozen with Flat off, high damping goes on taking the highs, as the reference's does (8 kHz falls
     // 14 dB/s, 1 kHz 0.2); with Flat on the highs fall barely faster than the mids.
     let sr = 44_100.0;
     let band = |flat: f64| {
@@ -692,7 +695,7 @@ fn cost_of_a_minute_at_48_khz() {
 
 #[test]
 fn freeze_with_cut_from_the_start_is_silent() {
-    // Live's render is zero throughout (`reverb-freeze-static`): Cut keeps the input out of the
+    // The reference's render is zero throughout (`reverb-freeze-static`): Cut keeps the input out of the
     // early reflections as well as the network, at the default Reflect.
     let mut r = reverb(44_100.0, &[(param::FREEZE, 1.0), (param::MIX, 1.0)]);
     let mut signal = vec![0.0f32; 44_100 * 2 * 2];

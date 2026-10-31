@@ -10,8 +10,8 @@
 //!                                                                  +-> direct taps -> network -> Diffuse ----------+
 //! ```
 //!
-//! The early reflections are Live's measured direct taps, each followed by its filtered copies,
-//! one per family of the Density. The late reverb is Live's own network, as measured
+//! The early reflections are the reference's measured direct taps, each followed by its filtered copies,
+//! one per family of the Density. The late reverb is the reference's own network, as measured
 //! ([`network`]): the direct taps feed its lines after the Shape entry.
 
 use suhina_device_api::{
@@ -63,7 +63,7 @@ const fn tap(ms: f64, side: usize, gain: f64) -> Tap {
 // The direct reflections of each Density, and the level of each family's filtered reflection of
 // each of them (family by family, against the first direct reflection; zero where a family has
 // none), as measured at 44.1 kHz (docs/spec/reverb.md › Early reflections). Times are in the
-// reference room, each a whole number of frames at 44.1 kHz plus the fraction by which Live
+// reference room, each a whole number of frames at 44.1 kHz plus the fraction by which the reference
 // rounds it to a frame (read from where it steps as the predelay moves by tenths of a frame). The
 // reflections at 17.90 and 41.12 ms sit 0.59 of a frame past a frame: between that read (0.65)
 // and what their frames at Size 0.222 to 500 allow.
@@ -94,7 +94,7 @@ const TAPS_LOW: [Tap; 10] = [
     tap(55.6475, RIGHT, 0.9951),
 ];
 // Low's filtered reflections are its network's line inputs as heard ([`HEARD_COPY`]), not
-// its own read taps: they match Live's reflections and tail more closely.
+// its own read taps: they match the reference's reflections and tail more closely.
 const FILTERED_LOW: [[f64; DIRECT_TAPS]; FAMILY_COUNT] = [
     [1.0046, -1.0055, 0.6008, 0.0880, 0.0876, -0.3697, -0.2277, 0.5996, 0.5789, -0.5780],
     [-0.1137, 0.1138, 0.5670, -0.7464, -0.7425, 0.6401, 0.6626, 0.5658, 0.3845, -0.3839],
@@ -161,7 +161,7 @@ const TAP_TABLES: [&[Tap]; 4] = [&TAPS_SPARSE, &TAPS_LOW, &TAPS_MID, &TAPS_HIGH]
 /// The filtered reflections in Density order.
 const FILTERED_TABLES: [&[[f64; DIRECT_TAPS]; FAMILY_COUNT]; 4] =
     [&FILTERED_SPARSE, &FILTERED_LOW, &FILTERED_MID, &FILTERED_HIGH];
-/// The reflections are read this many frames after the predelay: one before it, as Live's are at
+/// The reflections are read this many frames after the predelay: one before it, as the reference's are at
 /// Stereo 120 (`reverb-network-exact`), at every rate (the first reflection at the default 2.5 ms
 /// is at frame 119 at 48 kHz and 239 at 96 kHz: `reverb-rate-48k`, `reverb-rate-96k`); below 120
 /// Stereo delays them ([`stereo_delay`]).
@@ -171,7 +171,7 @@ const TAP_OFFSET_FRAMES: f64 = -1.0;
 /// frames at Stereo 0 under Fast and None, 4 and 8 at 100; `reverb-rate-48k`: 29 and 32 at
 /// Stereo 0, 14 and 16 at 60; `reverb-rate-96k`: 59 and 64, 29 and 32). 27.5625 frames at 44.1 kHz.
 const STEREO_DELAY_SECONDS: f64 = 0.000_625;
-/// Under Smooth Fast, where Stereo's delay is a whole number of frames Live's is a frame less
+/// Under Smooth Fast, where Stereo's delay is a whole number of frames the reference's is a frame less
 /// (30, 15, 60 and 30 at 48 and 96 kHz come out 29, 14, 59 and 29): it is floored this far below.
 const STEREO_FLOOR_SLACK: f64 = 1e-6;
 /// Level of the first reflection against the input, before the predelay's fade.
@@ -186,20 +186,20 @@ const TAP_FADE_PER_SHAPE: f64 = 0.0668;
 const PREDELAY_FADE: f64 = 0.0113;
 /// Spin swings every reflection's whole delay, predelay included, by this fraction of it per unit
 /// of Spin Amount, times [`spin_reach`] (docs/spec/reverb.md › Early reflections): tracked tap by
-/// tap in Live's click trains at Amount 17.5 and 55 and Predelay 0.5 to 250 ms, the swing is
+/// tap in the reference's click trains at Amount 17.5 and 55 and Predelay 0.5 to 250 ms, the swing is
 /// 1.000 to 1.005 times this (`reverb-spin-taps`, `reverb-spin-rate`).
 const SPIN_FRACTION: f64 = 0.01;
 /// Above the knee, [`spin_reach`] is this many ms over the predelay less
 /// [`SPIN_REACH_OFFSET_MS`]: a long predelay swings by about the same 2 ms times the fraction
 /// whatever the reflection's own delay.
 const SPIN_REACH_MS: f64 = 2.0;
-/// See [`SPIN_REACH_MS`]. The knee is where the two meet, 5 ms: tracked tap by tap, Live's swing
+/// See [`SPIN_REACH_MS`]. The knee is where the two meet, 5 ms: tracked tap by tap, the reference's swing
 /// at Predelay 6.5, 8, 10, 25 and 50 ms is 2 / (predelay − 3.00) within 0.1 % (`reverb-spin-knee`,
 /// `reverb-spin-taps`).
 const SPIN_REACH_OFFSET_MS: f64 = 3.0;
 /// Spin's LFOs, one per direct reflection (the same ten times in every Density): the
 /// reflection's time in the reference room (ms), its rate against Spin Rate and its phase when
-/// playback starts (degrees, of a sine that lengthens the delay). Tracked tap by tap in Live's click
+/// playback starts (degrees, of a sine that lengthens the delay). Tracked tap by tap in the reference's click
 /// trains (`reverb-spin-taps`, `reverb-spin-rate`, `reverb-spin-knee` at Predelay 8 to 250 ms):
 /// the rates agree to 0.0001 at Spin Rate 0.30 and 1.30 Hz and at every Predelay and Amount, and
 /// the phases, the same at every Rate, are within 0.1° of whole tens of degrees.
@@ -215,14 +215,14 @@ const SPIN_VOICES: [(f64, f64, f64); 10] = [
     (48.299, 1.0150, 80.0),
     (55.646, 0.9917, 20.0),
 ];
-/// Live's Spin LFOs run no slower than this (Hz): at Spin Rate 0.07 Hz every tap swings 1.057 times
+/// The reference's Spin LFOs run no slower than this (Hz): at Spin Rate 0.07 Hz every tap swings 1.057 times
 /// as fast as at 0.30 and 1.30 (`reverb-spin-rate` r0.07-*), at 0.15 Hz at the Rate itself
-/// (`reverb-white-noise` spin-amt35-0.15Hz is 15 dB further from Live's 2 % faster).
+/// (`reverb-white-noise` spin-amt35-0.15Hz is 15 dB further from the reference's 2 % faster).
 const SPIN_RATE_FLOOR: f64 = 0.074;
-/// Live reads its Spin LFOs this far ahead (seconds): each tap arrives later than an LFO read at
+/// The reference reads its Spin LFOs this far ahead (seconds): each tap arrives later than an LFO read at
 /// its own time would put it by 6.1 to 6.8 frames times the speed its delay changes at
 /// (`reverb-spin-rate` r1.3-p0.5 and r1.3-a55-p100, tap by tap); 0.12 to 0.18 ms all bring
-/// `reverb-white-noise-modulation` spin-amt55-1.3Hz 4 to 5 dB nearer Live's, 0.15 the most.
+/// `reverb-white-noise-modulation` spin-amt55-1.3Hz 4 to 5 dB nearer the reference's, 0.15 the most.
 const SPIN_LEAD_SECONDS: f64 = 0.000_15;
 /// Longest delay from a direct reflection to its family's copy in the network: its filtered
 /// reflection at the largest Size (0.13 s) and the Shape entry after it (seconds).
@@ -230,7 +230,7 @@ const FAMILY_LINE_SECONDS: f64 = 0.2;
 /// Longest delay from a direct reflection to the network, [`network::entry`] at Shape 1
 /// (seconds).
 const ENTRY_LINE_SECONDS: f64 = 0.06;
-/// Peak swing of a line's delay per unit of Chorus Amount: a 1 kHz tone through Live's tail swings
+/// Peak swing of a line's delay per unit of Chorus Amount: a 1 kHz tone through the reference's tail swings
 /// 12 to 343 cents (left and right added) at five Amounts and Rates, and through Suhina's 12 to 397
 /// with this swing (`reverb-texture` chorus-*). The loop adds each trip's shift to the last, so a
 /// line swings about a fifth of what the tone's deviation read as one line's would say (1.8 ms).
@@ -267,7 +267,7 @@ const LOW: usize = 1;
 /// (within 1.5 % for all but the faintest taps).
 const HEARD_COPY: f64 = 1.70;
 /// Level of the network's input against the input, before the predelay's fade: with it, each
-/// line's first pass is [`network`]'s gain times the direct reflection it comes from, as Live's
+/// line's first pass is [`network`]'s gain times the direct reflection it comes from, as the reference's
 /// is (`reverb-network-exact`).
 const NETWORK_GAIN: f64 = 0.294_538_8;
 /// Every Density's reflections are `a + b × Size` of their reference-room level: a pure gain on the
@@ -288,7 +288,7 @@ const LOSS_TRIP_SECONDS: f64 = 0.17;
 const SHELF_Q: f64 = 0.70;
 /// ... the High Shelf half way at this much of its frequency and the Low Shelf at its frequency
 /// over this: with them `reverb-network-filters` (1 kHz and 500 Hz, gain 0.2) and
-/// `reverb-network-small` (4 kHz, gain 0.4, Size 1.53 to 100) match Live's renders to −32 to −36 dB
+/// `reverb-network-small` (4 kHz, gain 0.4, Size 1.53 to 100) match the reference's renders to −32 to −36 dB
 /// from 4 to 8 s, against −12 to −18 dB with Q 0.707 at the frequency.
 const SHELF_SHIFT: f64 = 0.98;
 /// Decay time the network is tuned to, against the Decay setting.
@@ -309,7 +309,7 @@ const LOW_CUT_GAINS: [(f64, [f64; 2]); 6] = [
     (658.0, [4.38, -7.11]),
     (841.0, [7.58, -12.42]),
 ];
-/// Below this lower edge (Hz) Live's Low Cut does nothing (read at 40 and 44.19 Hz; between there
+/// Below this lower edge (Hz) the reference's Low Cut does nothing (read at 40 and 44.19 Hz; between there
 /// and 132 Hz, the lowest edge read otherwise, it is not read).
 const LOW_CUT_LOWEST: f64 = 44.2;
 /// The input always passes a first-order high-pass at this frequency, as measured
@@ -318,7 +318,7 @@ const RUMBLE_FREQUENCY: f64 = 127.0;
 /// ... and a second one at this frequency.
 const SUBSONIC_FREQUENCY: f64 = 19.0;
 /// The network frozen with Flat off falls this many dB per second besides its damping and A's and
-/// B's reads, and with Flat on nothing besides those reads: Live's frozen tail at 1 kHz falls 0.11
+/// B's reads, and with Flat on nothing besides those reads: the reference's frozen tail at 1 kHz falls 0.11
 /// and 0.20 dB/s with Flat on and off (`reverb-freeze-static`, Smooth Fast), most of it from A's
 /// and B's fractions of a frame.
 const FREEZE_DRAIN_UNFLAT: f64 = 0.03;
@@ -956,7 +956,7 @@ impl Reverb {
     fn targets(&self) -> Ramps<f64> {
         let sr = self.sample_rate;
         let flag = |index| if self.on(index) { 1.0 } else { 0.0 };
-        // Frozen with Flat on, the damping is left out; with Flat off it stays in, as Live's frozen
+        // Frozen with Flat on, the damping is left out; with Flat off it stays in, as the reference's frozen
         // tail goes on losing the bands the shelves take.
         let filtered = if self.frozen() && self.on(param::FLAT) { 0.0 } else { 1.0 };
         Ramps {
@@ -1128,7 +1128,7 @@ impl Reverb {
             *gain = tap.gain * *reflection;
             *feed = tap.gain * faded / norm;
         }
-        // A family's filtered reflections peak where the network hears its copy, in Live's 8-frame
+        // A family's filtered reflections peak where the network hears its copy, in the reference's 8-frame
         // blocks or under Smooth Fast in whole frames, and fade over that delay as the reflections do.
         for (family, (delay, gain)) in t.family_delays.iter_mut().zip(&mut t.family_gains).enumerate() {
             let frames = network::front(family, room, settled, fast, sr);
@@ -1162,8 +1162,8 @@ impl Reverb {
 
         // Each line passes the shelves, with a gain per trip as long as the line, or one whole
         // one-pole of the Low-Pass on every pass, however long the line (`reverb-network-filters`:
-        // at 250 Hz, 1 kHz and 4 kHz and Size 1.53 to 100 that alone matches Live's renders to −27
-        // to −37 dB). The input passes no damping: in Live's network each line has its own, and the
+        // at 250 Hz, 1 kHz and 4 kHz and Size 1.53 to 100 that alone matches the reference's renders to −27
+        // to −37 dB). The input passes no damping: in the reference's network each line has its own, and the
         // input none (`reverb-network-small hi-shelf-4k`, `reverb-network-filters`).
         let r = &self.ramps;
         let (high_f, high_g) = (2.0f64.powf(f64::from(r.high_frequency.current())), f64::from(r.high_gain.current()));
@@ -1264,7 +1264,7 @@ impl Device for Reverb {
     /// Runs interleaved stereo `buffer` through the reverb in place.
     fn process(&mut self, context: &ProcessContext, buffer: &mut [f32]) {
         let sr = self.sample_rate;
-        // Live's Spin LFOs start from the same phases whenever playback starts.
+        // The reference's Spin LFOs start from the same phases whenever playback starts.
         if context.playing && !self.playing {
             self.spin_phases = spin_start();
         }
@@ -1357,7 +1357,7 @@ impl Device for Reverb {
             // the predelay grows, and the network's input with it; a filtered one is a direct one
             // a family's delay later, so it is played from a mix of the direct ones per family.
             // With nothing moving, each tap's own delay falls on a whole frame and Spin's swing is
-            // added to it, as Live's are (`reverb-spin-taps`: its swinging taps centre on the
+            // added to it, as the reference's are (`reverb-spin-taps`: its swinging taps centre on the
             // frames its still ones are read at); without Spin the taps are read at whole frames.
             let mut spin = [0.0f64; SPIN_VOICES.len()];
             if spin_swing > 0.0 {
@@ -1369,11 +1369,11 @@ impl Device for Reverb {
             let settled = !self.moving && self.ramps.predelay.is_settled();
             let whole = spin_swing == 0.0 && settled;
             // The groups wait the entry in their own lines, at least two frames; an entry shorter
-            // than that (Live's is a frame early at Shape 0) reads the feed line sooner instead.
+            // than that (the reference's is a frame early at Shape 0) reads the feed line sooner instead.
             let group_delay = t.entry.max(2.0);
             let group_whole = group_delay.round();
-            // Spin's reflections are read between frames by linear interpolation, as Live's: on
-            // white noise Live's lose 0.4 dB at 6 kHz to 1.6 at 15 kHz as soon as Spin moves them,
+            // Spin's reflections are read between frames by linear interpolation, as the reference's: on
+            // white noise the reference's lose 0.4 dB at 6 kHz to 1.6 at 15 kHz as soon as Spin moves them,
             // at any speed, which is linear's loss against a cubic read within 0.2 dB
             // (`reverb-texture` spin-*, `reverb-spin-grid`; their static reflections match).
             let read_from = |line: &DelayLine, at: f64| {
@@ -1400,7 +1400,7 @@ impl Device for Reverb {
                 // Read where the reflection is, and delayed by the entry below, so the network
                 // hears the shift Spin gave the reflection, not the one it has an entry later. At
                 // whole frames each is rounded on its own, the reflection where it is heard and the
-                // entry, as Live's are (`reverb-network-small`).
+                // entry, as the reference's are (`reverb-network-small`).
                 let from = at + if settled { t.entry.round() - group_whole } else { t.entry - group_delay };
                 let u = read_from(&self.input, from) * t.feed_gains[d] * feed * t.network_feed;
                 if let Some(group) = design.tap_groups.get(d).and_then(|&g| groups.get_mut(g)) {
@@ -1454,7 +1454,7 @@ impl Device for Reverb {
             self.input.push(x as f32);
 
             // Output: the two parts, Stereo's rotation, then the mix.
-            // Cut keeps the input out of the reflections as well as the network (Live's render is
+            // Cut keeps the input out of the reflections as well as the network (the reference's render is
             // silent when it is frozen from the first sample: `reverb-freeze-static`).
             let reflect = reflect * feed;
             let wet = [reflect * early[0] + diffuse * tail[0], reflect * early[1] + diffuse * tail[1]];
