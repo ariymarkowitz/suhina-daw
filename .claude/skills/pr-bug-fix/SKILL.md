@@ -1,6 +1,6 @@
 ---
-name: bug-fix-pr
-description: Fix a set of bugs from GitHub issues in one pull request - claim them, fix each at its root cause in its own commits, ask the maintainer what needs a decision, review against the specs. Usage `/bug-fix-pr #123 #130`.
+name: pr-bug-fix
+description: Fix a set of bugs from GitHub issues in one pull request - claim them, fix each at its root cause in its own commits, ask the maintainer what needs a decision, review against the specs. Usage `/pr-bug-fix #123 #130`.
 disable-model-invocation: true
 ---
 
