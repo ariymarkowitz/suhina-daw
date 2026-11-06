@@ -41,8 +41,13 @@ or names an open pull request, leave that issue out and tell the user.
   fix Y and say so; issues with one cause get one fix.
 - **Read the spec and ADRs** covering the code (`docs/INDEX.md` › *Code and its documents*).
   Note where they are silent, ambiguous or wrong, or disagree with the code.
+- **Check the open pull requests**, not only the linked ones
+  (`gh pr list --state open --json number,title,body,files`), for one that already fixes the bug
+  or would interfere with the fix. Interference is semantic, not just shared files: a pull request
+  that changes the behaviour, data or assumptions the fix relies on, or that the fix would change
+  for it, interferes even in other files.
 
-Then ask, in one batch: features in disguise, spec gaps and conflicts, fixes that change a spec,
+Then ask, in one batch: existing fixes and interfering pull requests (which ones, and how), features in disguise, spec gaps and conflicts, fixes that change a spec,
 ADR, file format or command, and fixes much bigger than their issue.
 
 ## 3. Fix one bug at a time
