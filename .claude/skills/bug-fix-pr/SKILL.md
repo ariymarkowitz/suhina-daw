@@ -11,6 +11,19 @@ branches, code and checks; this skill adds how to work through a set of bugs. **
 maintainer**: ask them with `AskUserQuestion`, your recommendation first. Never guess an answer
 that is theirs to give.
 
+## 0. Branch
+
+Check whether the current checkout is under development: uncommitted changes, or a branch other
+than `main` with commits not on `origin/main`. If it is, leave it untouched and work in a separate
+worktree:
+
+```sh
+git fetch origin main
+git worktree add ../suhina-<short-description> -b fix/<short-description> origin/main
+```
+
+Otherwise create `fix/<short-description>` from `origin/main` in place.
+
 ## 1. Claim
 
 Read each issue, its comments and linked pull requests, then `/claim` it as
@@ -50,7 +63,7 @@ feature or unasked change slipped in? Fix findings in new commits, then run the 
 
 ## 5. One pull request
 
-One `fix/...` branch and one pull request for the set, a draft from the first fix on. In the
+One pull request for the set from the step 0 branch, a draft from the first fix on. In the
 description: `Closes #N` on its own line per issue; per bug, the cause, the fix and its test;
 *How to check it* steps for each bug (`how-to-check` skill); and a **For the maintainer** section
 with the spec problems or improvements found and what is still open.
